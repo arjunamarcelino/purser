@@ -160,12 +160,26 @@ pub fn release_failed(b: &mut TaskBudget, c: &mut Commitment, now: u64) -> Resul
     if c.state == ReservationState::Failed {
         return Ok(()); // idempotent: no accounting change
     }
-    let next = transition(c.state, Event::Fail)?; // only Reserved -> Failed
+    release_outstanding(b, c, Event::Fail, now) // only Reserved -> Failed is legal
+}
+
+/// Shared tail of the two terminal-release ops ([`release_failed`], [`cancel`]):
+/// validate the edge via [`transition`], release the full `reserved_amount` from
+/// `outstanding` (checked), and move to the terminal state. Private — callers own
+/// any precondition (e.g. `release_failed`'s idempotency short-circuit) and pass the
+/// event that selects the legal edge.
+fn release_outstanding(
+    b: &mut TaskBudget,
+    c: &mut Commitment,
+    event: Event,
+    now: u64,
+) -> Result<(), PurserError> {
+    let next = transition(c.state, event)?;
     b.outstanding = b
         .outstanding
         .checked_sub(c.reserved_amount)
         .ok_or(PurserError::ArithmeticOverflow)?;
-    c.state = next; // Failed
+    c.state = next;
     c.updated_at = now;
     Ok(())
 }
@@ -183,14 +197,7 @@ pub fn mark_unknown(c: &mut Commitment, now: u64) -> Result<(), PurserError> {
 /// Effect: `outstanding -= reserved`; `state = Cancelled`. Not idempotent — a second
 /// call sees `Cancelled` and rejects via the state gate (no double-release).
 pub fn cancel(b: &mut TaskBudget, c: &mut Commitment, now: u64) -> Result<(), PurserError> {
-    let next = transition(c.state, Event::Cancel)?; // only Unknown -> Cancelled
-    b.outstanding = b
-        .outstanding
-        .checked_sub(c.reserved_amount)
-        .ok_or(PurserError::ArithmeticOverflow)?;
-    c.state = next; // Cancelled
-    c.updated_at = now;
-    Ok(())
+    release_outstanding(b, c, Event::Cancel, now) // only Unknown -> Cancelled is legal
 }
 
 #[cfg(test)]
