@@ -1,5 +1,11 @@
 use near_sdk::{near, AccountId, BorshStorageKey, PanicOnDefault};
 
+mod error;
+mod types;
+
+pub use error::PurserError;
+pub use types::*;
+
 /// Unique storage prefixes for on-chain collections.
 ///
 /// APPEND-ONLY: `BorshStorageKey` turns each variant's position into the on-chain
