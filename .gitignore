@@ -1,0 +1,34 @@
+# Rust / contract
+target/
+**/*.rs.bk
+# Compiled wasm is reproducible from source — never commit build output
+*.wasm
+
+# Node / TypeScript (proposer, app, indexer, relayer)
+node_modules/
+dist/
+build/
+out/
+.next/
+coverage/
+*.tsbuildinfo
+*-debug.log*
+
+# Secrets / env — ignore real .env variants, keep the tracked template
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# NEAR credentials & dev state
+.near-credentials/
+neardev/
+*.unencrypted-key.json
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/*
+!.vscode/extensions.json
+*.swp

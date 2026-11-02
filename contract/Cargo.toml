@@ -1,0 +1,45 @@
+[package]
+name = "purser-contract"
+version = "0.1.0"
+edition = "2021"            # conservative; canonical cargo-near template is edition 2024
+rust-version = "1.95"
+repository = "https://github.com/arjunamarcelino/purser"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]   # cdylib -> wasm; rlib -> in-crate integration tests
+
+[dependencies]
+near-sdk = "=5.30.0"
+
+[dev-dependencies]
+near-sdk = { version = "=5.30.0", features = ["unit-testing"] }
+near-workspaces = "=0.24.0"
+tokio = { version = "1", features = ["full"] }
+anyhow = "1"
+serde_json = "1"
+proptest = "=1.12.0"
+
+# REQUIRED: near-sdk 5.27+ expands cfg(near)-gated code into this crate. Plain
+# `cargo clippy`/`cargo test` (no --cfg near) would otherwise raise unexpected_cfgs,
+# which `-D warnings` promotes to a hard error. Ships in the canonical template.
+[lints.rust.unexpected_cfgs]
+level = "warn"
+check-cfg = ['cfg(near)']
+
+[profile.release]          # matches the canonical cargo-near template (cargo-near strips the wasm, so no `strip`)
+codegen-units = 1
+opt-level = "z"            # size-optimize wasm
+lto = true
+debug = false
+panic = "abort"
+overflow-checks = true     # SAFETY: panic on integer overflow — required for a money contract
+
+# Needed ONLY for `cargo near build reproducible-wasm` (verifiable release). Populate the image
+# and digest from the `cargo near new` output for your installed cargo-near version, then uncomment.
+# [package.metadata.near.reproducible_build]
+# image = "sourcescan/cargo-near:<version-matched>"
+# image_digest = "sha256:<digest>"
+# passed_env = []
+# container_build_command = ["cargo", "near", "build", "non-reproducible-wasm", "--locked"]
