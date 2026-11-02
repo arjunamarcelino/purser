@@ -1,3 +1,5 @@
+# Lives in contract/ so rustup resolves it from the Makefile (cd contract) and CI (working-directory: contract).
+# On a future workspace promotion, move this to the repo root so it governs all crates.
 [toolchain]
 channel = "1.95.0"
 components = ["rustfmt", "clippy"]
