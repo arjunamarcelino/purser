@@ -28,7 +28,7 @@ pub const MSG_ZERO_AMOUNT: &str = "amount must be positive";
 /// Variants are intentionally distinct: tests assert the *specific* refusal (e.g.
 /// "one unit over cap" must be [`PurserError::ExceedsBudget`], not
 /// [`PurserError::ArithmeticOverflow`]), which proves the right guard fired.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(PartialEq, Eq, Debug)]
 pub enum PurserError {
     /// `try_reserve`: `completed + outstanding + amount` would exceed `cap`.
     ExceedsBudget {
