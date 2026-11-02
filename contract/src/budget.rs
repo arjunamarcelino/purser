@@ -74,10 +74,7 @@ pub fn try_reserve(
         .checked_add(amount)
         .ok_or(PurserError::ArithmeticOverflow)?;
     if projected > b.cap {
-        let remaining = b
-            .cap
-            .checked_sub(used)
-            .unwrap_or(NearToken::from_yoctonear(0));
+        let remaining = b.cap.checked_sub(used).unwrap_or(NearToken::ZERO);
         return Err(PurserError::ExceedsBudget {
             requested: amount,
             remaining,
@@ -218,8 +215,8 @@ mod tests {
             owner: acct("owner.near"),
             token: TokenSpec::NearNative,
             cap: yocto(cap),
-            completed: NearToken::from_yoctonear(0),
-            outstanding: NearToken::from_yoctonear(0),
+            completed: NearToken::ZERO,
+            outstanding: NearToken::ZERO,
             crew_cap: 3,
             created_at: 0,
         }
@@ -304,7 +301,7 @@ mod tests {
             self.commitments
                 .iter()
                 .filter(|c| matches!(c.state, Reserved | Signed | Unknown))
-                .fold(NearToken::from_yoctonear(0), |acc, c| {
+                .fold(NearToken::ZERO, |acc, c| {
                     acc.checked_add(c.reserved_amount).unwrap()
                 })
         }
@@ -312,8 +309,8 @@ mod tests {
             self.commitments
                 .iter()
                 .filter(|c| c.state == ReservationState::Confirmed)
-                .fold(NearToken::from_yoctonear(0), |acc, c| {
-                    acc.checked_add(c.actual_spent.unwrap_or(NearToken::from_yoctonear(0)))
+                .fold(NearToken::ZERO, |acc, c| {
+                    acc.checked_add(c.actual_spent.unwrap_or(NearToken::ZERO))
                         .unwrap()
                 })
         }
