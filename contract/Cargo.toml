@@ -28,6 +28,10 @@ proptest = "=1.12.0"
 level = "warn"
 check-cfg = ['cfg(near)']
 
+# ⚠️ WORKSPACE-PROMOTION HAZARD: Cargo honors [profile.*] ONLY in the workspace-root manifest.
+# If this crate ever joins a Cargo workspace, this block is silently ignored and the wasm rebuilds
+# WITHOUT overflow-checks (a money-safety setting). On promotion, move [profile.release] (and
+# rust-toolchain.toml) to the root manifest. See docs/plans promotion checklist.
 [profile.release]          # matches the canonical cargo-near template (cargo-near strips the wasm, so no `strip`)
 codegen-units = 1
 opt-level = "z"            # size-optimize wasm
