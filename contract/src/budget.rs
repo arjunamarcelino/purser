@@ -74,13 +74,18 @@ pub fn try_reserve(
         .checked_add(amount)
         .ok_or(PurserError::ArithmeticOverflow)?;
     if projected > b.cap {
+        // `used = completed + outstanding <= cap` by invariant (I), so `checked_sub`
+        // is always `Some` here; `ZERO` is an unreachable defensive floor for a
+        // display-only field.
         let remaining = b.cap.checked_sub(used).unwrap_or(NearToken::ZERO);
         return Err(PurserError::ExceedsBudget {
             requested: amount,
             remaining,
         });
     }
-    // compute-then-commit: nothing above mutated `b`.
+    // compute-then-commit: nothing above mutated `b`. This `checked_add` cannot
+    // overflow (`outstanding <= used` and `used + amount = projected <= cap <= MAX`
+    // already succeeded above); the guard is kept as defense-in-depth.
     b.outstanding = b
         .outstanding
         .checked_add(amount)
