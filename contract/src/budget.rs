@@ -23,7 +23,9 @@
 
 use crate::error::PurserError;
 use crate::reservation::{transition, Event};
-use crate::types::{Commitment, CommitmentId, PaymentIntent, RequestId, ReservationState, TaskId};
+use crate::types::{
+    Commitment, CommitmentId, PaymentIntent, RequestId, ReservationState, TaskBudget, TaskId,
+};
 use near_sdk::{AccountId, NearToken};
 
 /// Assert the safety invariant (I) on the stored aggregates. Pure, infallible read.
@@ -32,7 +34,7 @@ use near_sdk::{AccountId, NearToken};
 /// entrypoint — a violation panics, which rolls back the whole call atomically.
 /// (It re-checks only the aggregates, not the full ledger; the ledger recompute is
 /// a test-only oracle — see [`crate::budget::tests`].)
-pub fn assert_invariant(b: &crate::types::TaskBudget) {
+pub fn assert_invariant(b: &TaskBudget) {
     // Unreachable under (I): completed + outstanding <= cap <= u128::MAX.
     let sum = b
         .completed
@@ -52,7 +54,7 @@ pub fn assert_invariant(b: &crate::types::TaskBudget) {
 /// Rejects a zero amount ([`PurserError::ZeroAmount`]).
 #[allow(clippy::too_many_arguments)]
 pub fn try_reserve(
-    b: &mut crate::types::TaskBudget,
+    b: &mut TaskBudget,
     id: CommitmentId,
     task: TaskId,
     delegate: AccountId,
@@ -117,7 +119,7 @@ pub fn authorize(c: &mut Commitment, now: u64) -> Result<(), PurserError> {
 /// Effect: `outstanding -= reserved`; `completed += spent`; `state = Confirmed`;
 /// `actual_spent = Some(spent)`. Net Δ ≤ 0 (the over-reservation is released here).
 pub fn settle_confirmed(
-    b: &mut crate::types::TaskBudget,
+    b: &mut TaskBudget,
     c: &mut Commitment,
     spent: NearToken,
     now: u64,
@@ -152,11 +154,7 @@ pub fn settle_confirmed(
 /// Idempotent: a call when already `Failed` is a no-op with ZERO accounting change
 /// (so a retry can never double-release). "No signature issued" is enforced by the
 /// state gate — `Signed`/`Unknown` sources reject.
-pub fn release_failed(
-    b: &mut crate::types::TaskBudget,
-    c: &mut Commitment,
-    now: u64,
-) -> Result<(), PurserError> {
+pub fn release_failed(b: &mut TaskBudget, c: &mut Commitment, now: u64) -> Result<(), PurserError> {
     if c.state == ReservationState::Failed {
         return Ok(()); // idempotent: no accounting change
     }
@@ -182,11 +180,7 @@ pub fn mark_unknown(c: &mut Commitment, now: u64) -> Result<(), PurserError> {
 /// §1.3 `cancel` (stretch nonce-burn). Pre: `state == Unknown` (cancel attested).
 /// Effect: `outstanding -= reserved`; `state = Cancelled`. Not idempotent — a second
 /// call sees `Cancelled` and rejects via the state gate (no double-release).
-pub fn cancel(
-    b: &mut crate::types::TaskBudget,
-    c: &mut Commitment,
-    now: u64,
-) -> Result<(), PurserError> {
+pub fn cancel(b: &mut TaskBudget, c: &mut Commitment, now: u64) -> Result<(), PurserError> {
     let next = transition(c.state, Event::Cancel)?; // only Unknown -> Cancelled
     b.outstanding = b
         .outstanding
