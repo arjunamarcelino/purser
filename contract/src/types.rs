@@ -33,7 +33,7 @@ pub enum TokenSpec {
 
 /// Which chain a payment settles on. `Evm` is the stretch external path.
 #[near(serializers = [json, borsh])]
-#[derive(Clone, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Chain {
     NearNative,
     Evm { chain_id: u64 },
@@ -108,7 +108,7 @@ pub struct Commitment {
 
 /// Tri-state idempotency entry, keyed by [`RequestId`] (TECHNICAL §6).
 #[near(serializers = [json, borsh])]
-#[derive(Clone, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum IdemState {
     /// A reservation is open and in-flight (still signing).
     Pending,
