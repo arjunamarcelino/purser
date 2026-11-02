@@ -27,6 +27,12 @@ enum StorageKey {
 ///
 /// Holds the contract owner and the Chain Signatures MPC signer id. All budget
 /// and reservation state is added in later steps; this is the scaffold shell.
+///
+/// ⚠️ Borsh layout is NOT append-only-safe yet (unlike `StorageKey`). The collection
+/// fields from backend-schema §1.1 land *between* `owner` and `signer_id`, so the
+/// layout WILL change when they are added. That is free only while no state exists —
+/// do NOT `new()`/stateful-init this on testnet until the full struct lands, or you
+/// create `migrate`/`ignore_state` debt. (CI builds a deployable wasm; don't deploy+init it.)
 #[near(contract_state)]
 #[derive(PanicOnDefault)]
 pub struct Purser {
