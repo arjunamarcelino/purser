@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # Fast, high-precision local backstop. The authoritative scan is the gitleaks CI job,
-# which handles entropy, URL-embedded creds, and raw key material with proper allowlisting.
+# which handles entropy and raw key material (bare hex, AWS secrets) with proper allowlisting.
 # Scan ONLY added lines (avoids false-triggers on removed/context lines).
 added="$(git diff --cached -U0 | grep '^+' | grep -v '^+++' || true)"
 
@@ -19,6 +19,14 @@ fi
 if printf '%s\n' "$added" | grep -nEi \
   '(private_key|secret_key|mnemonic|seed_phrase)[[:space:]]*[:=][[:space:]]*[^[:space:]#]{12,}'; then
   echo "✋ Possible secret value in staged additions. Commit aborted (override with --no-verify only if sure)."
+  exit 1
+fi
+
+# URL-embedded credentials, e.g. a DB/relayer connection string carrying user:pass@host.
+# High-precision: won't match Cargo.lock checksums or bare hashes (gitleaks covers those in CI).
+if printf '%s\n' "$added" | grep -nE \
+  '[a-zA-Z][a-zA-Z0-9+.-]*://[^/:@[:space:]]+:[^/@[:space:]]+@'; then
+  echo "✋ Possible URL-embedded credential in staged additions. Commit aborted (override with --no-verify only if sure)."
   exit 1
 fi
 
