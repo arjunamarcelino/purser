@@ -41,3 +41,7 @@ jobs:
         with:
           fetch-depth: 0
       - uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2
+        env:
+          # Required since gitleaks-action v2 for pull_request scans (reads the PR
+          # commit range via the API). Auto-provided token; contents:read is enough.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
