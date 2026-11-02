@@ -1,6 +1,7 @@
-.PHONY: build test fmt lint deploy-testnet demo metrics hooks
+.PHONY: build build-release test fmt lint deploy-testnet demo metrics hooks
 
 build: ; cd contract && cargo near build non-reproducible-wasm
+build-release: ; cd contract && cargo near build reproducible-wasm   # verifiable; needs Docker + clean git tree
 test: ; cd contract && cargo test
 fmt: ; cd contract && cargo fmt --all
 lint: ; cd contract && cargo clippy --all-targets -- -D warnings

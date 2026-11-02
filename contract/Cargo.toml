@@ -36,10 +36,11 @@ debug = false
 panic = "abort"
 overflow-checks = true     # SAFETY: panic on integer overflow — required for a money contract
 
-# Needed ONLY for `cargo near build reproducible-wasm` (verifiable release). Populate the image
-# and digest from the `cargo near new` output for your installed cargo-near version, then uncomment.
-# [package.metadata.near.reproducible_build]
-# image = "sourcescan/cargo-near:<version-matched>"
-# image_digest = "sha256:<digest>"
-# passed_env = []
-# container_build_command = ["cargo", "near", "build", "non-reproducible-wasm", "--locked"]
+# Used by `cargo near build reproducible-wasm` (verifiable release build in a pinned Docker image).
+# Values from the cargo-near 0.22.0 canonical template; the container's Rust is independent of the
+# local 1.95 pin. Needs Docker + a clean committed git tree. Dev builds use non-reproducible-wasm.
+[package.metadata.near.reproducible_build]
+image = "sourcescan/cargo-near:0.21.1-rust-1.96.0"
+image_digest = "sha256:ccb22bb4e677ed022d8b9d1aa1b32f0af52dd0471ef1c32e48dedbf68ee6ee17"
+passed_env = []
+container_build_command = ["cargo", "near", "build", "non-reproducible-wasm", "--locked"]
