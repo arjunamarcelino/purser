@@ -2,6 +2,7 @@ use near_sdk::{near, AccountId, BorshStorageKey, PanicOnDefault};
 
 mod budget;
 mod error;
+mod idempotency;
 mod reservation;
 mod types;
 
@@ -10,6 +11,7 @@ pub use budget::{
     try_reserve,
 };
 pub use error::PurserError;
+pub use idempotency::{classify, IdemDecision};
 pub use reservation::{transition, Event};
 pub use types::*;
 
