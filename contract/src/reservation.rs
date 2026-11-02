@@ -12,11 +12,9 @@
 //! diagram's "Unknown stays reserved" is modeled as *inaction* (no operation
 //! touches it), which is exactly why `mark_unknown` from `Unknown` rejects.
 //!
-//! A runtime `enum` + one total `transition` is the right shape for a
-//! *serializable* state machine: a typestate (`Commitment<Reserved>`) cannot be
-//! stored in a single `IterableMap<CommitmentId, Commitment>` nor loaded with a
-//! state unknown until read. The exhaustive table test below recovers most of the
-//! "illegal-is-unrepresentable" guarantee a typestate would give.
+//! A runtime `enum` + one total `transition` (not a typestate) is required because
+//! the state is Borsh-serialized into one `IterableMap<CommitmentId, Commitment>`;
+//! the exhaustive table test below locks the legal edge set.
 
 use crate::error::PurserError;
 use crate::types::ReservationState;
