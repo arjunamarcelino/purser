@@ -1,10 +1,22 @@
-.PHONY: build build-release test fmt lint deploy-testnet demo metrics hooks
+.PHONY: build build-release test fmt lint \
+        contract-build contract-build-release contract-test contract-fmt contract-lint \
+        deploy-testnet demo metrics hooks
 
-build: ; cd contract && cargo near build non-reproducible-wasm
-build-release: ; cd contract && cargo near build reproducible-wasm   # verifiable; needs Docker + clean git tree
-test: ; cd contract && cargo test
-fmt: ; cd contract && cargo fmt --all
-lint: ; cd contract && cargo clippy --all-targets -- -D warnings
+# Aggregate targets — expand to also run TS services (app/proposer/indexer) as they land.
+build: contract-build
+build-release: contract-build-release
+test: contract-test
+fmt: contract-fmt
+lint: contract-lint
+
+# Contract (Rust / near-sdk)
+contract-build: ; cd contract && cargo near build non-reproducible-wasm
+contract-build-release: ; cd contract && cargo near build reproducible-wasm   # verifiable; needs Docker + clean git tree
+contract-test: ; cd contract && cargo test
+contract-fmt: ; cd contract && cargo fmt --all
+contract-lint: ; cd contract && cargo clippy --all-targets -- -D warnings
+
+# Ops (stubs until their prompts)
 deploy-testnet: ; @echo "TODO (Prompt 10): build + deploy to testnet"
 demo: ; @echo "TODO (Prompt 10): run the 7-case demo"
 metrics: ; @echo "TODO (Prompt 13): measure + write docs/METRICS.md"
