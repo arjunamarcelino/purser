@@ -36,8 +36,17 @@ jobs:
 
   secrets:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read       # gitleaks-action reads the PR commit range via the pulls API
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
       - uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2
+        env:
+          # Required since gitleaks-action v2 for pull_request scans.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Don't post PR comments → avoids needing pull-requests: write (keeps the
+          # job read-only). The exit code still fails the job on any finding.
+          GITLEAKS_ENABLE_COMMENTS: "false"
