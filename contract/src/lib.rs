@@ -1,9 +1,14 @@
 use near_sdk::{near, AccountId, BorshStorageKey, PanicOnDefault};
 
+mod budget;
 mod error;
 mod reservation;
 mod types;
 
+pub use budget::{
+    assert_invariant, authorize, cancel, mark_unknown, release_failed, settle_confirmed,
+    try_reserve,
+};
 pub use error::PurserError;
 pub use reservation::{transition, Event};
 pub use types::*;
