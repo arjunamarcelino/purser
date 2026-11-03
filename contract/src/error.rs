@@ -23,9 +23,10 @@ pub const MSG_OVERFLOW: &str = "arithmetic overflow";
 pub const MSG_ILLEGAL: &str = "illegal reservation transition";
 pub const MSG_ZERO_AMOUNT: &str = "amount must be positive";
 
-/// Payload-validation refusals (`PurserError` `Display`; Prompt 4). Like the accounting
-/// messages, each is a bare literal carrying no numeric state, and the near-workspaces
-/// attack suite asserts against the same constants so they cannot drift.
+/// Payload-validation refusals (`PurserError` `Display`; Prompt 4). Each is a bare literal
+/// carrying no numeric state. The `msg_constants_are_frozen` unit test (below) pins every
+/// literal's VALUE so an accidental reword fails CI now; the Prompt-6 near-workspaces attack
+/// suite will additionally assert them end-to-end.
 pub const MSG_UNSUPPORTED_CHAIN: &str = "unsupported chain";
 pub const MSG_UNSUPPORTED_TOKEN: &str = "unsupported token";
 pub const MSG_INVALID_RECIPIENT: &str = "invalid recipient";
@@ -109,5 +110,47 @@ impl core::fmt::Display for PurserError {
             PurserError::MemoTooLong => MSG_MEMO_TOO_LONG,
         };
         f.write_str(s)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Pin every panic-string literal by VALUE. These are a frozen cross-service wire contract —
+    /// the TypeScript proposer and the Prompt-6 attack suite branch on them by string — so an
+    /// accidental reword must fail CI here, before any downstream consumer breaks silently.
+    #[test]
+    fn msg_constants_are_frozen() {
+        // accounting / state-machine
+        assert_eq!(MSG_EXCEEDS_BUDGET, "exceeds task budget");
+        assert_eq!(MSG_SPENT_EXCEEDS, "spent exceeds reserved");
+        assert_eq!(MSG_OVERFLOW, "arithmetic overflow");
+        assert_eq!(MSG_ILLEGAL, "illegal reservation transition");
+        assert_eq!(MSG_ZERO_AMOUNT, "amount must be positive");
+        // payload validation
+        assert_eq!(MSG_UNSUPPORTED_CHAIN, "unsupported chain");
+        assert_eq!(MSG_UNSUPPORTED_TOKEN, "unsupported token");
+        assert_eq!(MSG_INVALID_RECIPIENT, "invalid recipient");
+        assert_eq!(MSG_MEMO_TOO_LONG, "memo too long");
+        // owner / registry boundary guards
+        assert_eq!(MSG_ONLY_OWNER, "only owner");
+        assert_eq!(MSG_TASK_EXISTS, "task exists");
+        assert_eq!(MSG_CAP_POSITIVE, "cap must be positive");
+        assert_eq!(MSG_CREW_CAP_MIN, "crew_cap must be >= 1");
+        assert_eq!(MSG_INVALID_TASK_ID, "invalid task_id");
+        assert_eq!(MSG_INVALID_PATH, "invalid derivation_path");
+        assert_eq!(MSG_NO_SUCH_TASK, "no such task");
+        assert_eq!(MSG_DELEGATE_EXISTS, "delegate exists");
+        assert_eq!(MSG_CREW_CAP_REACHED, "crew cap reached");
+        assert_eq!(MSG_NO_SUCH_DELEGATE, "no such delegate");
+        assert_eq!(MSG_DELEGATE_NOT_AUTHORIZED, "delegate not authorized");
+        // payment-flow boundary guards
+        assert_eq!(MSG_IN_FLIGHT, "in-flight");
+        assert_eq!(MSG_ALREADY_FAILED, "already failed");
+        assert_eq!(MSG_INVALID_REQUEST_ID, "invalid request_id");
+        assert_eq!(MSG_RECIPIENT_NOT_ALLOWED, "recipient not allowlisted");
+        assert_eq!(MSG_NO_SUCH_COMMITMENT, "no such commitment");
+        assert_eq!(MSG_NOT_RECONCILABLE, "not reconcilable");
     }
 }
