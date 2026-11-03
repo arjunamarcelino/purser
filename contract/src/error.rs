@@ -29,7 +29,7 @@ pub const MSG_ZERO_AMOUNT: &str = "amount must be positive";
 pub const MSG_UNSUPPORTED_CHAIN: &str = "unsupported chain";
 pub const MSG_UNSUPPORTED_TOKEN: &str = "unsupported token";
 pub const MSG_INVALID_RECIPIENT: &str = "invalid recipient";
-pub const MSG_INVALID_MEMO: &str = "invalid memo";
+pub const MSG_MEMO_TOO_LONG: &str = "memo too long";
 
 /// Boundary-guard panic strings for the Prompt-3 contract layer (task/delegate
 /// registry, access control, crew-cap). These are NOT [`PurserError`] variants —
@@ -106,7 +106,7 @@ impl core::fmt::Display for PurserError {
             PurserError::UnsupportedChain => MSG_UNSUPPORTED_CHAIN,
             PurserError::UnsupportedToken => MSG_UNSUPPORTED_TOKEN,
             PurserError::InvalidRecipient => MSG_INVALID_RECIPIENT,
-            PurserError::MemoTooLong => MSG_INVALID_MEMO,
+            PurserError::MemoTooLong => MSG_MEMO_TOO_LONG,
         };
         f.write_str(s)
     }
