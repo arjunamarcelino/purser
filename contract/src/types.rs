@@ -16,7 +16,10 @@ use near_sdk::{near, AccountId, NearToken, PublicKey};
 
 /// Human-chosen, unique task identifier.
 pub type TaskId = String;
-/// Client-supplied idempotency key (a UUID). Keys the tri-state replay guard.
+/// Client-supplied idempotency key (a UUID). Keys the tri-state replay guard, scoped per
+/// `(predecessor, RequestId)`: a client must use a **globally-unique** id per delegate account,
+/// not per-task — reusing one across tasks collides within that delegate's namespace (the second
+/// call replays/blocks, fail-safe: no double-spend).
 pub type RequestId = String;
 /// Contract-assigned, monotonic commitment id (the counter lives on [`crate::Purser`]).
 pub type CommitmentId = u64;
