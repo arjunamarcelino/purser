@@ -190,7 +190,10 @@ impl Purser {
             },
         );
         // active_crew < crew_cap <= 255, so +1 cannot overflow.
-        self.tasks.get_mut(&task_id).unwrap().active_crew += 1;
+        self.tasks
+            .get_mut(&task_id)
+            .expect("task presence checked above")
+            .active_crew += 1;
         PurserEvent::DelegateAdded {
             task_id,
             account_id,
@@ -225,7 +228,10 @@ impl Purser {
             // task existence checked above; decrement only on a real deactivation so a
             // re-revoke can never double-decrement the counter. Emit here too, so an
             // idempotent re-revoke produces no phantom DelegateRevoked event.
-            self.tasks.get_mut(&task_id).unwrap().active_crew -= 1;
+            self.tasks
+                .get_mut(&task_id)
+                .expect("task presence checked above")
+                .active_crew -= 1;
             PurserEvent::DelegateRevoked {
                 task_id,
                 account_id,
