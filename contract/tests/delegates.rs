@@ -92,6 +92,29 @@ fn err_string(res: near_workspaces::result::ExecutionFinalResult) -> String {
     format!("{:?}", res.into_result().unwrap_err())
 }
 
+/// Oracle: the stored `active_crew` counter must always equal the true count of active
+/// delegates recomputed from `list_delegates` — the denormalization invariant that the
+/// hand-maintained `+1`/`-1` could otherwise silently break.
+async fn assert_crew_consistent(c: &Contract, task_id: &str) -> anyhow::Result<()> {
+    let delegates: Vec<serde_json::Value> = c
+        .view("list_delegates")
+        .args_json(json!({ "task_id": task_id, "from_index": 0, "limit": 1000 }))
+        .await?
+        .json()?;
+    let active = delegates.iter().filter(|d| d["active"] == true).count() as u64;
+    let task: serde_json::Value = c
+        .view("get_task")
+        .args_json(json!({ "task_id": task_id }))
+        .await?
+        .json()?;
+    assert_eq!(
+        task["active_crew"].as_u64().unwrap(),
+        active,
+        "active_crew counter desynced from the recomputed active-delegate count"
+    );
+    Ok(())
+}
+
 // ---- DONE WHEN cases --------------------------------------------------------------
 
 /// Authorized delegate passes the predicate; unregistered fails; revoke flips it back.
@@ -383,5 +406,39 @@ async fn views_and_events() -> anyhow::Result<()> {
         .await?
         .json()?;
     assert!(empty.is_empty());
+    Ok(())
+}
+
+/// The `active_crew` counter stays equal to the recomputed active-delegate count across a
+/// full add / add / revoke / re-revoke / add churn (P2-2 denormalization oracle).
+#[tokio::test]
+async fn active_crew_oracle() -> anyhow::Result<()> {
+    let (_w, c, owner, _stranger) = setup().await?;
+    create_task(&owner, &c, "t1", "100", 3).await?;
+    assert_crew_consistent(&c, "t1").await?; // 0
+
+    add_delegate(&owner, &c, "t1", "scout.test")
+        .await?
+        .into_result()?;
+    add_delegate(&owner, &c, "t1", "forge.test")
+        .await?
+        .into_result()?;
+    assert_crew_consistent(&c, "t1").await?; // 2
+
+    let revoke = |acct: &'static str| {
+        owner
+            .call(c.id(), "revoke_delegate")
+            .args_json(json!({ "task_id": "t1", "account_id": acct }))
+            .max_gas()
+            .transact()
+    };
+    revoke("scout.test").await?.into_result()?;
+    revoke("scout.test").await?.into_result()?; // idempotent re-revoke — must not double-decrement
+    assert_crew_consistent(&c, "t1").await?; // 1
+
+    add_delegate(&owner, &c, "t1", "buyer.test")
+        .await?
+        .into_result()?;
+    assert_crew_consistent(&c, "t1").await?; // 2
     Ok(())
 }
