@@ -15,6 +15,7 @@ mod delegates;
 mod error;
 mod events;
 mod idempotency;
+mod payload;
 mod reservation;
 mod types;
 
@@ -29,6 +30,7 @@ pub use error::{
 };
 pub use events::PurserEvent;
 pub use idempotency::{classify, IdemDecision};
+pub use payload::{build_near_payload, NearPayload};
 pub use reservation::{transition, Event};
 pub use types::{
     Chain, Commitment, CommitmentId, Delegate, IdemState, PaymentIntent, RequestId,

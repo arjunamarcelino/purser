@@ -23,6 +23,14 @@ pub const MSG_OVERFLOW: &str = "arithmetic overflow";
 pub const MSG_ILLEGAL: &str = "illegal reservation transition";
 pub const MSG_ZERO_AMOUNT: &str = "amount must be positive";
 
+/// Payload-validation refusals (`PurserError` `Display`; Prompt 4). Like the accounting
+/// messages, each is a bare literal carrying no numeric state, and the near-workspaces
+/// attack suite asserts against the same constants so they cannot drift.
+pub const MSG_UNSUPPORTED_CHAIN: &str = "unsupported chain";
+pub const MSG_UNSUPPORTED_TOKEN: &str = "unsupported token";
+pub const MSG_INVALID_RECIPIENT: &str = "invalid recipient";
+pub const MSG_INVALID_MEMO: &str = "invalid memo";
+
 /// Boundary-guard panic strings for the Prompt-3 contract layer (task/delegate
 /// registry, access control, crew-cap). These are NOT [`PurserError`] variants —
 /// they guard the `#[near]` entrypoints, where `require!` / `env::panic_str` take a
@@ -42,7 +50,7 @@ pub const MSG_CREW_CAP_REACHED: &str = "crew cap reached";
 pub const MSG_NO_SUCH_DELEGATE: &str = "no such delegate";
 pub const MSG_DELEGATE_NOT_AUTHORIZED: &str = "delegate not authorized";
 
-/// Why an accounting or state-machine operation refused.
+/// Why an accounting, state-machine, or payload-validation operation refused.
 ///
 /// Variants are intentionally distinct: tests assert the *specific* refusal (e.g.
 /// "one unit over cap" must be [`PurserError::ExceedsBudget`], not
@@ -68,6 +76,14 @@ pub enum PurserError {
     },
     /// `try_reserve` with `amount == 0`.
     ZeroAmount,
+    /// Payload validation: `intent.chain` is not `NearNative` (EVM is the stretch path).
+    UnsupportedChain,
+    /// Payload validation: a `Nep141` token on the intent or task (NEAR-native only for now).
+    UnsupportedToken,
+    /// Payload validation: `intent.recipient` does not parse to a NEAR `AccountId`.
+    InvalidRecipient,
+    /// Payload validation: `intent.memo` exceeds the max length.
+    MemoTooLong,
 }
 
 impl core::fmt::Display for PurserError {
@@ -78,6 +94,10 @@ impl core::fmt::Display for PurserError {
             PurserError::ArithmeticOverflow => MSG_OVERFLOW,
             PurserError::IllegalTransition { .. } => MSG_ILLEGAL,
             PurserError::ZeroAmount => MSG_ZERO_AMOUNT,
+            PurserError::UnsupportedChain => MSG_UNSUPPORTED_CHAIN,
+            PurserError::UnsupportedToken => MSG_UNSUPPORTED_TOKEN,
+            PurserError::InvalidRecipient => MSG_INVALID_RECIPIENT,
+            PurserError::MemoTooLong => MSG_INVALID_MEMO,
         };
         f.write_str(s)
     }
