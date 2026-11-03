@@ -289,7 +289,9 @@ async fn create_task_input_validation() -> anyhow::Result<()> {
 #[tokio::test]
 async fn readd_refused_and_revoke_idempotent() -> anyhow::Result<()> {
     let (_w, c, owner, _stranger) = setup().await?;
-    create_task(&owner, &c, "t1", "100", 3).await?;
+    // crew_cap=1 so the seat is contended: the freed-slot add at the end only passes if the
+    // revoke decrement actually happened (sharpens the no-double-decrement check).
+    create_task(&owner, &c, "t1", "100", 1).await?;
     assert!(add_delegate(&owner, &c, "t1", "scout.test")
         .await?
         .is_success());
@@ -316,10 +318,60 @@ async fn readd_refused_and_revoke_idempotent() -> anyhow::Result<()> {
         .json()?;
     assert!(!r2, "re-revoke must be an idempotent no-op");
 
-    // active_crew back to 0 → crew_cap=3 still admits new members (no double-decrement corruption)
+    // revoke is terminal: re-adding the SAME (now-revoked) account is still refused.
+    let readd_same = add_delegate(&owner, &c, "t1", "scout.test").await?;
+    assert!(readd_same.is_failure());
+    assert!(err_string(readd_same).contains(purser_contract::MSG_DELEGATE_EXISTS));
+
+    // a DIFFERENT account takes the freed seat (active_crew dropped to 0 under crew_cap=1).
     assert!(add_delegate(&owner, &c, "t1", "forge.test")
         .await?
         .is_success());
+    Ok(())
+}
+
+/// The remaining boundary guards reject with the canonical literal: oversized
+/// derivation_path, add/revoke on an unknown task, and revoke of an unregistered account.
+#[tokio::test]
+async fn refusals_cover_remaining_guards() -> anyhow::Result<()> {
+    let (_w, c, owner, _stranger) = setup().await?;
+    create_task(&owner, &c, "t1", "100", 2).await?;
+
+    // derivation_path > 128 bytes → MSG_INVALID_PATH
+    let long_path = "m/".to_string() + &"a".repeat(130);
+    let bad_path = owner
+        .call(c.id(), "add_delegate")
+        .args_json(
+            json!({ "task_id": "t1", "account_id": "scout.test", "derivation_path": long_path }),
+        )
+        .max_gas()
+        .transact()
+        .await?;
+    assert!(bad_path.is_failure());
+    assert!(err_string(bad_path).contains(purser_contract::MSG_INVALID_PATH));
+
+    // add / revoke on an unknown task → MSG_NO_SUCH_TASK
+    let add_unknown = add_delegate(&owner, &c, "ghost", "scout.test").await?;
+    assert!(add_unknown.is_failure());
+    assert!(err_string(add_unknown).contains(purser_contract::MSG_NO_SUCH_TASK));
+    let revoke_unknown = owner
+        .call(c.id(), "revoke_delegate")
+        .args_json(json!({ "task_id": "ghost", "account_id": "scout.test" }))
+        .max_gas()
+        .transact()
+        .await?;
+    assert!(revoke_unknown.is_failure());
+    assert!(err_string(revoke_unknown).contains(purser_contract::MSG_NO_SUCH_TASK));
+
+    // revoke of an unregistered account on an existing task → MSG_NO_SUCH_DELEGATE
+    let revoke_ghost = owner
+        .call(c.id(), "revoke_delegate")
+        .args_json(json!({ "task_id": "t1", "account_id": "nobody.test" }))
+        .max_gas()
+        .transact()
+        .await?;
+    assert!(revoke_ghost.is_failure());
+    assert!(err_string(revoke_ghost).contains(purser_contract::MSG_NO_SUCH_DELEGATE));
     Ok(())
 }
 
