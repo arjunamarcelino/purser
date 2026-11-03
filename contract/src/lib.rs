@@ -290,12 +290,21 @@ impl Purser {
             .unwrap_or(NearToken::ZERO)
     }
 
-    /// All delegates of a task (active and revoked), for the dashboard crew view.
-    /// Iterates the registry filtering by `task_id`; `[]` for an unknown task.
-    pub fn list_delegates(&self, task_id: TaskId) -> Vec<Delegate> {
+    /// A page of a task's delegates (active and revoked), for the dashboard crew view —
+    /// skip `from_index` matches, return up to `limit`. Paginated so the returned set and
+    /// the per-call work stay bounded as the registry grows (revoked rows are never pruned;
+    /// re-adding a revoked account is refused, so churn accumulates entries). `[]` for an
+    /// unknown task or an out-of-range page.
+    ///
+    /// NOTE: `derivation_path` is surfaced here. It is opaque/unused in the MVP
+    /// (`public_key` is always `None`); when Chain Signatures lands (Prompt 5) a derivation
+    /// path maps to a derived address — redact it from this public view then.
+    pub fn list_delegates(&self, task_id: TaskId, from_index: u32, limit: u32) -> Vec<Delegate> {
         self.delegates
             .iter()
             .filter(|(key, _)| key.0 == task_id)
+            .skip(from_index as usize)
+            .take(limit as usize)
             .map(|(_, d)| d.clone())
             .collect()
     }
@@ -306,9 +315,16 @@ impl Purser {
         delegates::is_authorized(&self.delegates, &task_id, &account_id)
     }
 
-    /// All task ids. The off-chain indexer and dashboard enumerate tasks from here; an
-    /// agent discovers its scope via `list_task_ids` + [`Self::is_delegate_authorized`].
-    pub fn list_task_ids(&self) -> Vec<TaskId> {
-        self.tasks.keys().cloned().collect()
+    /// A page of task ids — skip `from_index`, return up to `limit`. The off-chain indexer
+    /// and dashboard enumerate tasks from here; an agent discovers its scope via
+    /// `list_task_ids` + [`Self::is_delegate_authorized`]. Paginated so the result stays
+    /// bounded as the task set grows.
+    pub fn list_task_ids(&self, from_index: u32, limit: u32) -> Vec<TaskId> {
+        self.tasks
+            .keys()
+            .skip(from_index as usize)
+            .take(limit as usize)
+            .cloned()
+            .collect()
     }
 }

@@ -128,7 +128,7 @@ async fn auth_predicate_and_revoke() -> anyhow::Result<()> {
 
     let delegates: serde_json::Value = c
         .view("list_delegates")
-        .args_json(json!({ "task_id": "t1" }))
+        .args_json(json!({ "task_id": "t1", "from_index": 0, "limit": 100 }))
         .await?
         .json()?;
     assert_eq!(delegates[0]["account_id"], "scout.test");
@@ -211,7 +211,11 @@ async fn non_owner_cannot_mutate() -> anyhow::Result<()> {
     assert!(err_string(bad_revoke).contains(purser_contract::MSG_ONLY_OWNER));
 
     // state unchanged: t2 never created, scout still active
-    let ids: Vec<String> = c.view("list_task_ids").await?.json()?;
+    let ids: Vec<String> = c
+        .view("list_task_ids")
+        .args_json(json!({ "from_index": 0, "limit": 100 }))
+        .await?
+        .json()?;
     assert_eq!(ids, vec!["t1".to_string()]);
     assert!(is_authorized(&c, "t1", "scout.test").await?);
     Ok(())
@@ -332,7 +336,11 @@ async fn views_and_events() -> anyhow::Result<()> {
         .await?
         .json()?;
     assert_eq!(remaining, "100");
-    let ids: Vec<String> = c.view("list_task_ids").await?.json()?;
+    let ids: Vec<String> = c
+        .view("list_task_ids")
+        .args_json(json!({ "from_index": 0, "limit": 100 }))
+        .await?
+        .json()?;
     assert_eq!(ids, vec!["t1".to_string()]);
 
     let added = add_delegate(&owner, &c, "t1", "scout.test").await?;
@@ -371,7 +379,7 @@ async fn views_and_events() -> anyhow::Result<()> {
     assert_eq!(r0, "0");
     let empty: Vec<serde_json::Value> = c
         .view("list_delegates")
-        .args_json(json!({ "task_id": "nope" }))
+        .args_json(json!({ "task_id": "nope", "from_index": 0, "limit": 100 }))
         .await?
         .json()?;
     assert!(empty.is_empty());
