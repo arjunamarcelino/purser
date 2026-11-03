@@ -1,11 +1,12 @@
 //! Tri-state idempotency classification (TECHNICAL §6).
 //!
 //! The tri-state entry type [`crate::types::IdemState`] (`Pending | Committed |
-//! Failed`) is on-chain state, keyed by `RequestId`. This module provides the pure
-//! decision over that entry; the `LookupMap<RequestId, IdemState>` store and its
-//! writes (`None -> Pending` in the same atomic step as the reserve, `Pending ->
-//! Committed` on settle, `Pending -> Failed` on safe failure) are the Prompt-4
-//! contract layer's job.
+//! Failed`) is on-chain state, keyed by `(AccountId, RequestId)` — the predecessor
+//! (proposing delegate) plus the client request id, so a co-delegate cannot squat
+//! another's `request_id`. This module provides the pure decision over that entry;
+//! the `LookupMap<(AccountId, RequestId), IdemState>` store and its writes
+//! (`None -> Pending` in the same atomic step as the reserve, `Pending -> Committed`
+//! on settle, `Pending -> Failed` on safe failure) are the contract layer's job (`lib.rs`).
 //!
 //! NOTE on scope: [`classify`] proves the *classification* only. The genuine
 //! in-flight RACE — two `propose_payment` calls both passing the admission check

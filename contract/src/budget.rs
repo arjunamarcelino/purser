@@ -124,8 +124,8 @@ pub fn try_reserve(
 }
 
 /// `Reserved -> Signed` (zero accounting). A core mutator so EVERY `commitment.state`
-/// write routes through the state machine — the Prompt-4 `on_signed` callback calls
-/// this rather than hand-writing the transition.
+/// write routes through the state machine — the `on_near_settled` callback (and owner
+/// `reconcile`) call this rather than hand-writing the transition.
 pub fn authorize(c: &mut Commitment, now: u64) -> Result<(), PurserError> {
     let next = transition(c.state, Event::Authorize)?; // only Reserved -> Signed
     c.state = next;
