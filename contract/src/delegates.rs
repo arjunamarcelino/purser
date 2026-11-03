@@ -59,10 +59,11 @@ pub enum PurserEvent {
         task_id: TaskId,
         account_id: AccountId,
     },
+    /// Emitted only when a revoke actually deactivates a delegate (never on an
+    /// idempotent re-revoke), so the event stream carries no phantom revocations.
     #[event_version("1.0.0")]
     DelegateRevoked {
         task_id: TaskId,
         account_id: AccountId,
-        was_active: bool,
     },
 }

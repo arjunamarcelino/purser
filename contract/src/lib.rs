@@ -225,15 +225,15 @@ impl Purser {
         };
         if was_active {
             // task existence checked above; decrement only on a real deactivation so a
-            // re-revoke can never double-decrement the counter.
+            // re-revoke can never double-decrement the counter. Emit here too, so an
+            // idempotent re-revoke produces no phantom DelegateRevoked event.
             self.tasks.get_mut(&task_id).unwrap().active_crew -= 1;
+            PurserEvent::DelegateRevoked {
+                task_id,
+                account_id,
+            }
+            .emit();
         }
-        PurserEvent::DelegateRevoked {
-            task_id,
-            account_id,
-            was_active,
-        }
-        .emit();
         was_active
     }
 
