@@ -217,11 +217,9 @@ impl Purser {
                 .delegates
                 .get_mut(&key)
                 .unwrap_or_else(|| env::panic_str(MSG_NO_SUCH_DELEGATE));
-            let was_active = d.active;
-            if was_active {
-                d.active = false;
-            }
-            was_active
+            let prev = d.active;
+            d.active = false; // unconditional: a no-op when already inactive
+            prev
         };
         if was_active {
             // task existence checked above; decrement only on a real deactivation so a
