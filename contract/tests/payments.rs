@@ -219,3 +219,58 @@ async fn non_allowlisted_recipient_refused() -> anyhow::Result<()> {
     );
     Ok(())
 }
+
+// ---- owner reconcile (stuck-Reserved recovery) ------------------------------------
+//
+// These cover the owner-gate + state guards end-to-end. The happy force-confirm / force-release
+// transitions reuse the budget-tested state machine (authorize+settle_confirmed / release_failed);
+// a genuinely-stuck `Reserved` cannot be manufactured in-sandbox (the callback always runs when gas
+// suffices, and attaching too little gas fails the whole call rather than only the callback), so the
+// positive paths are proven at the unit level in `budget.rs`.
+
+async fn reconcile(
+    caller: &Account,
+    c: &Contract,
+    cid: u64,
+    confirmed: bool,
+) -> anyhow::Result<near_workspaces::result::ExecutionFinalResult> {
+    Ok(caller
+        .call(c.id(), "reconcile")
+        .args_json(json!({ "commitment_id": cid, "confirmed": confirmed }))
+        .max_gas()
+        .transact()
+        .await?)
+}
+
+/// Only the owner may reconcile (the owner gate fires before any lookup).
+#[tokio::test]
+async fn reconcile_rejects_non_owner() -> anyhow::Result<()> {
+    let (_w, c, _owner, delegate, _recipient) = setup().await?;
+    let res = reconcile(&delegate, &c, 0, true).await?;
+    assert!(res.is_failure());
+    assert!(err_string(res).contains(purser_contract::MSG_ONLY_OWNER));
+    Ok(())
+}
+
+/// Reconciling an unknown commitment id is refused.
+#[tokio::test]
+async fn reconcile_rejects_unknown_commitment() -> anyhow::Result<()> {
+    let (_w, c, owner, _delegate, _recipient) = setup().await?;
+    let res = reconcile(&owner, &c, 999, true).await?;
+    assert!(res.is_failure());
+    assert!(err_string(res).contains(purser_contract::MSG_NO_SUCH_COMMITMENT));
+    Ok(())
+}
+
+/// A commitment that already settled (Confirmed) is not reconcilable — only a stuck `Reserved` is.
+#[tokio::test]
+async fn reconcile_rejects_already_settled() -> anyhow::Result<()> {
+    let (_w, c, owner, delegate, recipient) = setup().await?;
+    propose(&delegate, &c, &recipient, "400000", "r1")
+        .await?
+        .into_result()?; // settles to Confirmed as cid 0
+    let res = reconcile(&owner, &c, 0, true).await?;
+    assert!(res.is_failure());
+    assert!(err_string(res).contains(purser_contract::MSG_NOT_RECONCILABLE));
+    Ok(())
+}

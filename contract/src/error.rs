@@ -56,6 +56,8 @@ pub const MSG_IN_FLIGHT: &str = "in-flight";
 pub const MSG_ALREADY_FAILED: &str = "already failed";
 pub const MSG_INVALID_REQUEST_ID: &str = "invalid request_id";
 pub const MSG_RECIPIENT_NOT_ALLOWED: &str = "recipient not allowlisted";
+pub const MSG_NO_SUCH_COMMITMENT: &str = "no such commitment";
+pub const MSG_NOT_RECONCILABLE: &str = "not reconcilable";
 
 /// Why an accounting, state-machine, or payload-validation operation refused.
 ///

@@ -74,4 +74,15 @@ pub enum PurserEvent {
         task_id: TaskId,
         recipients: Vec<String>,
     },
+    /// Owner reconciled a commitment stuck in `Reserved` (settlement callback lost): `confirmed`
+    /// records the owner-attested on-chain transfer outcome — `true` → settled `Confirmed`,
+    /// `false` → safe-released `Failed`. Distinct from the callback-driven `Payment*` events so the
+    /// indexer can tell an owner recovery apart from the normal lifecycle.
+    #[event_version("1.0.0")]
+    PaymentReconciled {
+        task_id: TaskId,
+        commitment_id: CommitmentId,
+        request_id: RequestId,
+        confirmed: bool,
+    },
 }

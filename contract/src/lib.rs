@@ -30,9 +30,9 @@ pub use error::{
     PurserError, MSG_ALREADY_FAILED, MSG_CAP_POSITIVE, MSG_CREW_CAP_MIN, MSG_CREW_CAP_REACHED,
     MSG_DELEGATE_EXISTS, MSG_DELEGATE_NOT_AUTHORIZED, MSG_EXCEEDS_BUDGET, MSG_INVALID_MEMO,
     MSG_INVALID_PATH, MSG_INVALID_RECIPIENT, MSG_INVALID_REQUEST_ID, MSG_INVALID_TASK_ID,
-    MSG_IN_FLIGHT, MSG_NO_SUCH_DELEGATE, MSG_NO_SUCH_TASK, MSG_ONLY_OWNER,
-    MSG_RECIPIENT_NOT_ALLOWED, MSG_TASK_EXISTS, MSG_UNSUPPORTED_CHAIN, MSG_UNSUPPORTED_TOKEN,
-    MSG_ZERO_AMOUNT,
+    MSG_IN_FLIGHT, MSG_NOT_RECONCILABLE, MSG_NO_SUCH_COMMITMENT, MSG_NO_SUCH_DELEGATE,
+    MSG_NO_SUCH_TASK, MSG_ONLY_OWNER, MSG_RECIPIENT_NOT_ALLOWED, MSG_TASK_EXISTS,
+    MSG_UNSUPPORTED_CHAIN, MSG_UNSUPPORTED_TOKEN, MSG_ZERO_AMOUNT,
 };
 pub use events::PurserEvent;
 pub use idempotency::{classify, IdemDecision};
@@ -477,6 +477,69 @@ impl Purser {
         }
         assert_invariant(b); // defense-in-depth backstop after the settle/release mutation
         cid
+    }
+
+    /// Owner-only recovery for a commitment stuck in `Reserved` because its settlement callback
+    /// never completed (gas-starved / died *after* a successful transfer — the documented
+    /// `on_near_settled` residual). Without this, the budget stays locked and the `request_id`
+    /// wedged at `Pending` forever.
+    ///
+    /// HONEST RECONCILIATION (Rule 4 — reclaim only on proof, never on silence): the owner attests
+    /// the ACTUAL on-chain transfer outcome, verified off-chain (explorer / receipt), and passes it
+    /// as `confirmed` — that attestation IS the proof, not silence. `confirmed = true` → the
+    /// transfer landed → force `Reserved → Signed → Confirmed` and settle. `confirmed = false` →
+    /// the owner proved it did not land (funds refunded) → safe-release `Reserved → Failed`.
+    ///
+    /// Only a `Reserved` commitment is reconcilable: in the happy path a commitment settles within
+    /// the same transaction as its callback, so a `Reserved` that persists into a later owner
+    /// transaction is, by construction, a lost-callback case. Any other state rejects.
+    pub fn reconcile(&mut self, commitment_id: CommitmentId, confirmed: bool) {
+        require!(env::predecessor_account_id() == self.owner, MSG_ONLY_OWNER);
+        let now = env::block_timestamp();
+        let (task_id, delegate, request_id, reserved, state) = {
+            let c = self
+                .commitments
+                .get(&commitment_id)
+                .unwrap_or_else(|| env::panic_str(MSG_NO_SUCH_COMMITMENT));
+            (
+                c.task.clone(),
+                c.delegate.clone(),
+                c.request_id.clone(),
+                c.reserved_amount,
+                c.state,
+            )
+        };
+        require!(state == ReservationState::Reserved, MSG_NOT_RECONCILABLE);
+
+        let b = self
+            .tasks
+            .get_mut(&task_id)
+            .expect("task of a live commitment exists");
+        let c = self
+            .commitments
+            .get_mut(&commitment_id)
+            .expect("commitment presence checked above");
+        if confirmed {
+            authorize(c, now).unwrap_or_else(|e| env::panic_str(&e.to_string()));
+            settle_confirmed(b, c, reserved, now)
+                .unwrap_or_else(|e| env::panic_str(&e.to_string()));
+            self.idempotency.insert(
+                (delegate, request_id.clone()),
+                IdemState::Committed { commitment_id },
+            );
+        } else {
+            release_failed(b, c, now).unwrap_or_else(|e| env::panic_str(&e.to_string()));
+            self.idempotency
+                .insert((delegate, request_id.clone()), IdemState::Failed);
+        }
+        assert_invariant(b);
+        PurserEvent::PaymentReconciled {
+            task_id,
+            commitment_id,
+            request_id,
+            confirmed,
+        }
+        .emit();
     }
 
     /// The delegate-authorization gate `propose_payment` calls: the predecessor (`caller`) must be
