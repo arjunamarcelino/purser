@@ -134,7 +134,8 @@ pub struct Delegate {
     pub added_at: u64,
 }
 
-/// Tri-state idempotency entry, keyed by [`RequestId`] (TECHNICAL §6).
+/// Tri-state idempotency entry, keyed by `(AccountId, RequestId)` — the proposing
+/// delegate plus the client request id (TECHNICAL §6).
 #[near(serializers = [json, borsh])]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum IdemState {
