@@ -25,6 +25,12 @@ pub use types::{
     ReservationState, TaskBudget, TaskId, TokenSpec,
 };
 
+/// Max byte length of an owner-chosen `task_id` (mirrors NEAR's account-id max); an
+/// unbounded id is a storage-griefing and indexer hazard.
+const MAX_TASK_ID_LEN: usize = 64;
+/// Max byte length of a delegate's operator-supplied `derivation_path`.
+const MAX_DERIVATION_PATH_LEN: usize = 128;
+
 /// Unique storage prefixes for on-chain collections.
 ///
 /// APPEND-ONLY: `BorshStorageKey` turns each variant's position into the on-chain
@@ -119,7 +125,7 @@ impl Purser {
         let caller = env::predecessor_account_id();
         require!(caller == self.owner, MSG_ONLY_OWNER);
         require!(
-            !task_id.is_empty() && task_id.len() <= 64,
+            !task_id.is_empty() && task_id.len() <= MAX_TASK_ID_LEN,
             MSG_INVALID_TASK_ID
         );
         require!(!self.tasks.contains_key(&task_id), MSG_TASK_EXISTS);
@@ -163,7 +169,10 @@ impl Purser {
         derivation_path: String,
     ) {
         require!(env::predecessor_account_id() == self.owner, MSG_ONLY_OWNER);
-        require!(derivation_path.len() <= 128, MSG_INVALID_PATH);
+        require!(
+            derivation_path.len() <= MAX_DERIVATION_PATH_LEN,
+            MSG_INVALID_PATH
+        );
 
         let (crew_cap, active_crew) = {
             let task = self
