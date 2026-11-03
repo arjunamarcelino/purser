@@ -10,7 +10,7 @@
 //! Lives in its own module (not `delegates`) because the set spans task *and* delegate
 //! lifecycles — and Prompt 4 adds payment events here too.
 
-use crate::types::{TaskId, TokenSpec};
+use crate::types::{CommitmentId, RequestId, TaskId, TokenSpec};
 use near_sdk::{near, AccountId, NearToken};
 
 #[near(event_json(standard = "purser"))]
@@ -36,5 +36,42 @@ pub enum PurserEvent {
     DelegateRevoked {
         task_id: TaskId,
         account_id: AccountId,
+    },
+    /// A reservation was admitted (Prompt 4). Emitted in the synchronous prefix of
+    /// `propose_payment`, AFTER the reserve + idempotency writes and BEFORE the transfer
+    /// Promise — the only correct place, since the Promise performs no synchronous state write.
+    #[event_version("1.0.0")]
+    PaymentReserved {
+        task_id: TaskId,
+        commitment_id: CommitmentId,
+        delegate: AccountId,
+        recipient: String,
+        amount: NearToken,
+        request_id: RequestId,
+    },
+    /// A reservation settled on a proven-successful transfer (`on_near_settled`). Carries no
+    /// `near_tx`: the contract cannot observe its own receipt id on-chain, so the indexer
+    /// backfills the tx hash off-chain (correlating by `commitment_id` / `request_id`).
+    #[event_version("1.0.0")]
+    PaymentConfirmed {
+        task_id: TaskId,
+        commitment_id: CommitmentId,
+        request_id: RequestId,
+        actual_spent: NearToken,
+    },
+    /// A reservation was released because the transfer failed before any value moved
+    /// (`on_near_settled`); the budget is returned.
+    #[event_version("1.0.0")]
+    PaymentFailed {
+        task_id: TaskId,
+        commitment_id: CommitmentId,
+        request_id: RequestId,
+        reason: String,
+    },
+    /// Owner added recipients to a task's payee allowlist (Prompt 4; refined in Prompt 5).
+    #[event_version("1.0.0")]
+    RecipientAllowlistSet {
+        task_id: TaskId,
+        recipients: Vec<String>,
     },
 }

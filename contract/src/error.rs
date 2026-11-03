@@ -49,6 +49,13 @@ pub const MSG_DELEGATE_EXISTS: &str = "delegate exists";
 pub const MSG_CREW_CAP_REACHED: &str = "crew cap reached";
 pub const MSG_NO_SUCH_DELEGATE: &str = "no such delegate";
 pub const MSG_DELEGATE_NOT_AUTHORIZED: &str = "delegate not authorized";
+// Prompt-4 payment-flow boundary guards. `in-flight` / `already failed` are the exact literals
+// the build prompt mandates; the TypeScript proposer branches on these, so treat them as a frozen
+// cross-service wire contract (do not reword).
+pub const MSG_IN_FLIGHT: &str = "in-flight";
+pub const MSG_ALREADY_FAILED: &str = "already failed";
+pub const MSG_INVALID_REQUEST_ID: &str = "invalid request_id";
+pub const MSG_RECIPIENT_NOT_ALLOWED: &str = "recipient not allowlisted";
 
 /// Why an accounting, state-machine, or payload-validation operation refused.
 ///
