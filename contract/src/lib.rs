@@ -475,6 +475,7 @@ impl Purser {
                 .emit();
             }
         }
+        assert_invariant(b); // defense-in-depth backstop after the settle/release mutation
         cid
     }
 
@@ -528,6 +529,7 @@ impl Purser {
             now,
         )
         .unwrap_or_else(|e| env::panic_str(&e.to_string()));
+        assert_invariant(b); // defense-in-depth backstop (try_reserve already guarantees it)
         commitment.payload_hash = payload_hash; // None now; Prompt 5 → Some(hash), zero-churn
         self.commitments.insert(cid, commitment); // `b` borrow ended (NLL) — disjoint field
         self.next_commitment_id += 1; // monotonic; first cid = 0
