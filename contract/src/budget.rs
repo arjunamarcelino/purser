@@ -46,6 +46,22 @@ pub fn assert_invariant(b: &TaskBudget) {
     );
 }
 
+/// Unspent headroom: `cap - (completed + outstanding)`, floored at `ZERO`. Pure,
+/// total, and infallible — safe to call from a read-only view (it never panics even
+/// if a future edit broke invariant (I)). The single source of the "remaining"
+/// number for `remaining_budget` / the dashboard, so the math lives in exactly one
+/// place. Both `checked_*` map to a saturating floor rather than `unwrap`:
+/// under (I) the add can't overflow and `used <= cap`, but a view must stay total.
+pub fn remaining(b: &TaskBudget) -> NearToken {
+    // Unreachable under (I); saturate HIGH so a hypothetical breach floors remaining
+    // to ZERO instead of panicking in a view.
+    let used = b
+        .completed
+        .checked_add(b.outstanding)
+        .unwrap_or(NearToken::MAX);
+    b.cap.checked_sub(used).unwrap_or(NearToken::ZERO)
+}
+
 /// §1.3 `try_reserve`. Admit iff `completed + outstanding + amount <= cap`; then
 /// `outstanding += amount` and return a fresh `Commitment{Reserved}`.
 ///
@@ -231,6 +247,7 @@ mod tests {
             outstanding: NearToken::ZERO,
             crew_cap: 3,
             created_at: 0,
+            active_crew: 0,
         }
     }
 
@@ -343,6 +360,20 @@ mod tests {
     }
 
     // ---- "Done when" tests ----------------------------------------------------
+
+    #[test]
+    fn remaining_tracks_usage_and_floors_at_zero() {
+        let mut b = budget(100);
+        assert_eq!(remaining(&b), yocto(100)); // nothing used yet
+        b.outstanding = yocto(30);
+        b.completed = yocto(20);
+        assert_eq!(remaining(&b), yocto(50)); // 100 - (20 + 30)
+        b.outstanding = yocto(80); // completed+outstanding == cap
+        assert_eq!(remaining(&b), yocto(0));
+        // Defensive: even a (should-be-unreachable) breach floors at ZERO, never panics.
+        b.outstanding = yocto(81);
+        assert_eq!(remaining(&b), NearToken::ZERO);
+    }
 
     #[test]
     fn invariant_holds_over_legal_sequence() {
