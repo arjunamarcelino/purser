@@ -62,7 +62,12 @@ mod tests {
 
     const MAX_MEMO: usize = 256;
 
-    fn intent(chain: Chain, token: TokenSpec, recipient: &str, memo: Option<String>) -> PaymentIntent {
+    fn intent(
+        chain: Chain,
+        token: TokenSpec,
+        recipient: &str,
+        memo: Option<String>,
+    ) -> PaymentIntent {
         PaymentIntent {
             chain,
             recipient: recipient.to_string(),
@@ -76,19 +81,32 @@ mod tests {
     fn valid_near_native_parses_recipient_and_defers_hash() {
         let p = build_near_payload(
             &TokenSpec::NearNative,
-            &intent(Chain::NearNative, TokenSpec::NearNative, "recipient.near", None),
+            &intent(
+                Chain::NearNative,
+                TokenSpec::NearNative,
+                "recipient.near",
+                None,
+            ),
             MAX_MEMO,
         )
         .unwrap();
         assert_eq!(p.recipient, "recipient.near".parse::<AccountId>().unwrap());
-        assert_eq!(p.payload_hash, None, "payload_hash is constructed in Prompt 5");
+        assert_eq!(
+            p.payload_hash, None,
+            "payload_hash is constructed in Prompt 5"
+        );
     }
 
     #[test]
     fn rejects_evm_chain() {
         let err = build_near_payload(
             &TokenSpec::NearNative,
-            &intent(Chain::Evm { chain_id: 11155111 }, TokenSpec::NearNative, "recipient.near", None),
+            &intent(
+                Chain::Evm { chain_id: 11155111 },
+                TokenSpec::NearNative,
+                "recipient.near",
+                None,
+            ),
             MAX_MEMO,
         )
         .unwrap_err();
@@ -114,7 +132,12 @@ mod tests {
         assert_eq!(
             build_near_payload(
                 &nep141,
-                &intent(Chain::NearNative, TokenSpec::NearNative, "recipient.near", None),
+                &intent(
+                    Chain::NearNative,
+                    TokenSpec::NearNative,
+                    "recipient.near",
+                    None
+                ),
                 MAX_MEMO,
             )
             .unwrap_err(),
@@ -127,7 +150,12 @@ mod tests {
         let memo = "m".repeat(MAX_MEMO + 1);
         let err = build_near_payload(
             &TokenSpec::NearNative,
-            &intent(Chain::NearNative, TokenSpec::NearNative, "recipient.near", Some(memo)),
+            &intent(
+                Chain::NearNative,
+                TokenSpec::NearNative,
+                "recipient.near",
+                Some(memo),
+            ),
             MAX_MEMO,
         )
         .unwrap_err();
@@ -136,7 +164,12 @@ mod tests {
         let at_bound = "m".repeat(MAX_MEMO);
         assert!(build_near_payload(
             &TokenSpec::NearNative,
-            &intent(Chain::NearNative, TokenSpec::NearNative, "recipient.near", Some(at_bound)),
+            &intent(
+                Chain::NearNative,
+                TokenSpec::NearNative,
+                "recipient.near",
+                Some(at_bound)
+            ),
             MAX_MEMO,
         )
         .is_ok());
@@ -146,7 +179,12 @@ mod tests {
     fn rejects_malformed_recipient() {
         let err = build_near_payload(
             &TokenSpec::NearNative,
-            &intent(Chain::NearNative, TokenSpec::NearNative, "Not A Valid Id!!", None),
+            &intent(
+                Chain::NearNative,
+                TokenSpec::NearNative,
+                "Not A Valid Id!!",
+                None,
+            ),
             MAX_MEMO,
         )
         .unwrap_err();

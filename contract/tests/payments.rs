@@ -47,14 +47,18 @@ async fn setup() -> anyhow::Result<(Worker<Sandbox>, Contract, Account, Account,
 
     owner
         .call(contract.id(), "create_task")
-        .args_json(json!({ "task_id": "t1", "cap": "1000000", "token": "NearNative", "crew_cap": 3 }))
+        .args_json(
+            json!({ "task_id": "t1", "cap": "1000000", "token": "NearNative", "crew_cap": 3 }),
+        )
         .max_gas()
         .transact()
         .await?
         .into_result()?;
     owner
         .call(contract.id(), "add_delegate")
-        .args_json(json!({ "task_id": "t1", "account_id": delegate.id(), "derivation_path": "m/44/0" }))
+        .args_json(
+            json!({ "task_id": "t1", "account_id": delegate.id(), "derivation_path": "m/44/0" }),
+        )
         .max_gas()
         .transact()
         .await?
@@ -96,7 +100,11 @@ async fn propose(
         .await?)
 }
 
-async fn view_json(c: &Contract, method: &str, args: serde_json::Value) -> anyhow::Result<serde_json::Value> {
+async fn view_json(
+    c: &Contract,
+    method: &str,
+    args: serde_json::Value,
+) -> anyhow::Result<serde_json::Value> {
     Ok(c.view(method).args_json(args).await?.json()?)
 }
 
@@ -113,12 +121,19 @@ async fn legit_payment_succeeds_and_accounts() -> anyhow::Result<()> {
     let (_w, c, _owner, delegate, recipient) = setup().await?;
 
     let res = propose(&delegate, &c, &recipient, "400000", "r1").await?;
-    assert!(res.is_success(), "propose_payment failed: {:?}", res.failures());
+    assert!(
+        res.is_success(),
+        "propose_payment failed: {:?}",
+        res.failures()
+    );
 
     // DONE-WHEN: report the tx hash (off-chain observation — the contract can't read its own
     // receipt id) and the MEASURED gas (not the 10 Tgas callback estimate).
     println!("near_tx (off-chain) = {}", res.outcome().transaction_hash);
-    println!("total_gas_burnt     = {} Tgas", res.total_gas_burnt.as_tgas());
+    println!(
+        "total_gas_burnt     = {} Tgas",
+        res.total_gas_burnt.as_tgas()
+    );
 
     // lifecycle events emitted.
     assert!(
@@ -170,11 +185,18 @@ async fn over_budget_payment_refused_and_budget_unchanged() -> anyhow::Result<()
 
     let task = view_json(&c, "get_task", json!({ "task_id": "t1" })).await?;
     assert_eq!(task["completed"], "0", "budget mutated on refused reserve");
-    assert_eq!(task["outstanding"], "0", "budget mutated on refused reserve");
+    assert_eq!(
+        task["outstanding"], "0",
+        "budget mutated on refused reserve"
+    );
 
     // no commitment burned, cid not consumed.
     let cmt = view_json(&c, "get_commitment", json!({ "commitment_id": 0 })).await?;
-    assert_eq!(cmt, serde_json::Value::Null, "a commitment was created on a refused reserve");
+    assert_eq!(
+        cmt,
+        serde_json::Value::Null,
+        "a commitment was created on a refused reserve"
+    );
 
     Ok(())
 }
@@ -191,6 +213,9 @@ async fn non_allowlisted_recipient_refused() -> anyhow::Result<()> {
     assert!(err_string(res).contains(purser_contract::MSG_RECIPIENT_NOT_ALLOWED));
 
     let task = view_json(&c, "get_task", json!({ "task_id": "t1" })).await?;
-    assert_eq!(task["outstanding"], "0", "refused-before-reserve must not touch the budget");
+    assert_eq!(
+        task["outstanding"], "0",
+        "refused-before-reserve must not touch the budget"
+    );
     Ok(())
 }

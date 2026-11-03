@@ -28,9 +28,9 @@ pub use budget::{
 };
 pub use error::{
     PurserError, MSG_ALREADY_FAILED, MSG_CAP_POSITIVE, MSG_CREW_CAP_MIN, MSG_CREW_CAP_REACHED,
-    MSG_DELEGATE_EXISTS, MSG_DELEGATE_NOT_AUTHORIZED, MSG_EXCEEDS_BUDGET, MSG_IN_FLIGHT,
-    MSG_INVALID_MEMO, MSG_INVALID_PATH, MSG_INVALID_RECIPIENT, MSG_INVALID_REQUEST_ID,
-    MSG_INVALID_TASK_ID, MSG_NO_SUCH_DELEGATE, MSG_NO_SUCH_TASK, MSG_ONLY_OWNER,
+    MSG_DELEGATE_EXISTS, MSG_DELEGATE_NOT_AUTHORIZED, MSG_EXCEEDS_BUDGET, MSG_INVALID_MEMO,
+    MSG_INVALID_PATH, MSG_INVALID_RECIPIENT, MSG_INVALID_REQUEST_ID, MSG_INVALID_TASK_ID,
+    MSG_IN_FLIGHT, MSG_NO_SUCH_DELEGATE, MSG_NO_SUCH_TASK, MSG_ONLY_OWNER,
     MSG_RECIPIENT_NOT_ALLOWED, MSG_TASK_EXISTS, MSG_UNSUPPORTED_CHAIN, MSG_UNSUPPORTED_TOKEN,
     MSG_ZERO_AMOUNT,
 };
@@ -360,7 +360,14 @@ impl Purser {
 
         // (d) ATOMIC ADMIT + RESERVE + IDEMPOTENCY WRITE — synchronous, before any Promise.
         let now = env::block_timestamp();
-        let cid = self.open_reservation(&task, caller.clone(), &intent, &request_id, payload.payload_hash, now);
+        let cid = self.open_reservation(
+            &task,
+            caller.clone(),
+            &intent,
+            &request_id,
+            payload.payload_hash,
+            now,
+        );
         self.idempotency.insert(idem_key, IdemState::Pending);
         // NEP-297: emitted AFTER the reserve+idempotency writes; the following Promise does NO
         // synchronous state write, so this is the only correct place — do NOT move it below.
@@ -436,8 +443,10 @@ impl Purser {
                 authorize(c, now).unwrap_or_else(|e| env::panic_str(&e.to_string()));
                 settle_confirmed(b, c, reserved, now)
                     .unwrap_or_else(|e| env::panic_str(&e.to_string()));
-                self.idempotency
-                    .insert((caller, request_id.clone()), IdemState::Committed { commitment_id: cid });
+                self.idempotency.insert(
+                    (caller, request_id.clone()),
+                    IdemState::Committed { commitment_id: cid },
+                );
                 PurserEvent::PaymentConfirmed {
                     task_id,
                     commitment_id: cid,
@@ -586,7 +595,11 @@ impl Purser {
     /// Request status for a given `(account_id, request_id)` — O(1), reuses the idempotency map.
     /// Lets an autonomous proposer (and the dashboard's duplicate/in-flight view) distinguish
     /// `Pending` / `Committed` / `Failed` WITHOUT firing a second `propose_payment` that panics.
-    pub fn get_idempotency(&self, account_id: AccountId, request_id: RequestId) -> Option<IdemState> {
+    pub fn get_idempotency(
+        &self,
+        account_id: AccountId,
+        request_id: RequestId,
+    ) -> Option<IdemState> {
         self.idempotency.get(&(account_id, request_id)).cloned()
     }
 
@@ -596,7 +609,12 @@ impl Purser {
     /// rows before the view-call gas limit). The off-chain indexer (events → its own DB) is the
     /// real scale path; the reserved `StorageKey::TaskCommitments` per-task index is the on-chain
     /// fix if/when needed. Per-delegate / per-state filtering is intentionally client-side.
-    pub fn list_commitments(&self, task_id: TaskId, from_index: u32, limit: u32) -> Vec<Commitment> {
+    pub fn list_commitments(
+        &self,
+        task_id: TaskId,
+        from_index: u32,
+        limit: u32,
+    ) -> Vec<Commitment> {
         self.commitments
             .values()
             .filter(|c| c.task == task_id)
