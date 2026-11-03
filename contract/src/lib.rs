@@ -61,21 +61,14 @@ const CALLBACK_GAS: Gas = Gas::from_tgas(10);
 
 /// Unique storage prefixes for on-chain collections.
 ///
-/// APPEND-ONLY: `BorshStorageKey` turns each variant's position into the on-chain
-/// prefix byte. After the first stateful deploy, inserting, reordering, or removing
-/// a variant reshuffles prefixes and orphans existing state — so only ever APPEND;
-/// never insert or reorder. Declared up front in backend-schema order to lock it now.
+/// APPEND-ONLY: `BorshStorageKey` maps each variant's position to its on-chain prefix byte, so
+/// after the first stateful deploy you may only append — never insert, reorder, or remove (doing
+/// so orphans existing state). Order is locked up front in backend-schema order.
 ///
-/// Prompt 3 constructs `Delegates` (a single `IterableMap<(TaskId, AccountId), Delegate>`,
-/// no secondary index) and `Allowlist`. `DelegateIndex` is now **unused** — the delegate
-/// registry is one flat composite-key map, so no per-task nested `Vector` (and no
-/// runtime sub-prefix) is needed — but the variant is kept reserved (append-only).
-///
-/// `#[allow(dead_code)]` stays for the still-reserved variants: `DelegateIndex` (unused —
-/// superseded by the flat `Delegates` map) and `TaskCommitments` (also **unused for the MVP**:
-/// Prompt 4's `list_commitments` filters the flat `Commitments` map per D-6, so no per-task
-/// index is built; the variant stays reserved as the scale fix for when the ledger outgrows the
-/// view's scan ceiling — then as its own appended field-carrying variant, never a prefix reuse).
+/// `DelegateIndex` and `TaskCommitments` are reserved but unused: the delegate registry and the
+/// commitment ledger are flat composite-key maps (D-6), filtered in-place rather than via a
+/// per-task secondary index. `TaskCommitments` stays reserved as the scale fix if `list_commitments`
+/// ever outgrows its view-scan ceiling.
 #[allow(dead_code)]
 #[derive(BorshStorageKey)]
 #[near]
@@ -91,19 +84,14 @@ enum StorageKey {
 
 /// Purser — an on-chain spending controller for crews of AI agents.
 ///
-/// Holds the owner, the Chain Signatures MPC signer id, and the Prompt-2 slice of the
-/// backend-schema §1.1 storage layout: the task-budget ledger, the commitment ledger,
-/// the tri-state idempotency store, and the monotonic commitment counter. These are
-/// declared and initialized here but **not mutated in Prompt 2** — the accounting core
-/// ([`budget`], [`reservation`], [`idempotency`]) operates on plain values; the
-/// entrypoints that read/write these collections land in Prompt 4.
+/// Holds the owner, the Chain Signatures MPC signer id, the task-budget and commitment ledgers,
+/// the tri-state idempotency store, the monotonic commitment counter, and the delegate registry +
+/// recipient allowlist (backend-schema §1.1). The `#[near]` entrypoints are the only mutators; the
+/// accounting cores ([`budget`], [`reservation`], [`idempotency`]) operate on plain borrowed values.
 ///
-/// ⚠️ Borsh layout: the struct is **final as of Prompt 4** — Prompt 4 added no new field (the
-/// payment flow reuses the Prompt-2 `commitments`/`idempotency`/`next_commitment_id`). The only
-/// Prompt-4 change is the `idempotency` **key type** (now `(AccountId, RequestId)` — see below),
-/// a free pre-stateful-deploy change since nothing is `new()`-initialized on a funded account yet.
-/// Append-only still governs any future field. Do NOT `new()`/stateful-init on testnet until the
-/// demo deploy, or you owe a hand-written `#[init(ignore_state)]` migrate.
+/// ⚠️ Borsh layout: APPEND-ONLY for any future field. Do NOT `new()`/stateful-init on testnet until
+/// the demo deploy (nothing is stateful-deployed yet — which is why the `idempotency` key could be
+/// widened to `(AccountId, RequestId)` for free); otherwise you owe an `#[init(ignore_state)]` migrate.
 #[near(contract_state)]
 #[derive(PanicOnDefault)]
 pub struct Purser {
