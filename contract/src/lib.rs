@@ -380,7 +380,8 @@ impl Purser {
             task_id: task,
             commitment_id: cid,
             delegate: caller,
-            recipient: intent.recipient.clone(),
+            // emit the PARSED/validated recipient (what the transfer targets), not the raw input.
+            recipient: payload.recipient.to_string(),
             amount: intent.amount,
             request_id: request_id.clone(),
         }
