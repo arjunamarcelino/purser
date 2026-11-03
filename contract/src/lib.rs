@@ -13,6 +13,7 @@ use near_sdk::{env, near, require, AccountId, BorshStorageKey, NearToken, PanicO
 mod budget;
 mod delegates;
 mod error;
+mod events;
 mod idempotency;
 mod reservation;
 mod types;
@@ -21,12 +22,12 @@ pub use budget::{
     assert_invariant, authorize, cancel, mark_unknown, release_failed, remaining, settle_confirmed,
     try_reserve,
 };
-pub use delegates::PurserEvent;
 pub use error::{
     PurserError, MSG_CAP_POSITIVE, MSG_CREW_CAP_MIN, MSG_CREW_CAP_REACHED, MSG_DELEGATE_EXISTS,
     MSG_DELEGATE_NOT_AUTHORIZED, MSG_INVALID_PATH, MSG_INVALID_TASK_ID, MSG_NO_SUCH_DELEGATE,
     MSG_NO_SUCH_TASK, MSG_ONLY_OWNER, MSG_TASK_EXISTS,
 };
+pub use events::PurserEvent;
 pub use idempotency::{classify, IdemDecision};
 pub use reservation::{transition, Event};
 pub use types::{
