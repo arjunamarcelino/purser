@@ -309,11 +309,10 @@ async fn views_and_events() -> anyhow::Result<()> {
         .await?;
     assert!(created.is_success());
     assert!(
-        created
-            .logs()
-            .iter()
-            .any(|l| l.contains("task_created") && l.contains("EVENT_JSON")),
-        "create_task must emit a NEP-297 task_created event; logs: {:?}",
+        created.logs().iter().any(|l| l.contains("task_created")
+            && l.contains("EVENT_JSON")
+            && l.contains("NearNative")),
+        "create_task must emit a NEP-297 task_created event carrying the token; logs: {:?}",
         created.logs()
     );
 

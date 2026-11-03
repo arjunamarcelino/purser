@@ -16,7 +16,7 @@
 //! layout-freeze obligation; its *field names* are the indexer's contract, though, so
 //! treat them as frozen.
 
-use crate::types::{Delegate, TaskId};
+use crate::types::{Delegate, TaskId, TokenSpec};
 use near_sdk::store::IterableMap;
 use near_sdk::{near, AccountId};
 
@@ -49,6 +49,9 @@ pub enum PurserEvent {
         task_id: TaskId,
         owner: AccountId,
         cap: near_sdk::NearToken,
+        /// The budget's token denomination — a `NOT NULL` column in the indexer `task`
+        /// table, so the event must carry it for an event-only row hydration.
+        token: TokenSpec,
         crew_cap: u8,
     },
     #[event_version("1.0.0")]

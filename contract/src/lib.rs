@@ -128,7 +128,7 @@ impl Purser {
 
         let budget = TaskBudget {
             owner: caller.clone(),
-            token,
+            token: token.clone(),
             cap,
             completed: NearToken::ZERO,
             outstanding: NearToken::ZERO,
@@ -142,6 +142,7 @@ impl Purser {
             task_id,
             owner: caller,
             cap,
+            token,
             crew_cap,
         }
         .emit();
