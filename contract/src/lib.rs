@@ -1,3 +1,12 @@
+//! Purser contract crate root — the `#[near]` entrypoint/state boundary.
+//!
+//! This is the ONLY layer that reads `env::*`, touches the `near_sdk::store` collections,
+//! emits events, and panics-to-roll-back. It composes the pure, `env`-free cores —
+//! [`budget`] (accounting, BACKEND-SCHEMA §1.3), [`reservation`] (state machine), and
+//! [`idempotency`] (replay guard) — behind the owner-gated control plane (task + delegate
+//! registry; APP-FLOW §3/§4/§9, BACKEND-SCHEMA §1.4/§1.5). The `propose_payment`
+//! reserve-before-sign path lands in Prompt 4. See the per-module banners for details.
+
 use near_sdk::store::{IterableMap, LookupMap};
 use near_sdk::{env, near, require, AccountId, BorshStorageKey, NearToken, PanicOnDefault};
 
