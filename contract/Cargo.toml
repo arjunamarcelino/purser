@@ -15,7 +15,7 @@ near-sdk = "=5.30.0"
 
 [dev-dependencies]
 near-sdk = { version = "=5.30.0", features = ["unit-testing"] }
-near-workspaces = "=0.24.0"
+near-workspaces = { version = "=0.24.0", features = ["unstable"] }  # `unstable` exposes compile_project (compile-to-wasm in-test)
 tokio = { version = "1", features = ["full"] }
 anyhow = "1"
 serde_json = "1"
