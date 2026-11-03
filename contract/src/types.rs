@@ -12,7 +12,7 @@
 //! even then old state needs a hand-written `#[init(ignore_state)]` migrate). Freeze
 //! the order now.
 
-use near_sdk::{near, AccountId, NearToken};
+use near_sdk::{near, AccountId, NearToken, PublicKey};
 
 /// Human-chosen, unique task identifier.
 pub type TaskId = String;
@@ -70,6 +70,11 @@ pub struct TaskBudget {
     /// Block timestamp (ns) at creation. Supplied by the caller; the pure core
     /// never reads `env`.
     pub created_at: u64,
+    /// Count of currently-active delegates on this task. Maintained incrementally
+    /// (`+1` on `add_delegate`, `-1` on a revoke that actually deactivates) so the
+    /// crew-cap admission check is O(1) — never an O(n) scan over the registry.
+    /// APPENDED last (Prompt 3) to keep the Borsh layout append-only.
+    pub active_crew: u8,
 }
 
 /// Reservation lifecycle state (TECHNICAL §4). Variant order is the borsh wire
@@ -104,6 +109,29 @@ pub struct Commitment {
     pub evm_tx: Option<String>,
     pub created_at: u64,
     pub updated_at: u64,
+}
+
+/// A registered crew member (delegate agent) of a task (BACKEND-SCHEMA §1.2).
+///
+/// Authorization is by `account_id` under the registry + predecessor model — the
+/// contract issues no access keys (see `delegates.rs`), so `public_key` is always
+/// `None` in the MVP; both `public_key` and `derivation_path` are carried now as
+/// cheap pre-freeze insurance for the Chain-Signatures stretch (adding a stored
+/// field after the first stateful deploy would cost a migration). `active` is set
+/// to `false` on revoke — honest revocation blocks *new* authorizations only.
+#[near(serializers = [json, borsh])]
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct Delegate {
+    pub account_id: AccountId,
+    /// Chain-Signatures derivation path (opaque in the MVP; length-bounded on input).
+    pub derivation_path: String,
+    /// `false` after `revoke_delegate`.
+    pub active: bool,
+    /// An issued function-call key, if ever provisioned. Always `None` under
+    /// registry + predecessor auth.
+    pub public_key: Option<PublicKey>,
+    /// Block timestamp (ns) at registration; injected by the contract layer.
+    pub added_at: u64,
 }
 
 /// Tri-state idempotency entry, keyed by [`RequestId`] (TECHNICAL §6).

@@ -23,6 +23,25 @@ pub const MSG_OVERFLOW: &str = "arithmetic overflow";
 pub const MSG_ILLEGAL: &str = "illegal reservation transition";
 pub const MSG_ZERO_AMOUNT: &str = "amount must be positive";
 
+/// Boundary-guard panic strings for the Prompt-3 contract layer (task/delegate
+/// registry, access control, crew-cap). These are NOT [`PurserError`] variants —
+/// they guard the `#[near]` entrypoints, where `require!` / `env::panic_str` take a
+/// `&str` directly. They live here for the same reason as the accounting messages
+/// above: single source of truth, so the entrypoint and the `near-workspaces` attack
+/// suite assert the *same* literal and cannot drift. Like the accounting messages,
+/// they carry no numeric state (no live budget/cap leaks into on-chain receipts).
+pub const MSG_ONLY_OWNER: &str = "only owner";
+pub const MSG_TASK_EXISTS: &str = "task exists";
+pub const MSG_CAP_POSITIVE: &str = "cap must be positive";
+pub const MSG_CREW_CAP_MIN: &str = "crew_cap must be >= 1";
+pub const MSG_INVALID_TASK_ID: &str = "invalid task_id";
+pub const MSG_INVALID_PATH: &str = "invalid derivation_path";
+pub const MSG_NO_SUCH_TASK: &str = "no such task";
+pub const MSG_DELEGATE_EXISTS: &str = "delegate exists";
+pub const MSG_CREW_CAP_REACHED: &str = "crew cap reached";
+pub const MSG_NO_SUCH_DELEGATE: &str = "no such delegate";
+pub const MSG_DELEGATE_NOT_AUTHORIZED: &str = "delegate not authorized";
+
 /// Why an accounting or state-machine operation refused.
 ///
 /// Variants are intentionally distinct: tests assert the *specific* refusal (e.g.
