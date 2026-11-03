@@ -329,14 +329,19 @@ impl Purser {
     ) -> PromiseOrValue<CommitmentId> {
         let caller = env::predecessor_account_id();
 
-        // (a) AUTH — predecessor must be an active delegate of the task.
-        self.assert_delegate_authorized(&task, &caller);
-
-        // bound request_id (boundary guard; mirrors create_task's task_id check) — S8 amplifier.
+        // bound task + request_id (boundary guards; mirror create_task's task_id check) — input
+        // hygiene before the value is used as a map key / idempotency key (S8 amplifier).
+        require!(
+            !task.is_empty() && task.len() <= MAX_TASK_ID_LEN,
+            MSG_INVALID_TASK_ID
+        );
         require!(
             !request_id.is_empty() && request_id.len() <= MAX_REQUEST_ID_LEN,
             MSG_INVALID_REQUEST_ID
         );
+
+        // (a) AUTH — predecessor must be an active delegate of the task.
+        self.assert_delegate_authorized(&task, &caller);
 
         // (b) IDEMPOTENCY (tri-state, synchronous), namespaced by (predecessor, request_id).
         let idem_key = (caller.clone(), request_id.clone());
