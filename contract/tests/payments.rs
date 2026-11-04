@@ -2,12 +2,14 @@
 //! `propose_payment` reserve-before-sign path and its `on_near_settled` settlement callback,
 //! exercised end-to-end on a `near-workspaces` sandbox.
 //!
-//! Scope is the Prompt-4 DONE-WHEN plus the fail-closed allowlist that was pulled forward:
+//! Scope is the Prompt-4 DONE-WHEN plus the "sign only what you can read" payload work:
 //!   1. a legit payment succeeds, settles, and the accounting is correct (+ reports the tx hash
 //!      and measured gas — the happy path is also the validator for the `#[callback_result]`
 //!      empty-transfer-result deserialization);
 //!   2. an over-budget payment is refused with "exceeds task budget" and the budget is unchanged;
-//!   3. a non-allowlisted recipient is refused (deny-by-default).
+//!   3. the recorded `payload_hash` is independently re-derivable off-chain (tamper-evidence);
+//!   4. pre-reserve refusals leave the budget untouched + burn no cid: swapped/non-allowlisted
+//!      recipient (deny-by-default), zero amount, wrong token.
 //!
 //! The genuinely-concurrent / in-flight-retry / replay / revoke / timeout attack suite is Prompt 6.
 //! Refusals are asserted by substring against the canonical `purser_contract::MSG_*` constants.
@@ -15,6 +17,7 @@
 use near_workspaces::network::Sandbox;
 use near_workspaces::{Account, Contract, Worker};
 use serde_json::json;
+use sha2::{Digest, Sha256};
 use tokio::sync::OnceCell;
 
 // Compile the contract to wasm exactly once, shared across all tests in this binary.
@@ -201,12 +204,14 @@ async fn over_budget_payment_refused_and_budget_unchanged() -> anyhow::Result<()
     Ok(())
 }
 
-/// Fail-closed recipient confinement: a within-budget payment to a non-allowlisted account is
-/// refused (deny-by-default), and the budget is untouched.
+/// Fail-closed recipient confinement (APP-FLOW §8 Flow F — tampered/swapped recipient): a
+/// within-budget payment to an account that is NOT on the allowlist is refused deny-by-default,
+/// the budget is byte-for-byte untouched, and no commitment is created. This is the representative
+/// "refused-before-reserve ⇒ budget unchanged + no cid burned" proof for all pre-reserve refusals.
 #[tokio::test]
-async fn non_allowlisted_recipient_refused() -> anyhow::Result<()> {
+async fn swapped_recipient_is_rejected_and_budget_unchanged() -> anyhow::Result<()> {
     let (w, c, _owner, delegate, _recipient) = setup().await?;
-    let outsider = w.dev_create_account().await?; // never allowlisted
+    let outsider = w.dev_create_account().await?; // swapped-in; never allowlisted
 
     let res = propose(&delegate, &c, &outsider, "100", "r3").await?;
     assert!(res.is_failure());
@@ -214,9 +219,115 @@ async fn non_allowlisted_recipient_refused() -> anyhow::Result<()> {
 
     let task = view_json(&c, "get_task", json!({ "task_id": "t1" })).await?;
     assert_eq!(
+        task["completed"], "0",
+        "refused-before-reserve must not touch the budget"
+    );
+    assert_eq!(
         task["outstanding"], "0",
         "refused-before-reserve must not touch the budget"
     );
+    let cmt = view_json(&c, "get_commitment", json!({ "commitment_id": 0 })).await?;
+    assert_eq!(
+        cmt,
+        serde_json::Value::Null,
+        "a commitment/cid was burned on a refused reserve"
+    );
+    Ok(())
+}
+
+/// Independently re-derive the NEAR-native `payload_hash` from the public constants plus the
+/// documented borsh wire layout, hashing with the `sha2` crate directly. Deliberately NOT
+/// `env::sha256_array`: in this test binary (the `unit-testing` feature is on) that routes through
+/// the SDK mock, so it would not be an independent oracle.
+fn rederive_payload_hash(
+    task: &str,
+    commitment_id: u64,
+    recipient: &str,
+    amount_yocto: u128,
+) -> [u8; 32] {
+    let mut preimage = purser_contract::PAYLOAD_DOMAIN.to_vec();
+    preimage.extend_from_slice(&purser_contract::PAYLOAD_VERSION.to_le_bytes()); // u16 LE
+    preimage.extend_from_slice(&(task.len() as u32).to_le_bytes()); // String: u32 LE len
+    preimage.extend_from_slice(task.as_bytes()); //         + UTF-8
+    preimage.extend_from_slice(&commitment_id.to_le_bytes()); // u64 LE
+    preimage.extend_from_slice(&(recipient.len() as u32).to_le_bytes()); // AccountId == String
+    preimage.extend_from_slice(recipient.as_bytes());
+    preimage.extend_from_slice(&amount_yocto.to_le_bytes()); // u128 LE
+    Sha256::digest(&preimage).into()
+}
+
+/// "Sign only what you can read": the contract records a per-spend `payload_hash` that an external
+/// verifier can independently reconstruct from the recorded intent and confirm byte-for-byte. Also
+/// shows the anchor survives the full lifecycle (still correct once `Confirmed`) and that the stored
+/// RAW recipient string re-derives to the same hash as the parsed form.
+#[tokio::test]
+async fn payload_hash_recorded_and_independently_rederivable() -> anyhow::Result<()> {
+    let (_w, c, _owner, delegate, recipient) = setup().await?;
+    propose(&delegate, &c, &recipient, "400000", "r1")
+        .await?
+        .into_result()?; // settles to Confirmed as cid 0
+
+    let cmt = view_json(&c, "get_commitment", json!({ "commitment_id": 0 })).await?;
+    assert_eq!(cmt["state"], "Confirmed");
+    let got: [u8; 32] = serde_json::from_value(cmt["payload_hash"].clone())
+        .expect("payload_hash must be a recorded 32-byte array, not null");
+
+    // Independent oracle: sha2 crate over the hand-assembled borsh preimage.
+    let rcpt = recipient.id().as_str();
+    assert_eq!(
+        got,
+        rederive_payload_hash("t1", 0, rcpt, 400_000),
+        "on-chain payload_hash is not independently re-derivable (tamper-evidence broken)"
+    );
+
+    // raw == parsed: the stored raw intent.recipient re-derives to the same hash (NEAR AccountId
+    // parsing is validate-only — no normalization — so the stored string and the parsed account agree).
+    let stored_raw = cmt["intent"]["recipient"].as_str().unwrap();
+    assert_eq!(stored_raw, rcpt);
+    assert_eq!(rederive_payload_hash("t1", 0, stored_raw, 400_000), got);
+    Ok(())
+}
+
+/// Zero amount is refused pre-reserve; the budget is untouched and no commitment is burned.
+/// (`NearToken` is `u128` — a "negative" amount is unrepresentable at the type level; zero is the
+/// boundary the contract must reject.)
+#[tokio::test]
+async fn zero_amount_rejected_and_budget_unchanged() -> anyhow::Result<()> {
+    let (_w, c, _owner, delegate, recipient) = setup().await?;
+    let res = propose(&delegate, &c, &recipient, "0", "r4").await?;
+    assert!(res.is_failure());
+    assert!(err_string(res).contains(purser_contract::MSG_ZERO_AMOUNT));
+    let task = view_json(&c, "get_task", json!({ "task_id": "t1" })).await?;
+    assert_eq!(task["outstanding"], "0");
+    let cmt = view_json(&c, "get_commitment", json!({ "commitment_id": 0 })).await?;
+    assert_eq!(cmt, serde_json::Value::Null);
+    Ok(())
+}
+
+/// A wrong-token intent (NEP-141 on a NearNative task) is refused pre-reserve; budget untouched.
+#[tokio::test]
+async fn wrong_token_intent_rejected() -> anyhow::Result<()> {
+    let (_w, c, _owner, delegate, recipient) = setup().await?;
+    let res = delegate
+        .call(c.id(), "propose_payment")
+        .args_json(json!({
+            "task": "t1",
+            "request_id": "r5",
+            "intent": {
+                "chain": "NearNative",
+                "recipient": recipient.id(),
+                "amount": "100",
+                "token": { "Nep141": { "contract": "usdc.testnet" } },
+                "memo": null,
+            }
+        }))
+        .max_gas()
+        .transact()
+        .await?;
+    assert!(res.is_failure());
+    assert!(err_string(res).contains(purser_contract::MSG_UNSUPPORTED_TOKEN));
+    let task = view_json(&c, "get_task", json!({ "task_id": "t1" })).await?;
+    assert_eq!(task["outstanding"], "0");
     Ok(())
 }
 
