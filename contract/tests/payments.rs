@@ -434,6 +434,45 @@ async fn remove_recipient_allowlist_rejects_non_owner() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// The `is_recipient_allowed` view mirrors the deny-by-default gate: true for an allowlisted payee,
+/// false for an outsider, and false again after the owner removes it (read-parity, non-destructive).
+#[tokio::test]
+async fn is_recipient_allowed_mirrors_the_gate() -> anyhow::Result<()> {
+    let (w, c, owner, _delegate, recipient) = setup().await?; // recipient allowlisted in setup
+    let outsider = w.dev_create_account().await?;
+
+    let allowed = view_json(
+        &c,
+        "is_recipient_allowed",
+        json!({ "task_id": "t1", "account_id": recipient.id() }),
+    )
+    .await?;
+    assert_eq!(allowed, serde_json::Value::Bool(true));
+    let outsider_allowed = view_json(
+        &c,
+        "is_recipient_allowed",
+        json!({ "task_id": "t1", "account_id": outsider.id() }),
+    )
+    .await?;
+    assert_eq!(outsider_allowed, serde_json::Value::Bool(false));
+
+    owner
+        .call(c.id(), "remove_recipient_allowlist")
+        .args_json(json!({ "task_id": "t1", "recipients": [recipient.id()] }))
+        .max_gas()
+        .transact()
+        .await?
+        .into_result()?;
+    let after_removal = view_json(
+        &c,
+        "is_recipient_allowed",
+        json!({ "task_id": "t1", "account_id": recipient.id() }),
+    )
+    .await?;
+    assert_eq!(after_removal, serde_json::Value::Bool(false));
+    Ok(())
+}
+
 // ---- owner reconcile (stuck-Reserved recovery) ------------------------------------
 //
 // These cover the owner-gate + state guards end-to-end. The happy force-confirm / force-release

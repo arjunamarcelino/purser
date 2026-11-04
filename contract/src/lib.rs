@@ -734,6 +734,18 @@ impl Purser {
         delegates::is_authorized(&self.delegates, &task_id, &account_id)
     }
 
+    /// Public mirror of the deny-by-default recipient gate (the view twin of the private
+    /// `assert_allowlisted`): is `account_id` an allowlisted payee of `task_id`? Lets an agent /
+    /// dashboard pre-flight recipient confinement before `propose_payment` — read-parity with
+    /// `is_delegate_authorized` — instead of probing via a panicking proposal. `false` for an
+    /// unknown task or recipient.
+    pub fn is_recipient_allowed(&self, task_id: TaskId, account_id: AccountId) -> bool {
+        self.allowlist
+            .get(&(task_id, account_id))
+            .copied()
+            .unwrap_or(false)
+    }
+
     /// A page of task ids — skip `from_index`, return up to `limit`. The off-chain indexer
     /// and dashboard enumerate tasks from here; an agent discovers its scope via
     /// `list_task_ids` + [`Self::is_delegate_authorized`]. Paginated so the result stays
