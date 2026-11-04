@@ -567,3 +567,704 @@ proptest! {
         }
     }
 }
+
+// ==== Layer B: the real `Purser` composition ====================================================
+//
+// Drives the actual `#[near]` struct under near-sdk's mocked VM, emulating NEAR's per-call
+// semantics: state is loaded from storage before each call and flushed after a successful one.
+// A panicking call has its in-memory struct discarded unflushed (`mem::forget`), which leaves
+// storage at its pre-call bytes, exactly like the runtime's rollback. Callbacks are delivered in
+// any order, or lost, so many reservations are in flight at once.
+
+mod contract_layer {
+    use super::*;
+    use near_sdk::test_utils::VMContextBuilder;
+    use near_sdk::{env, testing_env, PromiseError, PromiseOrValue};
+    use purser_contract::{
+        Purser, MSG_ALREADY_FAILED, MSG_CREW_CAP_REACHED, MSG_DELEGATE_EXISTS,
+        MSG_DELEGATE_NOT_AUTHORIZED, MSG_EXCEEDS_BUDGET, MSG_IN_FLIGHT, MSG_NOT_RECONCILABLE,
+        MSG_NO_SUCH_DELEGATE, MSG_OVERFLOW, MSG_RECIPIENT_NOT_ALLOWED, MSG_RECONCILE_TOO_EARLY,
+        MSG_REQUEST_ID_REUSED, MSG_ZERO_AMOUNT, RECONCILE_MIN_AGE_NS,
+    };
+    use std::cell::Cell;
+    use std::panic::{self, AssertUnwindSafe};
+    use std::sync::Once;
+
+    const TASKS: [&str; 2] = ["t1", "t2"];
+    /// `d0`, `d1`, and the OWNER, who is also registered as a delegate (owner-as-delegate).
+    const ACTORS: usize = 3;
+    const OWNER: usize = 2;
+    const RIDS: u8 = 4;
+    /// 0 = merchant (allowlisted on both tasks), 1 = removable (t1 only, toggled), 2 = stranger.
+    const RECIPIENTS: [&str; 3] = [
+        "merchant.test.near",
+        "removable.test.near",
+        "stranger.test.near",
+    ];
+    /// A settlement callback lands within a few blocks or never. Pending callbacks older than
+    /// this are treated as lost when time advances.
+    const CALLBACK_WINDOW_NS: u64 = 5_000_000_000;
+
+    fn contract_id() -> AccountId {
+        "purser.test.near".parse().unwrap()
+    }
+    fn actor(a: usize) -> AccountId {
+        if a == OWNER {
+            "owner.test.near".parse().unwrap()
+        } else {
+            delegate_id(a)
+        }
+    }
+
+    // ---- quiet, catchable panics --------------------------------------------------------------
+
+    thread_local!(static EXPECTING_PANIC: Cell<bool> = const { Cell::new(false) });
+    static QUIET_HOOK: Once = Once::new();
+
+    /// Silence ONLY the panics this harness deliberately provokes; every other panic (including
+    /// Layer A failures in the same binary) still reaches the default hook.
+    fn install_quiet_hook() {
+        QUIET_HOOK.call_once(|| {
+            let default = panic::take_hook();
+            panic::set_hook(Box::new(move |info| {
+                if !EXPECTING_PANIC.with(Cell::get) {
+                    default(info)
+                }
+            }));
+        });
+    }
+
+    fn catch<R>(f: impl FnOnce() -> R) -> Result<R, String> {
+        EXPECTING_PANIC.with(|e| e.set(true));
+        let r = panic::catch_unwind(AssertUnwindSafe(f));
+        EXPECTING_PANIC.with(|e| e.set(false));
+        r.map_err(|p| {
+            p.downcast_ref::<String>()
+                .cloned()
+                .or_else(|| p.downcast_ref::<&str>().map(|s| s.to_string()))
+                .unwrap_or_default()
+        })
+    }
+
+    fn set_ctx(predecessor: AccountId, now: u64) {
+        testing_env!(VMContextBuilder::new()
+            .current_account_id(contract_id())
+            .predecessor_account_id(predecessor)
+            .block_timestamp(now)
+            // the model does not track the contract's balance; transfers must never be refused for it
+            .account_balance(NearToken::from_yoctonear(u128::MAX))
+            .build());
+    }
+
+    // ---- ops -----------------------------------------------------------------------------------
+
+    #[derive(Clone, Debug)]
+    pub enum Op {
+        Propose {
+            task: usize,
+            who: usize,
+            r: u8,
+            amount: Amount,
+            recipient: usize,
+            /// Hidden real-world outcome of the transfer this proposal would issue.
+            transfer_ok: bool,
+        },
+        /// Deliver a pending callback (any order) with its real outcome.
+        Deliver {
+            pick: Index,
+        },
+        /// The callback never arrives (the lost-callback residual / a timeout).
+        Lose {
+            pick: Index,
+        },
+        /// Owner reconcile. On a LOST callback the owner attests the truth; on a still-PENDING
+        /// one it attests `guess`: the early-release attack that races a live callback.
+        Reconcile {
+            pick: Index,
+            guess: bool,
+        },
+        Revoke {
+            task: usize,
+            who: usize,
+        },
+        AddDelegate {
+            task: usize,
+            who: usize,
+        },
+        RemoveAllowlist,
+        ReAddAllowlist,
+        Tick {
+            secs: u64,
+        },
+    }
+
+    impl Op {
+        fn carries_proof(&self) -> bool {
+            matches!(self, Op::Deliver { .. } | Op::Reconcile { .. })
+        }
+    }
+
+    pub fn op_strategy() -> impl Strategy<Value = Op> {
+        prop_oneof![
+            8 => (0..2usize, 0..ACTORS, 0..RIDS, amount_strategy(), 0..3usize, prop::bool::weighted(0.8))
+                .prop_map(|(task, who, r, amount, recipient, transfer_ok)| Op::Propose {
+                    task, who, r, amount, recipient, transfer_ok,
+                }),
+            4 => any::<Index>().prop_map(|pick| Op::Deliver { pick }),
+            1 => any::<Index>().prop_map(|pick| Op::Lose { pick }),
+            2 => (any::<Index>(), any::<bool>()).prop_map(|(pick, guess)| Op::Reconcile { pick, guess }),
+            1 => (0..2usize, 0..ACTORS).prop_map(|(task, who)| Op::Revoke { task, who }),
+            1 => (0..2usize, 0..ACTORS).prop_map(|(task, who)| Op::AddDelegate { task, who }),
+            1 => Just(Op::RemoveAllowlist),
+            1 => Just(Op::ReAddAllowlist),
+            2 => prop_oneof![1u64..=10, 590u64..=900].prop_map(|secs| Op::Tick { secs }),
+        ]
+    }
+
+    // ---- model ---------------------------------------------------------------------------------
+
+    #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+    enum Callback {
+        Pending,
+        Lost,
+        Delivered,
+    }
+
+    #[derive(Clone, Debug)]
+    struct Commit {
+        task: usize,
+        key: Key,
+        amount: u128,
+        recipient: usize,
+        state: ReservationState,
+        spent: Option<u128>,
+        created_at: u64,
+        transfer_ok: bool,
+        callback: Callback,
+    }
+
+    /// What a call is predicted to (or did) return.
+    #[derive(Clone, PartialEq, Eq, Debug)]
+    pub enum Out {
+        Promise(u64),
+        Value(u64),
+        Panic(&'static str),
+        Done,
+        NoOp,
+    }
+
+    #[derive(Clone, Debug)]
+    pub struct Model {
+        caps: [u128; 2],
+        commits: Vec<Commit>,
+        idem: BTreeMap<Key, IdemState>,
+        /// `registered[task][actor] = Some(active)`.
+        registered: [[Option<bool>; ACTORS]; 2],
+        removable_allowed: bool,
+        now: u64,
+        /// Value whose transfer actually executes (scheduled with `transfer_ok`), per task. The
+        /// money-flow oracle: it must never exceed `completed + outstanding`.
+        outflow: [u128; 2],
+    }
+
+    impl Model {
+        fn new(caps: [u128; 2]) -> Self {
+            Model {
+                caps,
+                commits: Vec::new(),
+                idem: BTreeMap::new(),
+                registered: [
+                    [Some(true), Some(true), Some(true)],
+                    [Some(true), None, Some(true)],
+                ],
+                removable_allowed: true,
+                now: 1_000_000_000,
+                outflow: [0; 2],
+            }
+        }
+        fn outstanding(&self, t: usize) -> u128 {
+            self.commits
+                .iter()
+                .filter(|c| c.task == t && is_live(c.state))
+                .map(|c| c.amount)
+                .sum()
+        }
+        fn completed(&self, t: usize) -> u128 {
+            self.commits
+                .iter()
+                .filter(|c| c.task == t && c.state == ReservationState::Confirmed)
+                .map(|c| c.spent.unwrap())
+                .sum()
+        }
+        fn used(&self, t: usize) -> u128 {
+            self.completed(t) + self.outstanding(t)
+        }
+        fn allowlisted(&self, t: usize, rcp: usize) -> bool {
+            match (t, rcp) {
+                (_, 0) => true,
+                (0, 1) => self.removable_allowed,
+                _ => false,
+            }
+        }
+        fn active_crew(&self, t: usize) -> usize {
+            self.registered[t]
+                .iter()
+                .filter(|r| **r == Some(true))
+                .count()
+        }
+    }
+
+    // ---- SUT -----------------------------------------------------------------------------------
+
+    pub struct Sut;
+
+    impl Sut {
+        fn setup(caps: [u128; 2]) -> Self {
+            install_quiet_hook();
+            // Each proptest case starts from empty storage (`testing_env!` carries it over).
+            near_sdk::mock::with_mocked_blockchain(|b| drop(b.take_storage()));
+            set_ctx(actor(OWNER), 1_000_000_000);
+            let mut c = Purser::new(actor(OWNER), "v1.signer-prod.testnet".parse().unwrap());
+            for (t, cap) in TASKS.iter().zip(caps) {
+                c.create_task(t.to_string(), yocto(cap), TokenSpec::NearNative, 3);
+            }
+            for a in 0..ACTORS {
+                c.add_delegate("t1".into(), actor(a), "m/0".into());
+            }
+            for a in [0, OWNER] {
+                c.add_delegate("t2".into(), actor(a), "m/0".into());
+            }
+            c.set_recipient_allowlist(
+                "t1".into(),
+                vec![RECIPIENTS[0].into(), RECIPIENTS[1].into()],
+            );
+            c.set_recipient_allowlist("t2".into(), vec![RECIPIENTS[0].into()]);
+            env::state_write(&c);
+            drop(c); // flush the store caches
+            Sut
+        }
+
+        /// One NEAR function call: load, run, then flush on success or discard on panic.
+        /// On panic, every view must still read the pre-call state (validate-before-mutate).
+        fn call<R>(
+            &self,
+            before: &Snap,
+            who: AccountId,
+            now: u64,
+            f: impl FnOnce(&mut Purser) -> R,
+        ) -> Result<Result<R, String>, TestCaseError> {
+            set_ctx(who, now);
+            let mut c: Purser = env::state_read().unwrap();
+            match catch(|| f(&mut c)) {
+                Ok(r) => {
+                    env::state_write(&c);
+                    drop(c);
+                    Ok(Ok(r))
+                }
+                Err(msg) => {
+                    let after = snapshot(&c);
+                    std::mem::forget(c); // never flush a call that the runtime would roll back
+                    prop_assert_eq!(before, &after, "panicking call mutated state: {}", msg);
+                    Ok(Err(msg))
+                }
+            }
+        }
+    }
+
+    pub type Snap = (
+        Vec<Option<TaskBudget>>,
+        Vec<Commitment>,
+        Vec<Option<IdemState>>,
+        Option<Commitment>,
+    );
+
+    /// Every observable key, not just the ones an op touched, so a write to the wrong key shows.
+    fn snapshot(c: &Purser) -> Snap {
+        let tasks = TASKS.iter().map(|t| c.get_task(t.to_string())).collect();
+        let mut commits: Vec<Commitment> = TASKS
+            .iter()
+            .flat_map(|t| c.list_commitments(t.to_string(), 0, u32::MAX))
+            .collect();
+        commits.sort_by_key(|x| x.id);
+        let idem = (0..ACTORS)
+            .flat_map(|a| (0..RIDS).map(move |r| (a, r)))
+            .map(|(a, r)| c.get_idempotency(actor(a), request_id(r)))
+            .collect();
+        let next = c.get_commitment(commits.len() as u64);
+        (tasks, commits, idem, next)
+    }
+
+    fn intent(amount: u128, recipient: usize) -> PaymentIntent {
+        PaymentIntent {
+            chain: Chain::NearNative,
+            recipient: RECIPIENTS[recipient].to_string(),
+            amount: yocto(amount),
+            token: TokenSpec::NearNative,
+            memo: None,
+        }
+    }
+
+    fn panic_out(msg: &str, expected: &[&'static str]) -> Out {
+        expected
+            .iter()
+            .find(|m| msg.contains(**m))
+            .map(|m| Out::Panic(m))
+            .unwrap_or_else(|| panic!("unexpected panic message: {msg}"))
+    }
+
+    const ALL_MSGS: &[&str] = &[
+        MSG_REQUEST_ID_REUSED,
+        MSG_RECONCILE_TOO_EARLY,
+        MSG_DELEGATE_NOT_AUTHORIZED,
+        MSG_IN_FLIGHT,
+        MSG_ALREADY_FAILED,
+        MSG_RECIPIENT_NOT_ALLOWED,
+        MSG_ZERO_AMOUNT,
+        MSG_OVERFLOW,
+        MSG_EXCEEDS_BUDGET,
+        MSG_NOT_RECONCILABLE,
+        MSG_DELEGATE_EXISTS,
+        MSG_CREW_CAP_REACHED,
+        MSG_NO_SUCH_DELEGATE,
+    ];
+
+    fn to_out<T>(r: Result<T, String>, ok: impl FnOnce(T) -> Out) -> Out {
+        match r {
+            Ok(v) => ok(v),
+            Err(m) => panic_out(&m, ALL_MSGS),
+        }
+    }
+
+    // ---- step ----------------------------------------------------------------------------------
+
+    /// Apply `op` to the contract and to the model; return (actual, predicted).
+    pub fn step(
+        sut: &Sut,
+        before: &Snap,
+        m: &mut Model,
+        op: &Op,
+    ) -> Result<(Out, Out), TestCaseError> {
+        use ReservationState::*;
+        let pending: Vec<usize> = (0..m.commits.len())
+            .filter(|&i| m.commits[i].callback == Callback::Pending)
+            .collect();
+        let owner = actor(OWNER);
+        let now = m.now;
+        Ok(match op {
+            Op::Propose {
+                task,
+                who,
+                r,
+                amount,
+                recipient,
+                transfer_ok,
+            } => {
+                let (t, key) = (*task, (*who, *r));
+                let a = resolve_amount(*amount, m.caps[t], m.used(t));
+                let actual = sut.call(before, actor(*who), now, |c| {
+                    c.propose_payment(TASKS[t].into(), intent(a, *recipient), request_id(*r))
+                })?;
+                let actual = to_out(actual, |v| match v {
+                    PromiseOrValue::Promise(_) => Out::Promise(u64::MAX),
+                    PromiseOrValue::Value(cid) => Out::Value(cid),
+                });
+                let predicted = predict_propose(m, t, key, a, *recipient, *transfer_ok);
+                // The fresh-path cid is the commitment just appended.
+                let actual = match (actual, &predicted) {
+                    (Out::Promise(_), Out::Promise(cid)) => Out::Promise(*cid),
+                    (other, _) => other,
+                };
+                (actual, predicted)
+            }
+            Op::Deliver { pick } => {
+                if pending.is_empty() {
+                    return Ok((Out::NoOp, Out::NoOp));
+                }
+                let i = pending[pick.index(pending.len())];
+                let ok = m.commits[i].transfer_ok;
+                let rid = request_id(m.commits[i].key.1);
+                let res = if ok {
+                    Ok(())
+                } else {
+                    Err(PromiseError::Failed)
+                };
+                let actual = sut.call(before, contract_id(), now, |c| {
+                    c.on_near_settled(i as u64, rid, res)
+                })?;
+                let actual = to_out(actual, |_| Out::Done);
+                let c = &mut m.commits[i];
+                c.callback = Callback::Delivered;
+                let predicted = if c.state != Reserved {
+                    // A callback for an already-settled commitment cannot settle it again.
+                    Out::Panic(purser_contract::MSG_ILLEGAL)
+                } else if ok {
+                    c.state = Confirmed;
+                    c.spent = Some(c.amount);
+                    m.idem.insert(
+                        c.key,
+                        IdemState::Committed {
+                            commitment_id: i as u64,
+                        },
+                    );
+                    Out::Done
+                } else {
+                    c.state = Failed;
+                    m.idem.insert(c.key, IdemState::Failed);
+                    Out::Done
+                };
+                (actual, predicted)
+            }
+            Op::Lose { pick } => {
+                if pending.is_empty() {
+                    return Ok((Out::NoOp, Out::NoOp));
+                }
+                m.commits[pending[pick.index(pending.len())]].callback = Callback::Lost;
+                (Out::NoOp, Out::NoOp)
+            }
+            Op::Reconcile { pick, guess } => {
+                let candidates: Vec<usize> = (0..m.commits.len())
+                    .filter(|&i| m.commits[i].callback != Callback::Delivered)
+                    .collect();
+                if candidates.is_empty() {
+                    return Ok((Out::NoOp, Out::NoOp));
+                }
+                let i = candidates[pick.index(candidates.len())];
+                let c = &m.commits[i];
+                // Honest owner on a lost callback; a guess on a still-live one.
+                let confirmed = if c.callback == Callback::Lost {
+                    c.transfer_ok
+                } else {
+                    *guess
+                };
+                let actual = sut.call(before, owner.clone(), now, |k| {
+                    k.reconcile(i as u64, confirmed)
+                })?;
+                let actual = to_out(actual, |_| Out::Done);
+                let c = &mut m.commits[i];
+                let predicted = if c.state != Reserved {
+                    Out::Panic(MSG_NOT_RECONCILABLE)
+                } else if now < c.created_at + RECONCILE_MIN_AGE_NS {
+                    Out::Panic(MSG_RECONCILE_TOO_EARLY)
+                } else if confirmed {
+                    c.state = Confirmed;
+                    c.spent = Some(c.amount);
+                    m.idem.insert(
+                        c.key,
+                        IdemState::Committed {
+                            commitment_id: i as u64,
+                        },
+                    );
+                    Out::Done
+                } else {
+                    c.state = Failed;
+                    m.idem.insert(c.key, IdemState::Failed);
+                    Out::Done
+                };
+                (actual, predicted)
+            }
+            Op::Revoke { task, who } => {
+                let (t, a) = (*task, *who);
+                let actual = sut.call(before, owner.clone(), now, |c| {
+                    c.revoke_delegate(TASKS[t].into(), actor(a))
+                })?;
+                let actual = to_out(actual, |was| Out::Value(was as u64));
+                let predicted = match m.registered[t][a] {
+                    None => Out::Panic(MSG_NO_SUCH_DELEGATE),
+                    Some(was) => {
+                        m.registered[t][a] = Some(false);
+                        Out::Value(was as u64)
+                    }
+                };
+                (actual, predicted)
+            }
+            Op::AddDelegate { task, who } => {
+                let (t, a) = (*task, *who);
+                let actual = sut.call(before, owner.clone(), now, |c| {
+                    c.add_delegate(TASKS[t].into(), actor(a), "m/0".into())
+                })?;
+                let actual = to_out(actual, |_| Out::Done);
+                let predicted = if m.registered[t][a].is_some() {
+                    Out::Panic(MSG_DELEGATE_EXISTS)
+                } else if m.active_crew(t) >= 3 {
+                    Out::Panic(MSG_CREW_CAP_REACHED)
+                } else {
+                    m.registered[t][a] = Some(true);
+                    Out::Done
+                };
+                (actual, predicted)
+            }
+            Op::RemoveAllowlist | Op::ReAddAllowlist => {
+                let add = matches!(op, Op::ReAddAllowlist);
+                let rcp = vec![RECIPIENTS[1].to_string()];
+                let actual = sut.call(before, owner.clone(), now, |c| {
+                    if add {
+                        c.set_recipient_allowlist("t1".into(), rcp)
+                    } else {
+                        c.remove_recipient_allowlist("t1".into(), rcp)
+                    }
+                })?;
+                m.removable_allowed = add;
+                (to_out(actual, |_| Out::Done), Out::Done)
+            }
+            Op::Tick { secs } => {
+                m.now += secs * 1_000_000_000;
+                let now = m.now;
+                for c in &mut m.commits {
+                    if c.callback == Callback::Pending && now > c.created_at + CALLBACK_WINDOW_NS {
+                        c.callback = Callback::Lost;
+                    }
+                }
+                (Out::NoOp, Out::NoOp)
+            }
+        })
+    }
+
+    /// The `propose_payment` decision, in `lib.rs` order: auth -> idempotency (a replay must be
+    /// the SAME request) -> allowlist -> admission.
+    fn predict_propose(
+        m: &mut Model,
+        t: usize,
+        key: Key,
+        a: u128,
+        rcp: usize,
+        transfer_ok: bool,
+    ) -> Out {
+        if m.registered[t][key.0] != Some(true) {
+            return Out::Panic(MSG_DELEGATE_NOT_AUTHORIZED);
+        }
+        match m.idem.get(&key) {
+            Some(IdemState::Pending) => return Out::Panic(MSG_IN_FLIGHT),
+            Some(IdemState::Failed) => return Out::Panic(MSG_ALREADY_FAILED),
+            Some(IdemState::Committed { commitment_id }) => {
+                let c = &m.commits[*commitment_id as usize];
+                return if c.task == t && c.amount == a && c.recipient == rcp {
+                    Out::Value(*commitment_id)
+                } else {
+                    Out::Panic(MSG_REQUEST_ID_REUSED)
+                };
+            }
+            None => {}
+        }
+        if !m.allowlisted(t, rcp) {
+            return Out::Panic(MSG_RECIPIENT_NOT_ALLOWED);
+        }
+        if a == 0 {
+            return Out::Panic(MSG_ZERO_AMOUNT);
+        }
+        match m.used(t).checked_add(a) {
+            None => return Out::Panic(MSG_OVERFLOW),
+            Some(p) if p > m.caps[t] => return Out::Panic(MSG_EXCEEDS_BUDGET),
+            Some(_) => {}
+        }
+        let cid = m.commits.len() as u64;
+        m.commits.push(Commit {
+            task: t,
+            key,
+            amount: a,
+            recipient: rcp,
+            state: ReservationState::Reserved,
+            spent: None,
+            created_at: m.now,
+            transfer_ok,
+            callback: Callback::Pending,
+        });
+        m.idem.insert(key, IdemState::Pending);
+        if transfer_ok {
+            m.outflow[t] += a;
+        }
+        Out::Promise(cid)
+    }
+
+    // ---- checks --------------------------------------------------------------------------------
+
+    pub fn check(op: &Op, before: &Snap, m: &Model, outs: (Out, Out)) -> Result<(), TestCaseError> {
+        let (actual, predicted) = outs;
+        prop_assert_eq!(&actual, &predicted, "contract disagrees with the model");
+        // Storage persists across `testing_env!`, so any context can read it.
+        let snap = snapshot(&env::state_read::<Purser>().unwrap());
+        let (tasks, commits, idem, next) = &snap;
+
+        // (1) contract state == model state, read through the contract's own views.
+        for (t, b) in tasks.iter().enumerate() {
+            let b = b.as_ref().unwrap();
+            prop_assert_eq!(b.outstanding, yocto(m.outstanding(t)));
+            prop_assert_eq!(b.completed, yocto(m.completed(t)));
+            prop_assert_eq!(b.active_crew as usize, m.active_crew(t));
+            // (2) invariant (I) and the money-flow bound: every executed transfer is accounted
+            // for as completed or still held. A release that races a live transfer breaks this.
+            prop_assert!(b.completed.checked_add(b.outstanding).unwrap() <= b.cap);
+            prop_assert!(
+                m.outflow[t] <= m.used(t),
+                "task {}: {} left the contract but only {} is accounted",
+                t,
+                m.outflow[t],
+                m.used(t)
+            );
+        }
+        prop_assert_eq!(commits.len(), m.commits.len());
+        for (c, mc) in commits.iter().zip(&m.commits) {
+            prop_assert_eq!(c.task.as_str(), TASKS[mc.task]);
+            prop_assert_eq!(&c.delegate, &actor(mc.key.0));
+            prop_assert_eq!(c.state, mc.state);
+            prop_assert_eq!(c.reserved_amount, yocto(mc.amount));
+            prop_assert_eq!(c.actual_spent, mc.spent.map(yocto));
+        }
+        prop_assert!(next.is_none(), "a commitment exists past the ledger end");
+        for (i, (a, r)) in (0..ACTORS)
+            .flat_map(|a| (0..RIDS).map(move |r| (a, r)))
+            .enumerate()
+        {
+            prop_assert_eq!(
+                idem[i],
+                m.idem.get(&(a, r)).copied(),
+                "idempotency for ({}, {})",
+                a,
+                r
+            );
+        }
+
+        // (3) no release on silence.
+        if !op.carries_proof() {
+            for (old, new) in before.0.iter().zip(tasks) {
+                let (old, new) = (old.as_ref().unwrap(), new.as_ref().unwrap());
+                prop_assert!(
+                    new.outstanding >= old.outstanding,
+                    "outstanding fell without proof"
+                );
+            }
+            for (old, new) in before.1.iter().zip(commits) {
+                prop_assert!(
+                    !is_live(old.state) || old.state == new.state,
+                    "a live commitment moved without proof"
+                );
+            }
+        }
+        Ok(())
+    }
+
+    pub fn run(caps: [u128; 2], ops: &[Op]) -> Result<(), TestCaseError> {
+        let sut = Sut::setup(caps);
+        let mut model = Model::new(caps);
+        for op in ops {
+            let before = snapshot(&env::state_read::<Purser>().unwrap());
+            let outs = step(&sut, &before, &mut model, op)?;
+            check(op, &before, &model, outs)?;
+        }
+        Ok(())
+    }
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(2_000))]
+
+    /// Layer B: the same three properties over the real `Purser` entrypoints, with callbacks
+    /// delivered out of order or lost, owner reconciles, revocation, re-adds, allowlist churn,
+    /// two tasks sharing delegates, and the owner acting as a delegate.
+    #[test]
+    fn contract_invariants_hold_over_random_interleavings(
+        caps in (cap_strategy(), cap_strategy()),
+        ops in prop::collection::vec(contract_layer::op_strategy(), 1..48),
+    ) {
+        contract_layer::run([caps.0, caps.1], &ops)?;
+    }
+}
