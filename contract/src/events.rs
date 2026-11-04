@@ -2,7 +2,9 @@
 //!
 //! JSON-only (never stored), so — unlike the Borsh types in [`crate::types`] — these carry
 //! no layout-freeze obligation. Their *field names* ARE the indexer's contract, though, so
-//! treat them as frozen. Emitted via `PurserEvent::_.emit()` at the tail of each mutating
+//! treat them as frozen. CONVENTION: ADDING a field under the same `event_version` is allowed
+//! (indexers must tolerate unknown fields); RENAMING or REMOVING one is a breaking change that
+//! needs a version bump. Emitted via `PurserEvent::_.emit()` at the tail of each mutating
 //! entrypoint, AFTER state is written. The SDK macro serializes each variant to the
 //! canonical `EVENT_JSON:{"standard":"purser","version":"1.0.0","event":"<snake_case>",
 //! "data":{…}}` line (the variant name is lower-snake-cased into `event`).
