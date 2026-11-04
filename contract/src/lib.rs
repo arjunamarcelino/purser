@@ -67,6 +67,24 @@ const CALLBACK_GAS: Gas = Gas::from_tgas(10);
 /// still be in flight, and an early release would race it. 10 minutes ≫ the callback window.
 pub const RECONCILE_MIN_AGE_NS: u64 = 600 * 1_000_000_000;
 
+/// Marker panicked with by the `fault-injection` build. `scripts/check-wasm-clean.sh` refuses any
+/// wasm containing it, so a fault build can never be shipped.
+#[cfg(feature = "fault-injection")]
+const FAULT_LOST_CALLBACK: &str = "PURSER_FAULT_INJECTION_LOST_CALLBACK";
+
+/// TEST-ONLY (`fault-injection`): kill the settlement callback, exactly like the documented
+/// gas-starved / dead-callback residual. The runtime rolls the callback back, leaving the
+/// commitment `Reserved` + `Pending` after its transfer has executed.
+#[cfg(feature = "fault-injection")]
+fn fault_lost_callback() {
+    env::panic_str(FAULT_LOST_CALLBACK);
+}
+
+/// Production build: no fault. An empty fn rather than a bare cfg'd panic at the call site, which
+/// would make the rest of `on_near_settled` unreachable code in the feature build.
+#[cfg(not(feature = "fault-injection"))]
+fn fault_lost_callback() {}
+
 /// Unique storage prefixes for on-chain collections.
 ///
 /// APPEND-ONLY: `BorshStorageKey` maps each variant's position to its on-chain prefix byte, so
@@ -505,6 +523,7 @@ impl Purser {
         request_id: RequestId,
         #[callback_result] res: Result<(), PromiseError>,
     ) -> CommitmentId {
+        fault_lost_callback();
         let now = env::block_timestamp();
         // Read task id + delegate (immutable borrows dropped), then two disjoint &mut borrows of
         // DIFFERENT maps (self.tasks, self.commitments). DO NOT hoist this body into a

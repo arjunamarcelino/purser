@@ -9,7 +9,8 @@ test: contract-test
 fmt: contract-fmt
 lint: contract-lint
 
-# Contract (Rust / near-sdk)
+# Contract (Rust / near-sdk). Never pass --all-features: it enables the test-only `fault-injection`
+# feature. Shipped wasm is guarded by scripts/check-wasm-clean.sh.
 contract-build: ; cd contract && cargo near build non-reproducible-wasm
 contract-build-release: ; cd contract && cargo near build reproducible-wasm   # verifiable; needs Docker + clean git tree
 contract-test: ; cd contract && cargo test

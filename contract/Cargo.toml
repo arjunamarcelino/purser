@@ -10,6 +10,12 @@ publish = false
 [lib]
 crate-type = ["cdylib", "rlib"]   # cdylib -> wasm; rlib -> in-crate integration tests
 
+[features]
+# TEST-ONLY. Makes on_near_settled panic (the documented lost-callback residual) so the attack suite
+# can prove a timed-out payment keeps its reservation. Never in `default`; never build or test with
+# `--all-features`. Shipped wasm is checked for its marker by scripts/check-wasm-clean.sh.
+fault-injection = []
+
 [dependencies]
 near-sdk = "=5.30.0"
 
