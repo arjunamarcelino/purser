@@ -328,8 +328,10 @@ async fn payload_scheme_view_lets_a_nonrust_client_rederive() -> anyhow::Result<
 
     // Fetch the scheme the way a TS/Python verifier would — from the deployed contract, not source.
     let scheme = view_json(&c, "payload_scheme", json!({})).await?;
-    assert_eq!(scheme["hash"], "sha256");
+    assert_eq!(scheme["chain"], "near-native");
+    assert_eq!(scheme["hash_algorithm"], "sha256");
     assert_eq!(scheme["encoding"], "borsh");
+    assert!(scheme["preimage"].as_str().unwrap().contains("borsh("));
     let domain = hex_decode(scheme["domain_hex"].as_str().unwrap());
     assert_eq!(domain.len(), 32, "domain must be the fixed 32-byte tag");
     let version = scheme["version"].as_u64().unwrap() as u16;

@@ -45,6 +45,20 @@ pub const PAYLOAD_DOMAIN: [u8; 32] = *b"purser.near-native.transfer\0\0\0\0\0";
 /// Borsh repr fails CI there before it can silently break re-derivation.
 pub const PAYLOAD_VERSION: u16 = 1;
 
+/// Chain tag for the NEAR-native scheme — the discriminator a verifier branches on (EVM, Prompt 12,
+/// is a sibling scheme). Surfaced by `payload_scheme()`.
+pub const PAYLOAD_CHAIN_TAG: &str = "near-native";
+/// Digest algorithm for the NEAR-native scheme (sourced here so the view can't drift from the
+/// `env::sha256_array` the contract actually uses).
+pub const PAYLOAD_HASH_ALG: &str = "sha256";
+/// Body encoding following the domain prefix.
+pub const PAYLOAD_ENCODING: &str = "borsh";
+/// Machine-readable composition rule — the full re-derivation contract a NON-Rust verifier needs,
+/// so nothing is source-only: the 32-byte domain is a RAW PREFIX before the borsh body (it is NOT
+/// itself borsh), then the ordered tuple; `recipient` (an `AccountId`) is a borsh `string`;
+/// `token`/`delegate`/`memo` are excluded. Bump alongside `PAYLOAD_VERSION` if the layout changes.
+pub const PAYLOAD_PREIMAGE_SPEC: &str = "sha256( domain32 || borsh(version:u16, task:string, commitment_id:u64, recipient:string, amount_yocto:u128) )";
+
 /// The validated, contract-constructed NEAR-native payload: the parsed recipient. The signing /
 /// audit hash is built from [`canonical_payload_bytes`] at the `#[near]` boundary once the
 /// `commitment_id` exists.

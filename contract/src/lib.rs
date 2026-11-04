@@ -37,7 +37,8 @@ pub use error::{
 pub use events::PurserEvent;
 pub use idempotency::{classify, IdemDecision};
 pub use payload::{
-    build_near_payload, canonical_payload_bytes, NearPayload, PAYLOAD_DOMAIN, PAYLOAD_VERSION,
+    build_near_payload, canonical_payload_bytes, NearPayload, PAYLOAD_CHAIN_TAG, PAYLOAD_DOMAIN,
+    PAYLOAD_ENCODING, PAYLOAD_HASH_ALG, PAYLOAD_PREIMAGE_SPEC, PAYLOAD_VERSION,
 };
 pub use reservation::{transition, Event};
 pub use types::{
@@ -113,21 +114,28 @@ pub struct Purser {
 }
 
 /// The NEAR-native `payload_hash` scheme, surfaced by [`Purser::payload_scheme`] so a NON-Rust
-/// verifier (TS indexer / dashboard / judge) can fetch it at runtime instead of copying constants
-/// out of the repo. Re-derive a NEAR-native commitment's hash as:
-/// `sha256( domain || borsh(version:u16, task:String, commitment_id:u64, recipient:String(AccountId), amount_yocto:u128) )`
-/// where `domain` is the 32 bytes of `domain_hex`. JSON-only (view DTO) — never stored, no freeze.
+/// verifier (TS indexer / dashboard / judge) can re-derive `Commitment.payload_hash` from on-chain
+/// reads ALONE — the `preimage` field carries the full composition rule, so nothing is source-only.
+/// JSON-only (view DTO) — never stored, no Borsh-freeze obligation.
 #[near(serializers = [json])]
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct PayloadScheme {
-    /// Hex of the fixed 32-byte `PAYLOAD_DOMAIN` prefix.
-    pub domain_hex: String,
-    /// The authoritative schema version (the first borsh field of the preimage).
+    /// The chain this scheme applies to (`"near-native"`). A verifier branches on it; the EVM
+    /// scheme (Prompt 12) is a sibling with its own digest/framing.
+    pub chain: String,
+    /// The authoritative schema version (the first borsh field of the preimage). A commitment
+    /// carries the version it was hashed under in `Commitment.payload_version`.
     pub version: u16,
-    /// Digest algorithm for the NEAR-native path.
-    pub hash: String,
-    /// Preimage encoding of the body following the domain prefix.
+    /// Digest algorithm (`"sha256"`). Named `hash_algorithm` (not `hash`) so it is not confused
+    /// with `payload_hash`, which is a digest VALUE.
+    pub hash_algorithm: String,
+    /// Body encoding following the domain prefix (`"borsh"`).
     pub encoding: String,
+    /// Hex of the fixed 32-byte domain, prepended as a RAW PREFIX (not borsh-encoded).
+    pub domain_hex: String,
+    /// Machine-readable composition rule (ordered fields + types + domain framing). This is the
+    /// authoritative re-derivation contract; `domain32` = the bytes of `domain_hex`.
+    pub preimage: String,
 }
 
 #[near]
@@ -156,16 +164,19 @@ impl Purser {
         env!("CARGO_PKG_VERSION").to_string()
     }
 
-    /// The NEAR-native `payload_hash` scheme (domain, version, algorithm, encoding), so an
-    /// off-chain verifier in ANY language can re-derive `Commitment.payload_hash` without reading
-    /// the Rust source. See [`PayloadScheme`] for the exact re-derivation formula. Constant per
-    /// deploy; `version` bumps only when the preimage encoding changes.
+    /// The NEAR-native `payload_hash` scheme (chain, version, algorithm, encoding, domain, and the
+    /// full `preimage` composition rule), so an off-chain verifier in ANY language can re-derive
+    /// `Commitment.payload_hash` from on-chain reads alone — see [`PayloadScheme`]. Describes the
+    /// CURRENT `PAYLOAD_VERSION`; a commitment hashed under an older version (after a future bump)
+    /// is identified by its `Commitment.payload_version`.
     pub fn payload_scheme(&self) -> PayloadScheme {
         PayloadScheme {
-            domain_hex: PAYLOAD_DOMAIN.iter().map(|b| format!("{b:02x}")).collect(),
+            chain: PAYLOAD_CHAIN_TAG.to_string(),
             version: PAYLOAD_VERSION,
-            hash: "sha256".to_string(),
-            encoding: "borsh".to_string(),
+            hash_algorithm: PAYLOAD_HASH_ALG.to_string(),
+            encoding: PAYLOAD_ENCODING.to_string(),
+            domain_hex: PAYLOAD_DOMAIN.iter().map(|b| format!("{b:02x}")).collect(),
+            preimage: PAYLOAD_PREIMAGE_SPEC.to_string(),
         }
     }
 
