@@ -36,6 +36,30 @@ new proposals BLOCKED, with a caption noting already-issued signatures cannot be
 | `make lint`  | `cargo clippy --all-targets -- -D warnings` |
 | `make fmt`   | `cargo fmt` |
 | `make hooks` | install the pre-commit secret-scan hook |
+| `make prove` | the security evidence: property tests + the named attack cases |
+
+Never build or test with `--all-features`: it turns on the test-only `fault-injection` feature.
+`scripts/check-wasm-clean.sh <wasm>` refuses a fault build (CI runs it on the shipped artifact).
+
+## Security evidence
+
+`make prove` runs, on every interleaving it can generate and on a real sandbox chain:
+
+- **Property tests** (`contract/tests/properties.rs`). Thousands of random operation sequences over
+  the pure accounting core and over the real contract entrypoints (callbacks delivered out of
+  order or lost, retries, revocation, owner reconcile). After **every** step they check the
+  contract against an independent model: `completed + outstanding ≤ cap`, one authorization per
+  request, the money that left never exceeds what is accounted, and nothing is released
+  without proof.
+- **Attack suite** (`contract/tests/attacks.rs`). One named test per demo case (legit spend,
+  concurrent over-budget, retry, in-flight retry, tampered recipient, revocation, timeout).
+  The concurrency cases put every proposal into **one block** and prove from on-chain receipt
+  heights that each admission ran before the first settlement, so the race was actually exercised.
+
+**Operational notes.** A commitment whose settlement callback was lost stays reserved until the
+owner reconciles it with the observed outcome, and `reconcile` refuses until the commitment is
+10 minutes old so it can never race a callback that is still in flight. Never deploy Purser on
+the owner's own account: `#[private]` callbacks would then accept the owner as the caller.
 
 ### Toolchain
 

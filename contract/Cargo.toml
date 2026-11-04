@@ -49,6 +49,7 @@ opt-level = 2
 # If this crate ever joins a Cargo workspace, this block is silently ignored and the wasm rebuilds
 # WITHOUT overflow-checks (a money-safety setting). On promotion, move [profile.release] (and
 # rust-toolchain.toml) to the root manifest. See docs/plans promotion checklist.
+# Also add `exclude = ["contract/tests/fixtures/*"]`: the race-driver fixture is a standalone crate.
 [profile.release]          # matches the canonical cargo-near template (cargo-near strips the wasm, so no `strip`)
 codegen-units = 1
 opt-level = "z"            # size-optimize wasm

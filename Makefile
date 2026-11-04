@@ -1,5 +1,5 @@
 .PHONY: build build-release test fmt lint \
-        contract-build contract-build-release contract-test contract-fmt contract-lint \
+        contract-build contract-build-release contract-test contract-fmt contract-lint prove \
         deploy-testnet demo metrics hooks
 
 # Aggregate targets — expand to also run TS services (app/proposer/indexer) as they land.
@@ -16,6 +16,9 @@ contract-build-release: ; cd contract && cargo near build reproducible-wasm   # 
 contract-test: ; cd contract && cargo test
 contract-fmt: ; cd contract && cargo fmt --all
 contract-lint: ; cd contract && cargo clippy --all-targets -- -D warnings
+
+# Security evidence: the property tests + the named attack cases, with race-proof heights printed.
+prove: ; cd contract && cargo test --test properties --test attacks -- --nocapture --test-threads=4
 
 # Ops (stubs until their prompts)
 deploy-testnet: ; @echo "TODO (Prompt 10): build + deploy to testnet"
