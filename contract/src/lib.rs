@@ -667,13 +667,9 @@ impl Purser {
         .unwrap_or_else(|e| env::panic_str(&e.to_string()));
         assert_invariant(b); // defense-in-depth backstop (try_reserve already guarantees it)
 
-        // Chain-scoped hashing: the NEAR-native scheme (sha256 over the domain-separated borsh
-        // preimage, built in the pure `payload` core) is applied ONLY to `NearNative`. The `env`
-        // call lives here, at the single boundary. Matching `intent.chain` keeps the scheme-selection
-        // local to the hash site — so the EVM path (Prompt 12, un-prefixed keccak256(RLP)) MUST add
-        // its own arm here rather than silently inheriting the NEAR scheme via the distant
-        // `build_near_payload` chain-reject. The `Evm` arm is unreachable today (that reject fires
-        // before reserve); it is defensive so a future relaxation cannot mislabel a digest.
+        // Scheme selection is LOCAL to the hash site (the single `env` boundary): the NEAR-native
+        // arm hashes here; the EVM arm (Prompt 12) must add its own digest, not inherit this one.
+        // Unreachable today — `build_near_payload` rejects non-`NearNative` before reserve.
         let (payload_hash, payload_version) = match intent.chain {
             Chain::NearNative => {
                 let bytes =

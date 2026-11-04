@@ -10,10 +10,10 @@
 //!   1. [`build_near_payload`] — validate a well-formed NEAR-native transfer against the task token
 //!      and return the parsed recipient.
 //!   2. [`canonical_payload_bytes`] — build the domain-separated, borsh-canonical preimage for a
-//!      per-spend audit anchor: `PAYLOAD_DOMAIN || borsh(version, task, commitment_id, recipient,
-//!      amount_yocto)`. The `#[near]` layer hashes this with `env::sha256_array` and records the
-//!      digest on the `Commitment` (this is why the bytes are built here but hashed there — hashing
-//!      is an `env` call, byte-construction is not).
+//!      per-spend audit anchor (that function's doc is the SINGLE SOURCE for the exact layout; the
+//!      `PAYLOAD_PREIMAGE_SPEC` const is its machine-readable form). The `#[near]` layer hashes it
+//!      with `env::sha256_array` and records the digest on the `Commitment` (bytes built here but
+//!      hashed there — hashing is an `env` call, byte-construction is not).
 //!
 //! The anchor is an INTEGRITY/AUDIT artifact, not a signature: a NEAR-native transfer is authorized
 //! by issuing a `Promise`, not by signing a hash. The domain tag + `version` are a re-derivation /
@@ -36,8 +36,9 @@ pub const PAYLOAD_DOMAIN: [u8; 32] = *b"purser.near-native.transfer\0\0\0\0\0";
 /// Canonical preimage schema version — the FIRST borsh field, and the authoritative scheme signal
 /// (fetchable off-chain via [`crate::Purser::payload_scheme`]). Bump on ANY encoding change (field
 /// add/reorder, type change); never silently change `v1`, or previously-stored `payload_hash`
-/// values stop re-deriving. OBLIGATION ON BUMP: from the first bump, persist the version in effect
-/// per-commitment (so historical anchors stay re-derivable); until then every commitment is `v1`.
+/// values stop re-deriving. Every commitment already records the version it was hashed under in
+/// `Commitment.payload_version`, so after a bump a historical anchor stays re-derivable — re-derive
+/// it under ITS recorded version, not the live one.
 ///
 /// The re-derivation contract treats `recipient` as a borsh `String` — NEAR `AccountId` has the
 /// same Borsh layout as `String` today. The `canonical_bytes_..._match_the_wire_layout` unit test
@@ -119,8 +120,10 @@ pub fn canonical_payload_bytes(
     amount_yocto: u128,
 ) -> Vec<u8> {
     // Single allocation: prepend the fixed domain, then borsh-serialize the body directly into the
-    // same buffer (`Vec<u8>: Write`), avoiding a second intermediate `Vec` + copy.
-    let mut bytes = Vec::with_capacity(PAYLOAD_DOMAIN.len() + 96);
+    // same buffer (`Vec<u8>: Write`), avoiding a second intermediate `Vec` + copy. Capacity covers
+    // the worst-case body — u16(2) + task(4+≤64) + u64(8) + recipient(4+≤64) + u128(16) = 162 — so
+    // no realloc even for a max-length task id + implicit (64-char) account.
+    let mut bytes = Vec::with_capacity(PAYLOAD_DOMAIN.len() + 162);
     bytes.extend_from_slice(&PAYLOAD_DOMAIN);
     near_sdk::borsh::to_writer(
         &mut bytes,

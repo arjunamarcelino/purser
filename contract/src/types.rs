@@ -107,10 +107,11 @@ pub struct Commitment {
     pub state: ReservationState,
     pub request_id: RequestId,
     /// The hash the CONTRACT constructed over the action it authorized; never client-supplied.
-    /// `intent.chain` selects HOW it re-derives: `NearNative` = `sha256(payload::PAYLOAD_DOMAIN ||
-    /// borsh(version, task, id, recipient, amount_yocto))` (an integrity/audit anchor, not a
-    /// signature); `Evm` (Prompt 12) = un-prefixed `keccak256(RLP(tx))` (the actual signing
-    /// digest). A verifier / the indexer MUST branch on `intent.chain` — never assume one scheme.
+    /// `intent.chain` selects HOW it re-derives: `NearNative` = the scheme the `payload_scheme()`
+    /// view describes (layout owned by [`payload::canonical_payload_bytes`]) — an integrity/audit
+    /// anchor, not a signature; `Evm` (Prompt 12) = un-prefixed `keccak256(RLP(tx))`, the actual
+    /// signing digest. A verifier / the indexer MUST branch on `intent.chain` — never assume one
+    /// scheme. The version it was hashed under is in `payload_version`.
     pub payload_hash: Option<[u8; 32]>,
     pub near_tx: Option<String>,
     pub evm_tx: Option<String>,
