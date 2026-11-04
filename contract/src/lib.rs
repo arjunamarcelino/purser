@@ -36,7 +36,9 @@ pub use error::{
 };
 pub use events::PurserEvent;
 pub use idempotency::{classify, IdemDecision};
-pub use payload::{build_near_payload, NearPayload};
+pub use payload::{
+    build_near_payload, canonical_payload_bytes, NearPayload, PAYLOAD_DOMAIN, PAYLOAD_VERSION,
+};
 pub use reservation::{transition, Event};
 pub use types::{
     Chain, Commitment, CommitmentId, Delegate, IdemState, PaymentIntent, RequestId,
@@ -273,8 +275,11 @@ impl Purser {
     /// Add recipients to a task's payee allowlist (owner-gated). Additive: each recipient is
     /// parsed to an `AccountId` and marked allowed. `propose_payment` is deny-by-default, so a
     /// task with no allowlisted recipients cannot pay out — this is the fail-closed recipient
-    /// confinement ("never blind-sign"); Prompt 5 adds the constructed-payload tamper check and
-    /// any removal/replace semantics. Emits one `RecipientAllowlistSet`.
+    /// confinement ("never blind-sign"). Emits one `RecipientAllowlistSet`.
+    ///
+    /// SCOPE: additive-only by design. Recipient REMOVAL / replace is intentionally out of scope
+    /// (future work) — an allowlisted payee stays payable until a removal entrypoint exists. This
+    /// is an accepted operational risk, stated honestly rather than silently absent.
     pub fn set_recipient_allowlist(&mut self, task_id: TaskId, recipients: Vec<String>) {
         require!(env::predecessor_account_id() == self.owner, MSG_ONLY_OWNER);
         require!(self.tasks.contains_key(&task_id), MSG_NO_SUCH_TASK);
@@ -340,7 +345,9 @@ impl Purser {
             IdemDecision::Fresh => {}
         }
 
-        // (c) VALIDATE + CONSTRUCT PAYLOAD + DENY-BY-DEFAULT ALLOWLIST (full payload hash: Prompt 5).
+        // (c) VALIDATE + CONSTRUCT PAYLOAD + DENY-BY-DEFAULT ALLOWLIST. The constructed-payload
+        // audit hash is built from these same validated fields inside `open_reservation` (it needs
+        // the about-to-be-assigned `commitment_id`), so "hashed == executed".
         let task_token = self
             .tasks
             .get(&task)
@@ -348,17 +355,17 @@ impl Purser {
             .token
             .clone();
         let payload = build_near_payload(&task_token, &intent, MAX_MEMO_LEN)
-            .unwrap_or_else(|e| env::panic_str(&e.to_string())); // recipient parsed here, reused in (e)
+            .unwrap_or_else(|e| env::panic_str(&e.to_string())); // recipient parsed here, reused in (d)+(e)
         self.assert_allowlisted(&task, &payload.recipient); // fail-closed: deny-by-default
 
-        // (d) ATOMIC ADMIT + RESERVE + IDEMPOTENCY WRITE — synchronous, before any Promise.
+        // (d) ATOMIC ADMIT + RESERVE + PAYLOAD-HASH + IDEMPOTENCY WRITE — synchronous, before any Promise.
         let now = env::block_timestamp();
         let cid = self.open_reservation(
             &task,
             caller.clone(),
             &intent,
             &request_id,
-            payload.payload_hash,
+            &payload.recipient,
             now,
         );
         self.idempotency.insert(idem_key, IdemState::Pending);
@@ -553,16 +560,21 @@ impl Purser {
     }
 
     /// Allocate the next `CommitmentId`, run the invariant admission check + reserve via the pure
-    /// core, thread the (Prompt-5) payload hash onto the `Commitment`, and persist it. Panics
-    /// (rolls back) on refusal: `ExceedsBudget` → "exceeds task budget"; `ZeroAmount` → "amount
-    /// must be positive". On refusal nothing is persisted and the `cid` is not consumed.
+    /// core, record the contract-constructed `payload_hash` onto the `Commitment`, and persist it.
+    /// Panics (rolls back) on refusal: `ExceedsBudget` → "exceeds task budget"; `ZeroAmount` →
+    /// "amount must be positive". On refusal nothing is persisted and the `cid` is not consumed.
+    ///
+    /// The hash is built AFTER `try_reserve` admits (so a zero/over-budget refusal never does hash
+    /// work) and from the just-assigned `cid` plus the parsed `recipient` (the exact account the
+    /// caller's `Promise` targets) and `intent.amount` (the exact transfer value) — "never
+    /// blind-sign": a digest of the action the contract constructed, never a client-supplied hash.
     fn open_reservation(
         &mut self,
         task: &TaskId,
         delegate: AccountId,
         intent: &PaymentIntent,
         request_id: &RequestId,
-        payload_hash: Option<[u8; 32]>,
+        recipient: &AccountId,
         now: u64,
     ) -> CommitmentId {
         let cid = self.next_commitment_id;
@@ -581,7 +593,10 @@ impl Purser {
         )
         .unwrap_or_else(|e| env::panic_str(&e.to_string()));
         assert_invariant(b); // defense-in-depth backstop (try_reserve already guarantees it)
-        commitment.payload_hash = payload_hash; // None now; Prompt 5 → Some(hash), zero-churn
+                             // Construct the canonical preimage (pure) and hash it at this `env` boundary. `sha256_array`
+                             // is the only env call added; byte-construction stays in the pure `payload` core.
+        let bytes = canonical_payload_bytes(task, cid, recipient, intent.amount.as_yoctonear());
+        commitment.payload_hash = Some(env::sha256_array(&bytes));
         self.commitments.insert(cid, commitment); // `b` borrow ended (NLL) — disjoint field
         self.next_commitment_id += 1; // monotonic; first cid = 0
         cid

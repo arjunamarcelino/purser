@@ -1,27 +1,50 @@
-//! NEAR-native payload validation/construction (TECHNICAL §8; "never blind-sign").
+//! NEAR-native payload validation + canonical-bytes construction (TECHNICAL §8; "never blind-sign").
 //!
-//! Pure and `env`-free — mirrors [`crate::delegates`]: a free function over borrowed values
-//! with the caller injected, reading neither `env` nor `self`, so the `#[near]` entrypoint in
+//! Pure and `env`-free — mirrors [`crate::delegates`]: free functions over borrowed values with the
+//! caller injecting ids, reading neither `env` nor `self`, so the `#[near]` entrypoint in
 //! [`crate::lib`] stays the single `env`/store boundary. The contract constructs/validates the
-//! transaction it signs from the structured [`PaymentIntent`]; it never blind-signs a
+//! transaction it authorizes from the structured [`PaymentIntent`]; it never blind-signs a
 //! client-supplied hash.
 //!
-//! SCOPE (Prompt 4): validate a well-formed NEAR-native transfer against the task's token and
-//! return the parsed recipient. `payload_hash` is carried as `None` here; Prompt 5 fills it with
-//! the canonical constructed-action hash (a zero-churn body change — the field is already threaded
-//! through `open_reservation` into the `Commitment`). `amount > 0` is deliberately NOT checked
-//! here — [`crate::budget::try_reserve`] is the single zero-amount authority.
+//! TWO responsibilities, both pure:
+//!   1. [`build_near_payload`] — validate a well-formed NEAR-native transfer against the task token
+//!      and return the parsed recipient.
+//!   2. [`canonical_payload_bytes`] — build the domain-separated, borsh-canonical preimage for a
+//!      per-spend audit anchor: `PAYLOAD_DOMAIN || borsh(version, task, commitment_id, recipient,
+//!      amount_yocto)`. The `#[near]` layer hashes this with `env::sha256_array` and records the
+//!      digest on the `Commitment` (this is why the bytes are built here but hashed there — hashing
+//!      is an `env` call, byte-construction is not).
+//!
+//! The anchor is an INTEGRITY/AUDIT artifact, not a signature: a NEAR-native transfer is authorized
+//! by issuing a `Promise`, not by signing a hash. The domain tag + `version` are a re-derivation /
+//! versioning signal, not a security boundary. `intent.chain` selects HOW the hash re-derives:
+//! NEAR-native = this sha256 scheme; EVM (Prompt 12) = un-prefixed `keccak256(RLP(tx))`. The EVM
+//! signing digest must build its OWN replay-safe preimage — do not copy this one blindly.
+//!
+//! [`NearPayload`] is a transient return value; it is never stored and carries no Borsh-freeze
+//! obligation. `amount > 0` is deliberately NOT checked here — [`crate::budget::try_reserve`] is the
+//! single zero-amount authority.
 
 use crate::error::PurserError;
 use crate::types::{Chain, PaymentIntent, TokenSpec};
 use near_sdk::AccountId;
 
-/// The validated, contract-constructed NEAR-native payload: the parsed recipient plus the
-/// signing-payload hash (`None` until Prompt 5 constructs it).
+/// Fixed-length (32-byte) domain tag. Fixed WIDTH removes any tag/payload boundary ambiguity (an
+/// unframed variable-length prefix risks `v1` colliding with a future `v10`); the authoritative
+/// schema version is the `u16` first borsh field, not this string.
+pub const PAYLOAD_DOMAIN: [u8; 32] = *b"purser.near-native.transfer\0\0\0\0\0";
+
+/// Canonical preimage schema version — the FIRST borsh field. Bump on ANY encoding change
+/// (field add/reorder, type change); never silently change `v1`, or previously-stored
+/// `payload_hash` values stop re-deriving.
+pub const PAYLOAD_VERSION: u16 = 1;
+
+/// The validated, contract-constructed NEAR-native payload: the parsed recipient. The signing /
+/// audit hash is built from [`canonical_payload_bytes`] at the `#[near]` boundary once the
+/// `commitment_id` exists.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct NearPayload {
     pub recipient: AccountId,
-    pub payload_hash: Option<[u8; 32]>,
 }
 
 /// Validate `intent` as a NEAR-native transfer denominated in `task_token`, returning the parsed
@@ -49,10 +72,36 @@ pub fn build_near_payload(
         .recipient
         .parse::<AccountId>()
         .map_err(|_| PurserError::InvalidRecipient)?;
-    Ok(NearPayload {
+    Ok(NearPayload { recipient })
+}
+
+/// Build the canonical, domain-separated preimage for a NEAR-native transfer's per-spend audit
+/// anchor: `PAYLOAD_DOMAIN || borsh(version, task, commitment_id, recipient, amount_yocto)`.
+///
+/// Pure and total. The preimage binds the SEMANTIC fields the contract constructed and is itself
+/// using to build the `Promise` (`recipient`, `amount_yocto`) plus identity (`task`,
+/// `commitment_id`) so every reservation's anchor is unique and re-derivable off-chain. No enum, no
+/// map — all primitives + length-prefixed strings — so the borsh encoding is maximally
+/// determinism-safe. Borsh wire layout (the off-chain re-derivation contract): `u16` = 2B LE,
+/// `String`/`AccountId` = u32-LE length + UTF-8, `u64` = 8B LE, `u128` = 16B LE; tuple fields in
+/// order, no padding/prefix.
+pub fn canonical_payload_bytes(
+    task: &str,
+    commitment_id: u64,
+    recipient: &AccountId,
+    amount_yocto: u128,
+) -> Vec<u8> {
+    let mut bytes = PAYLOAD_DOMAIN.to_vec();
+    let body = near_sdk::borsh::to_vec(&(
+        PAYLOAD_VERSION,
+        task,
+        commitment_id,
         recipient,
-        payload_hash: None, // TODO(Prompt 5): construct the transfer action + hash it
-    })
+        amount_yocto,
+    ))
+    .expect("borsh serialize to Vec is infallible");
+    bytes.extend_from_slice(&body);
+    bytes
 }
 
 #[cfg(test)]
@@ -78,7 +127,7 @@ mod tests {
     }
 
     #[test]
-    fn valid_near_native_parses_recipient_and_defers_hash() {
+    fn valid_near_native_parses_recipient() {
         let p = build_near_payload(
             &TokenSpec::NearNative,
             &intent(
@@ -91,10 +140,6 @@ mod tests {
         )
         .unwrap();
         assert_eq!(p.recipient, "recipient.near".parse::<AccountId>().unwrap());
-        assert_eq!(
-            p.payload_hash, None,
-            "payload_hash is constructed in Prompt 5"
-        );
     }
 
     #[test]
@@ -189,5 +234,85 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(err, PurserError::InvalidRecipient);
+    }
+
+    // ---- canonical payload bytes (the audit-anchor preimage) ----------------------
+
+    fn acct(s: &str) -> AccountId {
+        s.parse().unwrap()
+    }
+
+    /// Independently hand-assemble the borsh wire layout (the off-chain re-derivation contract) so
+    /// any drift in field order / endianness / length-prefixing fails here — a pure golden vector.
+    fn hand_assembled_body(
+        version: u16,
+        task: &str,
+        cid: u64,
+        recipient: &str,
+        amount: u128,
+    ) -> Vec<u8> {
+        let mut v = Vec::new();
+        v.extend_from_slice(&version.to_le_bytes()); // u16 LE
+        v.extend_from_slice(&(task.len() as u32).to_le_bytes()); // String: u32 LE len
+        v.extend_from_slice(task.as_bytes()); //         + UTF-8
+        v.extend_from_slice(&cid.to_le_bytes()); // u64 LE
+        v.extend_from_slice(&(recipient.len() as u32).to_le_bytes()); // AccountId == String
+        v.extend_from_slice(recipient.as_bytes());
+        v.extend_from_slice(&amount.to_le_bytes()); // u128 LE
+        v
+    }
+
+    #[test]
+    fn canonical_bytes_are_domain_prefixed_and_match_the_wire_layout() {
+        let got = canonical_payload_bytes("t1", 0, &acct("alice.near"), 100);
+        let mut expected = PAYLOAD_DOMAIN.to_vec();
+        expected.extend_from_slice(&hand_assembled_body(
+            PAYLOAD_VERSION,
+            "t1",
+            0,
+            "alice.near",
+            100,
+        ));
+        assert_eq!(
+            got, expected,
+            "canonical bytes drifted from the documented borsh wire layout"
+        );
+        assert_eq!(
+            &got[..32],
+            &PAYLOAD_DOMAIN,
+            "preimage must start with the fixed domain tag"
+        );
+    }
+
+    #[test]
+    fn canonical_bytes_are_deterministic() {
+        let a = canonical_payload_bytes("t1", 7, &acct("alice.near"), 42);
+        let b = canonical_payload_bytes("t1", 7, &acct("alice.near"), 42);
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn canonical_bytes_change_with_each_bound_field() {
+        let base = canonical_payload_bytes("t1", 7, &acct("alice.near"), 42);
+        assert_ne!(
+            base,
+            canonical_payload_bytes("t2", 7, &acct("alice.near"), 42),
+            "task"
+        );
+        assert_ne!(
+            base,
+            canonical_payload_bytes("t1", 8, &acct("alice.near"), 42),
+            "commitment_id"
+        );
+        assert_ne!(
+            base,
+            canonical_payload_bytes("t1", 7, &acct("bob.near"), 42),
+            "recipient"
+        );
+        assert_ne!(
+            base,
+            canonical_payload_bytes("t1", 7, &acct("alice.near"), 43),
+            "amount"
+        );
     }
 }

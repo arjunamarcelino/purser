@@ -48,7 +48,7 @@ pub enum Chain {
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct PaymentIntent {
     pub chain: Chain,
-    /// `AccountId` (NEAR) or `0x`-address (EVM). Validated in Prompt 5.
+    /// `AccountId` (NEAR) or `0x`-address (EVM). Validated/parsed by `payload::build_near_payload`.
     pub recipient: String,
     pub amount: NearToken,
     pub token: TokenSpec,
@@ -106,7 +106,11 @@ pub struct Commitment {
     pub actual_spent: Option<NearToken>,
     pub state: ReservationState,
     pub request_id: RequestId,
-    /// The hash the CONTRACT constructed (populated in Prompt 5); never client-supplied.
+    /// The hash the CONTRACT constructed over the action it authorized; never client-supplied.
+    /// `intent.chain` selects HOW it re-derives: `NearNative` = `sha256(payload::PAYLOAD_DOMAIN ||
+    /// borsh(version, task, id, recipient, amount_yocto))` (an integrity/audit anchor, not a
+    /// signature); `Evm` (Prompt 12) = un-prefixed `keccak256(RLP(tx))` (the actual signing
+    /// digest). A verifier / the indexer MUST branch on `intent.chain` — never assume one scheme.
     pub payload_hash: Option<[u8; 32]>,
     pub near_tx: Option<String>,
     pub evm_tx: Option<String>,
