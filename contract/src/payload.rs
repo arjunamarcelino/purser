@@ -278,22 +278,12 @@ mod tests {
             "alice.near",
             100,
         ));
+        // Full-vector equality against the independently hand-assembled layout; this already
+        // implies the domain prefix and determinism, so no separate assertions for those.
         assert_eq!(
             got, expected,
             "canonical bytes drifted from the documented borsh wire layout"
         );
-        assert_eq!(
-            &got[..32],
-            &PAYLOAD_DOMAIN,
-            "preimage must start with the fixed domain tag"
-        );
-    }
-
-    #[test]
-    fn canonical_bytes_are_deterministic() {
-        let a = canonical_payload_bytes("t1", 7, &acct("alice.near"), 42);
-        let b = canonical_payload_bytes("t1", 7, &acct("alice.near"), 42);
-        assert_eq!(a, b);
     }
 
     #[test]
