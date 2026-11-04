@@ -491,6 +491,26 @@ mod tests {
         assert_eq!(l.budget.outstanding, yocto(0));
     }
 
+    /// Lock the payload anchor's "both-or-neither" invariant at the type-adjacent level: the pure
+    /// core leaves `payload_hash` and `payload_version` BOTH unset (the `#[near]` boundary sets
+    /// them together). Guards a future edit that sets one without the other — the pairing is
+    /// enforced by convention, not the type, so a test pins it.
+    #[test]
+    fn reserve_leaves_payload_hash_and_version_both_unset() {
+        let mut l = TestLedger::new(100);
+        let id = l.reserve(40).unwrap();
+        let c = &l.commitments[l.index_of(id)];
+        assert_eq!(
+            c.payload_hash.is_some(),
+            c.payload_version.is_some(),
+            "payload_hash and payload_version must always be set/unset together"
+        );
+        assert!(
+            c.payload_hash.is_none(),
+            "the pure core leaves the anchor unset; open_reservation fills it at the env boundary"
+        );
+    }
+
     #[test]
     fn reserve_rejects_admission_sum_overflow() {
         // completed+outstanding+amount overflows u128 → ArithmeticOverflow, never admit/panic.
