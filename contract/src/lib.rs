@@ -593,10 +593,23 @@ impl Purser {
         )
         .unwrap_or_else(|e| env::panic_str(&e.to_string()));
         assert_invariant(b); // defense-in-depth backstop (try_reserve already guarantees it)
-                             // Construct the canonical preimage (pure) and hash it at this `env` boundary. `sha256_array`
-                             // is the only env call added; byte-construction stays in the pure `payload` core.
-        let bytes = canonical_payload_bytes(task, cid, recipient, intent.amount.as_yoctonear());
-        commitment.payload_hash = Some(env::sha256_array(&bytes));
+
+        // Chain-scoped hashing: the NEAR-native scheme (sha256 over the domain-separated borsh
+        // preimage, built in the pure `payload` core) is applied ONLY to `NearNative`. The `env`
+        // call lives here, at the single boundary. Matching `intent.chain` keeps the scheme-selection
+        // local to the hash site — so the EVM path (Prompt 12, un-prefixed keccak256(RLP)) MUST add
+        // its own arm here rather than silently inheriting the NEAR scheme via the distant
+        // `build_near_payload` chain-reject. The `Evm` arm is unreachable today (that reject fires
+        // before reserve); it is defensive so a future relaxation cannot mislabel a digest.
+        let payload_hash = match intent.chain {
+            Chain::NearNative => {
+                let bytes =
+                    canonical_payload_bytes(task, cid, recipient, intent.amount.as_yoctonear());
+                env::sha256_array(&bytes)
+            }
+            Chain::Evm { .. } => env::panic_str(MSG_UNSUPPORTED_CHAIN),
+        };
+        commitment.payload_hash = Some(payload_hash);
         self.commitments.insert(cid, commitment); // `b` borrow ended (NLL) — disjoint field
         self.next_commitment_id += 1; // monotonic; first cid = 0
         cid
