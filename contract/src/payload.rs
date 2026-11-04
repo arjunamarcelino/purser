@@ -253,6 +253,12 @@ mod tests {
 
     /// Independently hand-assemble the borsh wire layout (the off-chain re-derivation contract) so
     /// any drift in field order / endianness / length-prefixing fails here — a pure golden vector.
+    ///
+    /// INTENTIONAL DUPLICATE of the wire layout (not a shared helper) — the integration-test twin
+    /// `tests/payments.rs::rederive_payload_hash` re-implements the same layout on purpose, so each
+    /// is an *independent* oracle; sharing a helper would couple them to the code under test and
+    /// defeat the point. If the canonical layout changes, update BOTH by hand (and
+    /// `canonical_payload_bytes`).
     fn hand_assembled_body(
         version: u16,
         task: &str,
