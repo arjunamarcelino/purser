@@ -276,57 +276,20 @@ fn hex_decode(s: &str) -> Vec<u8> {
         .collect()
 }
 
-/// "Sign only what you can read": the contract records a per-spend `payload_hash` that an external
-/// verifier can independently reconstruct from the recorded intent and confirm byte-for-byte. Also
-/// shows the anchor survives the full lifecycle (still correct once `Confirmed`) and that the stored
-/// RAW recipient string re-derives to the same hash as the parsed form.
+/// "Sign only what you can read": a NON-Rust verifier re-derives `payload_hash` from on-chain reads
+/// ALONE — the `payload_scheme()` view for the composition rule + the commitment for the inputs —
+/// and confirms it byte-for-byte with an independent `sha2` oracle. Also covers: the anchor survives
+/// the lifecycle (still correct at `Confirmed`), `payload_version` is recorded and matches the live
+/// scheme, the hash/version pairing is both-present, and the stored RAW recipient re-derives
+/// identically to the parsed form (AccountId parsing is normalization-free).
 #[tokio::test]
-async fn payload_hash_recorded_and_independently_rederivable() -> anyhow::Result<()> {
+async fn payload_hash_rederivable_from_scheme_view_alone() -> anyhow::Result<()> {
     let (_w, c, _owner, delegate, recipient) = setup().await?;
     propose(&delegate, &c, &recipient, "400000", "r1")
         .await?
         .into_result()?; // settles to Confirmed as cid 0
 
-    let cmt = view_json(&c, "get_commitment", json!({ "commitment_id": 0 })).await?;
-    assert_eq!(cmt["state"], "Confirmed");
-    assert_eq!(
-        cmt["payload_version"], 1,
-        "scheme version must be recorded per-commitment"
-    );
-    let got: [u8; 32] = serde_json::from_value(cmt["payload_hash"].clone())
-        .expect("payload_hash must be a recorded 32-byte array, not null");
-
-    // Independent oracle: sha2 crate over the hand-assembled borsh preimage, scheme from the Rust consts.
-    let rcpt = recipient.id().as_str();
-    let domain = &purser_contract::PAYLOAD_DOMAIN;
-    let version = purser_contract::PAYLOAD_VERSION;
-    assert_eq!(
-        got,
-        rederive_payload_hash(domain, version, "t1", 0, rcpt, 400_000),
-        "on-chain payload_hash is not independently re-derivable (tamper-evidence broken)"
-    );
-
-    // raw == parsed: the stored raw intent.recipient re-derives to the same hash (NEAR AccountId
-    // parsing is validate-only — no normalization — so the stored string and the parsed account agree).
-    let stored_raw = cmt["intent"]["recipient"].as_str().unwrap();
-    assert_eq!(stored_raw, rcpt);
-    assert_eq!(
-        rederive_payload_hash(domain, version, "t1", 0, stored_raw, 400_000),
-        got
-    );
-    Ok(())
-}
-
-/// P2-3: a NON-Rust client can re-derive `payload_hash` using ONLY the `payload_scheme()` view +
-/// the commitment — no repo constants. Proves the scheme is reachable off-chain at runtime.
-#[tokio::test]
-async fn payload_scheme_view_lets_a_nonrust_client_rederive() -> anyhow::Result<()> {
-    let (_w, c, _owner, delegate, recipient) = setup().await?;
-    propose(&delegate, &c, &recipient, "400000", "r1")
-        .await?
-        .into_result()?;
-
-    // Fetch the scheme the way a TS/Python verifier would — from the deployed contract, not source.
+    // Scheme fetched the way a TS/Python verifier would — from the deployed contract, not source.
     let scheme = view_json(&c, "payload_scheme", json!({})).await?;
     assert_eq!(scheme["chain"], "near-native");
     assert_eq!(scheme["hash_algorithm"], "sha256");
@@ -337,13 +300,34 @@ async fn payload_scheme_view_lets_a_nonrust_client_rederive() -> anyhow::Result<
     let version = scheme["version"].as_u64().unwrap() as u16;
 
     let cmt = view_json(&c, "get_commitment", json!({ "commitment_id": 0 })).await?;
-    // the commitment records the scheme version it was hashed under — must match the live scheme.
-    assert_eq!(cmt["payload_version"].as_u64().unwrap() as u16, version);
-    let got: [u8; 32] = serde_json::from_value(cmt["payload_hash"].clone()).unwrap();
+    assert_eq!(cmt["state"], "Confirmed");
+    assert_eq!(
+        cmt["payload_version"].as_u64().unwrap() as u16,
+        version,
+        "commitment's recorded version must match the live scheme"
+    );
+    assert!(
+        cmt["payload_hash"].is_array() && cmt["payload_version"].is_number(),
+        "hash and version must be present together"
+    );
+    let got: [u8; 32] = serde_json::from_value(cmt["payload_hash"].clone())
+        .expect("payload_hash must be a recorded 32-byte array, not null");
+
+    // Independent oracle (sha2 crate + hand-assembled layout), scheme sourced ONLY from the view —
+    // proving the view is sufficient for a source-free client.
+    let rcpt = recipient.id().as_str();
     assert_eq!(
         got,
-        rederive_payload_hash(&domain, version, "t1", 0, recipient.id().as_str(), 400_000),
-        "scheme view is insufficient to re-derive the on-chain payload_hash"
+        rederive_payload_hash(&domain, version, "t1", 0, rcpt, 400_000),
+        "scheme view is insufficient to re-derive the on-chain payload_hash (tamper-evidence broken)"
+    );
+
+    // raw == parsed: the stored raw intent.recipient re-derives to the same hash.
+    let stored_raw = cmt["intent"]["recipient"].as_str().unwrap();
+    assert_eq!(stored_raw, rcpt);
+    assert_eq!(
+        rederive_payload_hash(&domain, version, "t1", 0, stored_raw, 400_000),
+        got
     );
     Ok(())
 }
