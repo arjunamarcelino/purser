@@ -91,16 +91,21 @@ pub fn canonical_payload_bytes(
     recipient: &AccountId,
     amount_yocto: u128,
 ) -> Vec<u8> {
-    let mut bytes = PAYLOAD_DOMAIN.to_vec();
-    let body = near_sdk::borsh::to_vec(&(
-        PAYLOAD_VERSION,
-        task,
-        commitment_id,
-        recipient,
-        amount_yocto,
-    ))
+    // Single allocation: prepend the fixed domain, then borsh-serialize the body directly into the
+    // same buffer (`Vec<u8>: Write`), avoiding a second intermediate `Vec` + copy.
+    let mut bytes = Vec::with_capacity(PAYLOAD_DOMAIN.len() + 96);
+    bytes.extend_from_slice(&PAYLOAD_DOMAIN);
+    near_sdk::borsh::to_writer(
+        &mut bytes,
+        &(
+            PAYLOAD_VERSION,
+            task,
+            commitment_id,
+            recipient,
+            amount_yocto,
+        ),
+    )
     .expect("borsh serialize to Vec is infallible");
-    bytes.extend_from_slice(&body);
     bytes
 }
 
