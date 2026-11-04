@@ -331,6 +331,49 @@ async fn wrong_token_intent_rejected() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Honest revocation of a payee: after the owner removes a previously-allowlisted recipient, a
+/// payment to it is refused deny-by-default, the budget is untouched, and no commitment is burned.
+#[tokio::test]
+async fn removed_recipient_can_no_longer_be_paid() -> anyhow::Result<()> {
+    let (_w, c, owner, delegate, recipient) = setup().await?; // recipient allowlisted in setup
+    owner
+        .call(c.id(), "remove_recipient_allowlist")
+        .args_json(json!({ "task_id": "t1", "recipients": [recipient.id()] }))
+        .max_gas()
+        .transact()
+        .await?
+        .into_result()?;
+
+    let res = propose(&delegate, &c, &recipient, "100", "r6").await?;
+    assert!(res.is_failure());
+    assert!(err_string(res).contains(purser_contract::MSG_RECIPIENT_NOT_ALLOWED));
+    let task = view_json(&c, "get_task", json!({ "task_id": "t1" })).await?;
+    assert_eq!(task["outstanding"], "0");
+    let cmt = view_json(&c, "get_commitment", json!({ "commitment_id": 0 })).await?;
+    assert_eq!(cmt, serde_json::Value::Null);
+    Ok(())
+}
+
+/// Only the owner may remove allowlist entries; a delegate's attempt is refused and the recipient
+/// stays payable (the removal did not take effect).
+#[tokio::test]
+async fn remove_recipient_allowlist_rejects_non_owner() -> anyhow::Result<()> {
+    let (_w, c, _owner, delegate, recipient) = setup().await?;
+    let res = delegate
+        .call(c.id(), "remove_recipient_allowlist")
+        .args_json(json!({ "task_id": "t1", "recipients": [recipient.id()] }))
+        .max_gas()
+        .transact()
+        .await?;
+    assert!(res.is_failure());
+    assert!(err_string(res).contains(purser_contract::MSG_ONLY_OWNER));
+    // removal did not happen → recipient still payable.
+    assert!(propose(&delegate, &c, &recipient, "100", "r7")
+        .await?
+        .is_success());
+    Ok(())
+}
+
 // ---- owner reconcile (stuck-Reserved recovery) ------------------------------------
 //
 // These cover the owner-gate + state guards end-to-end. The happy force-confirm / force-release

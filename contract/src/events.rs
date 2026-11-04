@@ -74,6 +74,13 @@ pub enum PurserEvent {
         task_id: TaskId,
         recipients: Vec<String>,
     },
+    /// Owner removed recipients from a task's payee allowlist (honest revocation of a payee).
+    /// Idempotent: lists the recipients the owner requested removed, whether or not each was present.
+    #[event_version("1.0.0")]
+    RecipientAllowlistRemoved {
+        task_id: TaskId,
+        recipients: Vec<String>,
+    },
     /// Owner reconciled a commitment stuck in `Reserved` (settlement callback lost): `confirmed`
     /// records the owner-attested on-chain transfer outcome — `true` → settled `Confirmed`,
     /// `false` → safe-released `Failed`. Distinct from the callback-driven `Payment*` events so the

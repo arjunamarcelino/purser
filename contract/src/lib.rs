@@ -275,11 +275,8 @@ impl Purser {
     /// Add recipients to a task's payee allowlist (owner-gated). Additive: each recipient is
     /// parsed to an `AccountId` and marked allowed. `propose_payment` is deny-by-default, so a
     /// task with no allowlisted recipients cannot pay out — this is the fail-closed recipient
-    /// confinement ("never blind-sign"). Emits one `RecipientAllowlistSet`.
-    ///
-    /// SCOPE: additive-only by design. Recipient REMOVAL / replace is intentionally out of scope
-    /// (future work) — an allowlisted payee stays payable until a removal entrypoint exists. This
-    /// is an accepted operational risk, stated honestly rather than silently absent.
+    /// confinement ("never blind-sign"). Emits one `RecipientAllowlistSet`. Revoke a payee with
+    /// [`Self::remove_recipient_allowlist`].
     pub fn set_recipient_allowlist(&mut self, task_id: TaskId, recipients: Vec<String>) {
         require!(env::predecessor_account_id() == self.owner, MSG_ONLY_OWNER);
         require!(self.tasks.contains_key(&task_id), MSG_NO_SUCH_TASK);
@@ -290,6 +287,31 @@ impl Purser {
             self.allowlist.insert((task_id.clone(), acct), true);
         }
         PurserEvent::RecipientAllowlistSet {
+            task_id,
+            recipients,
+        }
+        .emit();
+    }
+
+    /// Remove recipients from a task's payee allowlist (owner-gated) — honest revocation of a payee
+    /// (compromised / rotated / fat-fingered account). Each recipient is parsed to an `AccountId`
+    /// and its allowlist entry deleted; idempotent (removing an absent recipient is a no-op). After
+    /// removal the next `propose_payment` to that recipient is refused deny-by-default. Emits one
+    /// `RecipientAllowlistRemoved`.
+    ///
+    /// HONEST REVOCATION (Rule 6): this blocks FUTURE payments to the recipient; like delegate
+    /// revocation it cannot recall a transfer already executed, and it does not touch commitments
+    /// already `Reserved`/`Signed` for that recipient — those settle via the normal lifecycle.
+    pub fn remove_recipient_allowlist(&mut self, task_id: TaskId, recipients: Vec<String>) {
+        require!(env::predecessor_account_id() == self.owner, MSG_ONLY_OWNER);
+        require!(self.tasks.contains_key(&task_id), MSG_NO_SUCH_TASK);
+        for r in &recipients {
+            let acct = r
+                .parse::<AccountId>()
+                .unwrap_or_else(|_| env::panic_str(MSG_INVALID_RECIPIENT));
+            self.allowlist.remove(&(task_id.clone(), acct)); // idempotent: None if absent
+        }
+        PurserEvent::RecipientAllowlistRemoved {
             task_id,
             recipients,
         }
