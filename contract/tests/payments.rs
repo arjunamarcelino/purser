@@ -289,6 +289,10 @@ async fn payload_hash_recorded_and_independently_rederivable() -> anyhow::Result
 
     let cmt = view_json(&c, "get_commitment", json!({ "commitment_id": 0 })).await?;
     assert_eq!(cmt["state"], "Confirmed");
+    assert_eq!(
+        cmt["payload_version"], 1,
+        "scheme version must be recorded per-commitment"
+    );
     let got: [u8; 32] = serde_json::from_value(cmt["payload_hash"].clone())
         .expect("payload_hash must be a recorded 32-byte array, not null");
 
@@ -331,6 +335,8 @@ async fn payload_scheme_view_lets_a_nonrust_client_rederive() -> anyhow::Result<
     let version = scheme["version"].as_u64().unwrap() as u16;
 
     let cmt = view_json(&c, "get_commitment", json!({ "commitment_id": 0 })).await?;
+    // the commitment records the scheme version it was hashed under — must match the live scheme.
+    assert_eq!(cmt["payload_version"].as_u64().unwrap() as u16, version);
     let got: [u8; 32] = serde_json::from_value(cmt["payload_hash"].clone()).unwrap();
     assert_eq!(
         got,

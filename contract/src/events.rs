@@ -52,6 +52,9 @@ pub enum PurserEvent {
         /// carried so an event-only indexer can hydrate it without a `get_commitment` call —
         /// same 32-byte array the `get_commitment` view returns. Re-derive via `payload_scheme()`.
         payload_hash: [u8; 32],
+        /// The scheme version `payload_hash` was computed under — so the event stays re-derivable
+        /// across a future `PAYLOAD_VERSION` bump (mirrors `Commitment.payload_version`).
+        payload_version: u16,
     },
     /// A reservation settled on a proven-successful transfer (`on_near_settled`). Carries no
     /// `near_tx`: the contract cannot observe its own receipt id on-chain, so the indexer

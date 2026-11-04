@@ -413,7 +413,7 @@ impl Purser {
 
         // (d) ATOMIC ADMIT + RESERVE + PAYLOAD-HASH + IDEMPOTENCY WRITE — synchronous, before any Promise.
         let now = env::block_timestamp();
-        let (cid, payload_hash) = self.open_reservation(
+        let (cid, payload_hash, payload_version) = self.open_reservation(
             &task,
             caller.clone(),
             &intent,
@@ -432,9 +432,11 @@ impl Purser {
             recipient: payload.recipient.to_string(),
             amount: intent.amount,
             request_id: request_id.clone(),
-            // the contract-constructed audit anchor, so an event-only indexer hydrates it without
-            // a `get_commitment` follow-up (same `[u8;32]` shape the view returns).
+            // the contract-constructed audit anchor + the scheme version it was computed under, so
+            // an event-only indexer hydrates both without a `get_commitment` follow-up (same
+            // `[u8;32]` shape the view returns; re-derive via `payload_scheme()`).
             payload_hash,
+            payload_version,
         }
         .emit();
 
@@ -625,8 +627,9 @@ impl Purser {
     /// caller's `Promise` targets) and `intent.amount` (the exact transfer value) — "never
     /// blind-sign": a digest of the action the contract constructed, never a client-supplied hash.
     ///
-    /// Returns `(cid, payload_hash)` so the caller can both resolve the commitment and emit the
-    /// hash on the `PaymentReserved` event (event-only indexers hydrate it without a view call).
+    /// Returns `(cid, payload_hash, payload_version)` so the caller can resolve the commitment and
+    /// emit the hash + its scheme version on the `PaymentReserved` event (event-only indexers
+    /// hydrate both without a view call).
     fn open_reservation(
         &mut self,
         task: &TaskId,
@@ -635,7 +638,7 @@ impl Purser {
         request_id: &RequestId,
         recipient: &AccountId,
         now: u64,
-    ) -> (CommitmentId, [u8; 32]) {
+    ) -> (CommitmentId, [u8; 32], u16) {
         let cid = self.next_commitment_id;
         let b = self
             .tasks
@@ -660,18 +663,21 @@ impl Purser {
         // its own arm here rather than silently inheriting the NEAR scheme via the distant
         // `build_near_payload` chain-reject. The `Evm` arm is unreachable today (that reject fires
         // before reserve); it is defensive so a future relaxation cannot mislabel a digest.
-        let payload_hash = match intent.chain {
+        let (payload_hash, payload_version) = match intent.chain {
             Chain::NearNative => {
                 let bytes =
                     canonical_payload_bytes(task, cid, recipient, intent.amount.as_yoctonear());
-                env::sha256_array(&bytes)
+                (env::sha256_array(&bytes), PAYLOAD_VERSION)
             }
             Chain::Evm { .. } => env::panic_str(MSG_UNSUPPORTED_CHAIN),
         };
+        // Record the digest AND the scheme version it was computed under, so the anchor stays
+        // re-derivable across a future PAYLOAD_VERSION bump (`Some` together, by construction).
         commitment.payload_hash = Some(payload_hash);
+        commitment.payload_version = Some(payload_version);
         self.commitments.insert(cid, commitment); // `b` borrow ended (NLL) — disjoint field
         self.next_commitment_id += 1; // monotonic; first cid = 0
-        (cid, payload_hash)
+        (cid, payload_hash, payload_version)
     }
 
     // ---- views (read-only; power the dashboard + off-chain cache) --------------

@@ -120,6 +120,7 @@ pub fn try_reserve(
         evm_tx: None,
         created_at: now,
         updated_at: now,
+        payload_version: None, // set with payload_hash at the env boundary (open_reservation)
     })
 }
 

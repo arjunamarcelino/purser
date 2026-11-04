@@ -116,6 +116,11 @@ pub struct Commitment {
     pub evm_tx: Option<String>,
     pub created_at: u64,
     pub updated_at: u64,
+    /// The `payload::PAYLOAD_VERSION` under which `payload_hash` was computed. `Some` exactly when
+    /// `payload_hash` is `Some` (set together at reserve). A verifier reads this to pick which
+    /// `payload_scheme()` version to re-derive with, so historical anchors stay re-derivable across
+    /// a future version bump. APPENDED last (Borsh layout is append-only).
+    pub payload_version: Option<u16>,
 }
 
 /// A registered crew member (delegate agent) of a task (BACKEND-SCHEMA §1.2).
