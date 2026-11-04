@@ -31,8 +31,9 @@ pub use error::{
     MSG_DELEGATE_EXISTS, MSG_DELEGATE_NOT_AUTHORIZED, MSG_EXCEEDS_BUDGET, MSG_INVALID_PATH,
     MSG_INVALID_RECIPIENT, MSG_INVALID_REQUEST_ID, MSG_INVALID_TASK_ID, MSG_IN_FLIGHT,
     MSG_MEMO_TOO_LONG, MSG_NOT_RECONCILABLE, MSG_NO_SUCH_COMMITMENT, MSG_NO_SUCH_DELEGATE,
-    MSG_NO_SUCH_TASK, MSG_ONLY_OWNER, MSG_RECIPIENT_NOT_ALLOWED, MSG_REQUEST_ID_REUSED,
-    MSG_TASK_EXISTS, MSG_UNSUPPORTED_CHAIN, MSG_UNSUPPORTED_TOKEN, MSG_ZERO_AMOUNT,
+    MSG_NO_SUCH_TASK, MSG_ONLY_OWNER, MSG_RECIPIENT_NOT_ALLOWED, MSG_RECONCILE_TOO_EARLY,
+    MSG_REQUEST_ID_REUSED, MSG_TASK_EXISTS, MSG_UNSUPPORTED_CHAIN, MSG_UNSUPPORTED_TOKEN,
+    MSG_ZERO_AMOUNT,
 };
 pub use events::PurserEvent;
 pub use idempotency::{classify, IdemDecision};
@@ -61,6 +62,10 @@ const MAX_MEMO_LEN: usize = 256;
 /// ~2x NEAR's canonical callback floor (`FIVE_TGAS`); the bare `Transfer` action costs ~0.5 Tgas
 /// and does not compete. Re-measure if the wasm grows materially (Prompt 12's RLP/keccak).
 const CALLBACK_GAS: Gas = Gas::from_tgas(10);
+/// Minimum age (block-timestamp ns) before the owner may `reconcile` a `Reserved` commitment.
+/// A live settlement callback lands within a few blocks; until this much time has passed it may
+/// still be in flight, and an early release would race it. 10 minutes ≫ the callback window.
+pub const RECONCILE_MIN_AGE_NS: u64 = 600 * 1_000_000_000;
 
 /// Unique storage prefixes for on-chain collections.
 ///
@@ -566,13 +571,16 @@ impl Purser {
     /// transfer landed → force `Reserved → Signed → Confirmed` and settle. `confirmed = false` →
     /// the owner proved it did not land (funds refunded) → safe-release `Reserved → Failed`.
     ///
-    /// Only a `Reserved` commitment is reconcilable: in the happy path a commitment settles within
-    /// the same transaction as its callback, so a `Reserved` that persists into a later owner
-    /// transaction is, by construction, a lost-callback case. Any other state rejects.
+    /// Only a `Reserved` commitment is reconcilable, and only once it is at least
+    /// [`RECONCILE_MIN_AGE_NS`] old. A `Reserved` commitment is NOT necessarily a lost callback:
+    /// for a few blocks after `propose_payment` its transfer and `on_near_settled` are still in
+    /// flight. Releasing it then (`confirmed = false`) while the transfer goes on to land would
+    /// spend the same headroom twice, so an early call refuses with "reconcile too early". Any
+    /// non-`Reserved` state rejects.
     pub fn reconcile(&mut self, commitment_id: CommitmentId, confirmed: bool) {
         require!(env::predecessor_account_id() == self.owner, MSG_ONLY_OWNER);
         let now = env::block_timestamp();
-        let (task_id, delegate, request_id, reserved, state) = {
+        let (task_id, delegate, request_id, reserved, state, created_at) = {
             let c = self
                 .commitments
                 .get(&commitment_id)
@@ -583,9 +591,14 @@ impl Purser {
                 c.request_id.clone(),
                 c.reserved_amount,
                 c.state,
+                c.created_at,
             )
         };
         require!(state == ReservationState::Reserved, MSG_NOT_RECONCILABLE);
+        require!(
+            now >= created_at.saturating_add(RECONCILE_MIN_AGE_NS),
+            MSG_RECONCILE_TOO_EARLY
+        );
 
         let b = self
             .tasks
