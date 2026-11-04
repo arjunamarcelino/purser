@@ -32,6 +32,13 @@ sha2 = "0.11"
 level = "warn"
 check-cfg = ['cfg(near)']
 
+# Optimize DEPENDENCIES (near-sdk's mocked VM, borsh, proptest) in host test builds; our own crate
+# stays at dev opt-level so assertions/overflow checks and debuginfo are unchanged. Cuts the Layer-B
+# property test (thousands of mocked contract calls) by ~an order of magnitude. Host-only: the wasm
+# is built by `cargo near` with [profile.release].
+[profile.dev.package."*"]
+opt-level = 2
+
 # ⚠️ WORKSPACE-PROMOTION HAZARD: Cargo honors [profile.*] ONLY in the workspace-root manifest.
 # If this crate ever joins a Cargo workspace, this block is silently ignored and the wasm rebuilds
 # WITHOUT overflow-checks (a money-safety setting). On promotion, move [profile.release] (and
