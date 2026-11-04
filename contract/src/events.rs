@@ -48,6 +48,10 @@ pub enum PurserEvent {
         recipient: String,
         amount: NearToken,
         request_id: RequestId,
+        /// The contract-constructed audit anchor (`sha256` of the domain-separated preimage),
+        /// carried so an event-only indexer can hydrate it without a `get_commitment` call —
+        /// same 32-byte array the `get_commitment` view returns. Re-derive via `payload_scheme()`.
+        payload_hash: [u8; 32],
     },
     /// A reservation settled on a proven-successful transfer (`on_near_settled`). Carries no
     /// `near_tx`: the contract cannot observe its own receipt id on-chain, so the indexer

@@ -413,7 +413,7 @@ impl Purser {
 
         // (d) ATOMIC ADMIT + RESERVE + PAYLOAD-HASH + IDEMPOTENCY WRITE — synchronous, before any Promise.
         let now = env::block_timestamp();
-        let cid = self.open_reservation(
+        let (cid, payload_hash) = self.open_reservation(
             &task,
             caller.clone(),
             &intent,
@@ -432,6 +432,9 @@ impl Purser {
             recipient: payload.recipient.to_string(),
             amount: intent.amount,
             request_id: request_id.clone(),
+            // the contract-constructed audit anchor, so an event-only indexer hydrates it without
+            // a `get_commitment` follow-up (same `[u8;32]` shape the view returns).
+            payload_hash,
         }
         .emit();
 
@@ -621,6 +624,9 @@ impl Purser {
     /// work) and from the just-assigned `cid` plus the parsed `recipient` (the exact account the
     /// caller's `Promise` targets) and `intent.amount` (the exact transfer value) — "never
     /// blind-sign": a digest of the action the contract constructed, never a client-supplied hash.
+    ///
+    /// Returns `(cid, payload_hash)` so the caller can both resolve the commitment and emit the
+    /// hash on the `PaymentReserved` event (event-only indexers hydrate it without a view call).
     fn open_reservation(
         &mut self,
         task: &TaskId,
@@ -629,7 +635,7 @@ impl Purser {
         request_id: &RequestId,
         recipient: &AccountId,
         now: u64,
-    ) -> CommitmentId {
+    ) -> (CommitmentId, [u8; 32]) {
         let cid = self.next_commitment_id;
         let b = self
             .tasks
@@ -665,7 +671,7 @@ impl Purser {
         commitment.payload_hash = Some(payload_hash);
         self.commitments.insert(cid, commitment); // `b` borrow ended (NLL) — disjoint field
         self.next_commitment_id += 1; // monotonic; first cid = 0
-        cid
+        (cid, payload_hash)
     }
 
     // ---- views (read-only; power the dashboard + off-chain cache) --------------

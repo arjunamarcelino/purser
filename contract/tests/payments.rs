@@ -140,8 +140,10 @@ async fn legit_payment_succeeds_and_accounts() -> anyhow::Result<()> {
 
     // lifecycle events emitted.
     assert!(
-        res.logs().iter().any(|l| l.contains("payment_reserved")),
-        "missing payment_reserved event; logs: {:?}",
+        res.logs()
+            .iter()
+            .any(|l| l.contains("payment_reserved") && l.contains("payload_hash")),
+        "payment_reserved event must carry payload_hash; logs: {:?}",
         res.logs()
     );
     assert!(
