@@ -238,9 +238,11 @@ async fn swapped_recipient_is_rejected_and_budget_unchanged() -> anyhow::Result<
 }
 
 /// Independently re-derive the NEAR-native `payload_hash` from a given scheme (`domain`, `version`)
-/// plus the documented borsh wire layout, hashing with the `sha2` crate directly. Deliberately NOT
-/// `env::sha256_array`: in this test binary (the `unit-testing` feature is on) that routes through
-/// the SDK mock, so it would not be an independent oracle.
+/// plus the documented borsh wire layout, hashing with the `sha2` crate directly. Deliberately uses
+/// a SEPARATE implementation (the `sha2` crate + a hand-assembled preimage) rather than the
+/// contract's own `env::sha256_array` / `canonical_payload_bytes`, so the oracle is genuinely
+/// independent: a bug in the contract's byte-construction or hashing is caught here instead of being
+/// reproduced by it.
 ///
 /// INTENTIONAL DUPLICATE of the wire layout (not a shared helper) — the unit-test twin
 /// `payload::tests::hand_assembled_body` re-implements the same layout on purpose, so each is an
