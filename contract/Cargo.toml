@@ -20,6 +20,10 @@ tokio = { version = "1", features = ["full"] }
 anyhow = "1"
 serde_json = "1"
 proptest = "=1.12.0"
+# TEST-ONLY independent hash oracle for the payload_hash re-derivation test. sha2 0.11 is the exact
+# crate near-sdk-env uses for its off-chain backend; the digest is identical across any sha2 version.
+# Do NOT touch the near-workspaces `unstable` feature above — `compile_project` needs it.
+sha2 = "0.11"
 
 # REQUIRED: near-sdk 5.27+ expands cfg(near)-gated code into this crate. Plain
 # `cargo clippy`/`cargo test` (no --cfg near) would otherwise raise unexpected_cfgs,

@@ -48,7 +48,7 @@ pub enum Chain {
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct PaymentIntent {
     pub chain: Chain,
-    /// `AccountId` (NEAR) or `0x`-address (EVM). Validated in Prompt 5.
+    /// `AccountId` (NEAR) or `0x`-address (EVM). Validated/parsed by `payload::build_near_payload`.
     pub recipient: String,
     pub amount: NearToken,
     pub token: TokenSpec,
@@ -106,12 +106,22 @@ pub struct Commitment {
     pub actual_spent: Option<NearToken>,
     pub state: ReservationState,
     pub request_id: RequestId,
-    /// The hash the CONTRACT constructed (populated in Prompt 5); never client-supplied.
+    /// The hash the CONTRACT constructed over the action it authorized; never client-supplied.
+    /// `intent.chain` selects HOW it re-derives: `NearNative` = the scheme the `payload_scheme()`
+    /// view describes (layout owned by [`payload::canonical_payload_bytes`]) — an integrity/audit
+    /// anchor, not a signature; `Evm` (Prompt 12) = un-prefixed `keccak256(RLP(tx))`, the actual
+    /// signing digest. A verifier / the indexer MUST branch on `intent.chain` — never assume one
+    /// scheme. The version it was hashed under is in `payload_version`.
     pub payload_hash: Option<[u8; 32]>,
     pub near_tx: Option<String>,
     pub evm_tx: Option<String>,
     pub created_at: u64,
     pub updated_at: u64,
+    /// The `payload::PAYLOAD_VERSION` under which `payload_hash` was computed. `Some` exactly when
+    /// `payload_hash` is `Some` (set together at reserve). A verifier reads this to pick which
+    /// `payload_scheme()` version to re-derive with, so historical anchors stay re-derivable across
+    /// a future version bump. APPENDED last (Borsh layout is append-only).
+    pub payload_version: Option<u16>,
 }
 
 /// A registered crew member (delegate agent) of a task (BACKEND-SCHEMA §1.2).

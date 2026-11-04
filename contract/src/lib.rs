@@ -36,7 +36,10 @@ pub use error::{
 };
 pub use events::PurserEvent;
 pub use idempotency::{classify, IdemDecision};
-pub use payload::{build_near_payload, NearPayload};
+pub use payload::{
+    build_near_payload, canonical_payload_bytes, NearPayload, PAYLOAD_CHAIN_TAG, PAYLOAD_DOMAIN,
+    PAYLOAD_ENCODING, PAYLOAD_HASH_ALG, PAYLOAD_PREIMAGE_SPEC, PAYLOAD_VERSION,
+};
 pub use reservation::{transition, Event};
 pub use types::{
     Chain, Commitment, CommitmentId, Delegate, IdemState, PaymentIntent, RequestId,
@@ -110,6 +113,31 @@ pub struct Purser {
     allowlist: LookupMap<(TaskId, AccountId), bool>,
 }
 
+/// The NEAR-native `payload_hash` scheme, surfaced by [`Purser::payload_scheme`] so a NON-Rust
+/// verifier (TS indexer / dashboard / judge) can re-derive `Commitment.payload_hash` from on-chain
+/// reads ALONE — the `preimage` field carries the full composition rule, so nothing is source-only.
+/// JSON-only (view DTO) — never stored, no Borsh-freeze obligation.
+#[near(serializers = [json])]
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct PayloadScheme {
+    /// The chain this scheme applies to (`"near-native"`). A verifier branches on it; the EVM
+    /// scheme (Prompt 12) is a sibling with its own digest/framing.
+    pub chain: String,
+    /// The authoritative schema version (the first borsh field of the preimage). A commitment
+    /// carries the version it was hashed under in `Commitment.payload_version`.
+    pub version: u16,
+    /// Digest algorithm (`"sha256"`). Named `hash_algorithm` (not `hash`) so it is not confused
+    /// with `payload_hash`, which is a digest VALUE.
+    pub hash_algorithm: String,
+    /// Body encoding following the domain prefix (`"borsh"`).
+    pub encoding: String,
+    /// Hex of the fixed 32-byte domain, prepended as a RAW PREFIX (not borsh-encoded).
+    pub domain_hex: String,
+    /// Machine-readable composition rule (ordered fields + types + domain framing). This is the
+    /// authoritative re-derivation contract; `domain32` = the bytes of `domain_hex`.
+    pub preimage: String,
+}
+
 #[near]
 impl Purser {
     /// Initialize the contract.
@@ -134,6 +162,22 @@ impl Purser {
     /// Crate version — a trivial view to confirm the contract is live.
     pub fn version(&self) -> String {
         env!("CARGO_PKG_VERSION").to_string()
+    }
+
+    /// The NEAR-native `payload_hash` scheme (chain, version, algorithm, encoding, domain, and the
+    /// full `preimage` composition rule), so an off-chain verifier in ANY language can re-derive
+    /// `Commitment.payload_hash` from on-chain reads alone — see [`PayloadScheme`]. Describes the
+    /// CURRENT `PAYLOAD_VERSION`; a commitment hashed under an older version (after a future bump)
+    /// is identified by its `Commitment.payload_version`.
+    pub fn payload_scheme(&self) -> PayloadScheme {
+        PayloadScheme {
+            chain: PAYLOAD_CHAIN_TAG.to_string(),
+            version: PAYLOAD_VERSION,
+            hash_algorithm: PAYLOAD_HASH_ALG.to_string(),
+            encoding: PAYLOAD_ENCODING.to_string(),
+            domain_hex: PAYLOAD_DOMAIN.iter().map(|b| format!("{b:02x}")).collect(),
+            preimage: PAYLOAD_PREIMAGE_SPEC.to_string(),
+        }
     }
 
     // ---- owner-gated control plane (APP-FLOW §3, §4, §9) -----------------------
@@ -273,8 +317,8 @@ impl Purser {
     /// Add recipients to a task's payee allowlist (owner-gated). Additive: each recipient is
     /// parsed to an `AccountId` and marked allowed. `propose_payment` is deny-by-default, so a
     /// task with no allowlisted recipients cannot pay out — this is the fail-closed recipient
-    /// confinement ("never blind-sign"); Prompt 5 adds the constructed-payload tamper check and
-    /// any removal/replace semantics. Emits one `RecipientAllowlistSet`.
+    /// confinement ("never blind-sign"). Emits one `RecipientAllowlistSet`. Revoke a payee with
+    /// [`Self::remove_recipient_allowlist`].
     pub fn set_recipient_allowlist(&mut self, task_id: TaskId, recipients: Vec<String>) {
         require!(env::predecessor_account_id() == self.owner, MSG_ONLY_OWNER);
         require!(self.tasks.contains_key(&task_id), MSG_NO_SUCH_TASK);
@@ -285,6 +329,31 @@ impl Purser {
             self.allowlist.insert((task_id.clone(), acct), true);
         }
         PurserEvent::RecipientAllowlistSet {
+            task_id,
+            recipients,
+        }
+        .emit();
+    }
+
+    /// Remove recipients from a task's payee allowlist (owner-gated) — honest revocation of a payee
+    /// (compromised / rotated / fat-fingered account). Each recipient is parsed to an `AccountId`
+    /// and its allowlist entry deleted; idempotent (removing an absent recipient is a no-op). After
+    /// removal the next `propose_payment` to that recipient is refused deny-by-default. Emits one
+    /// `RecipientAllowlistRemoved`.
+    ///
+    /// HONEST REVOCATION (Rule 6): this blocks FUTURE payments to the recipient; like delegate
+    /// revocation it cannot recall a transfer already executed, and it does not touch commitments
+    /// already `Reserved`/`Signed` for that recipient — those settle via the normal lifecycle.
+    pub fn remove_recipient_allowlist(&mut self, task_id: TaskId, recipients: Vec<String>) {
+        require!(env::predecessor_account_id() == self.owner, MSG_ONLY_OWNER);
+        require!(self.tasks.contains_key(&task_id), MSG_NO_SUCH_TASK);
+        for r in &recipients {
+            let acct = r
+                .parse::<AccountId>()
+                .unwrap_or_else(|_| env::panic_str(MSG_INVALID_RECIPIENT));
+            self.allowlist.remove(&(task_id.clone(), acct)); // idempotent: None if absent
+        }
+        PurserEvent::RecipientAllowlistRemoved {
             task_id,
             recipients,
         }
@@ -340,7 +409,9 @@ impl Purser {
             IdemDecision::Fresh => {}
         }
 
-        // (c) VALIDATE + CONSTRUCT PAYLOAD + DENY-BY-DEFAULT ALLOWLIST (full payload hash: Prompt 5).
+        // (c) VALIDATE + CONSTRUCT PAYLOAD + DENY-BY-DEFAULT ALLOWLIST. The constructed-payload
+        // audit hash is built from these same validated fields inside `open_reservation` (it needs
+        // the about-to-be-assigned `commitment_id`), so "hashed == executed".
         let task_token = self
             .tasks
             .get(&task)
@@ -348,17 +419,17 @@ impl Purser {
             .token
             .clone();
         let payload = build_near_payload(&task_token, &intent, MAX_MEMO_LEN)
-            .unwrap_or_else(|e| env::panic_str(&e.to_string())); // recipient parsed here, reused in (e)
+            .unwrap_or_else(|e| env::panic_str(&e.to_string())); // recipient parsed here, reused in (d)+(e)
         self.assert_allowlisted(&task, &payload.recipient); // fail-closed: deny-by-default
 
-        // (d) ATOMIC ADMIT + RESERVE + IDEMPOTENCY WRITE — synchronous, before any Promise.
+        // (d) ATOMIC ADMIT + RESERVE + PAYLOAD-HASH + IDEMPOTENCY WRITE — synchronous, before any Promise.
         let now = env::block_timestamp();
-        let cid = self.open_reservation(
+        let (cid, payload_hash, payload_version) = self.open_reservation(
             &task,
             caller.clone(),
             &intent,
             &request_id,
-            payload.payload_hash,
+            &payload.recipient,
             now,
         );
         self.idempotency.insert(idem_key, IdemState::Pending);
@@ -372,6 +443,11 @@ impl Purser {
             recipient: payload.recipient.to_string(),
             amount: intent.amount,
             request_id: request_id.clone(),
+            // the contract-constructed audit anchor + the scheme version it was computed under, so
+            // an event-only indexer hydrates both without a `get_commitment` follow-up (same
+            // `[u8;32]` shape the view returns; re-derive via `payload_scheme()`).
+            payload_hash,
+            payload_version,
         }
         .emit();
 
@@ -553,18 +629,27 @@ impl Purser {
     }
 
     /// Allocate the next `CommitmentId`, run the invariant admission check + reserve via the pure
-    /// core, thread the (Prompt-5) payload hash onto the `Commitment`, and persist it. Panics
-    /// (rolls back) on refusal: `ExceedsBudget` → "exceeds task budget"; `ZeroAmount` → "amount
-    /// must be positive". On refusal nothing is persisted and the `cid` is not consumed.
+    /// core, record the contract-constructed `payload_hash` onto the `Commitment`, and persist it.
+    /// Panics (rolls back) on refusal: `ExceedsBudget` → "exceeds task budget"; `ZeroAmount` →
+    /// "amount must be positive". On refusal nothing is persisted and the `cid` is not consumed.
+    ///
+    /// The hash is built AFTER `try_reserve` admits (so a zero/over-budget refusal never does hash
+    /// work) and from the just-assigned `cid` plus the parsed `recipient` (the exact account the
+    /// caller's `Promise` targets) and `intent.amount` (the exact transfer value) — "never
+    /// blind-sign": a digest of the action the contract constructed, never a client-supplied hash.
+    ///
+    /// Returns `(cid, payload_hash, payload_version)` so the caller can resolve the commitment and
+    /// emit the hash + its scheme version on the `PaymentReserved` event (event-only indexers
+    /// hydrate both without a view call).
     fn open_reservation(
         &mut self,
         task: &TaskId,
         delegate: AccountId,
         intent: &PaymentIntent,
         request_id: &RequestId,
-        payload_hash: Option<[u8; 32]>,
+        recipient: &AccountId,
         now: u64,
-    ) -> CommitmentId {
+    ) -> (CommitmentId, [u8; 32], u16) {
         let cid = self.next_commitment_id;
         let b = self
             .tasks
@@ -581,10 +666,25 @@ impl Purser {
         )
         .unwrap_or_else(|e| env::panic_str(&e.to_string()));
         assert_invariant(b); // defense-in-depth backstop (try_reserve already guarantees it)
-        commitment.payload_hash = payload_hash; // None now; Prompt 5 → Some(hash), zero-churn
+
+        // Scheme selection is LOCAL to the hash site (the single `env` boundary): the NEAR-native
+        // arm hashes here; the EVM arm (Prompt 12) must add its own digest, not inherit this one.
+        // Unreachable today — `build_near_payload` rejects non-`NearNative` before reserve.
+        let (payload_hash, payload_version) = match intent.chain {
+            Chain::NearNative => {
+                let bytes =
+                    canonical_payload_bytes(task, cid, recipient, intent.amount.as_yoctonear());
+                (env::sha256_array(&bytes), PAYLOAD_VERSION)
+            }
+            Chain::Evm { .. } => env::panic_str(MSG_UNSUPPORTED_CHAIN),
+        };
+        // Record the digest AND the scheme version it was computed under, so the anchor stays
+        // re-derivable across a future PAYLOAD_VERSION bump (`Some` together, by construction).
+        commitment.payload_hash = Some(payload_hash);
+        commitment.payload_version = Some(payload_version);
         self.commitments.insert(cid, commitment); // `b` borrow ended (NLL) — disjoint field
         self.next_commitment_id += 1; // monotonic; first cid = 0
-        cid
+        (cid, payload_hash, payload_version)
     }
 
     // ---- views (read-only; power the dashboard + off-chain cache) --------------
@@ -628,6 +728,18 @@ impl Purser {
     /// `task_id`? Lets agents/tests verify auth before `propose_payment` lands.
     pub fn is_delegate_authorized(&self, task_id: TaskId, account_id: AccountId) -> bool {
         delegates::is_authorized(&self.delegates, &task_id, &account_id)
+    }
+
+    /// Public mirror of the deny-by-default recipient gate (the view twin of the private
+    /// `assert_allowlisted`): is `account_id` an allowlisted payee of `task_id`? Lets an agent /
+    /// dashboard pre-flight recipient confinement before `propose_payment` — read-parity with
+    /// `is_delegate_authorized` — instead of probing via a panicking proposal. `false` for an
+    /// unknown task or recipient.
+    pub fn is_recipient_allowed(&self, task_id: TaskId, account_id: AccountId) -> bool {
+        self.allowlist
+            .get(&(task_id, account_id))
+            .copied()
+            .unwrap_or(false)
     }
 
     /// A page of task ids — skip `from_index`, return up to `limit`. The off-chain indexer

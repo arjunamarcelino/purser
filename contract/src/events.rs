@@ -2,7 +2,9 @@
 //!
 //! JSON-only (never stored), so — unlike the Borsh types in [`crate::types`] — these carry
 //! no layout-freeze obligation. Their *field names* ARE the indexer's contract, though, so
-//! treat them as frozen. Emitted via `PurserEvent::_.emit()` at the tail of each mutating
+//! treat them as frozen. CONVENTION: ADDING a field under the same `event_version` is allowed
+//! (indexers must tolerate unknown fields); RENAMING or REMOVING one is a breaking change that
+//! needs a version bump. Emitted via `PurserEvent::_.emit()` at the tail of each mutating
 //! entrypoint, AFTER state is written. The SDK macro serializes each variant to the
 //! canonical `EVENT_JSON:{"standard":"purser","version":"1.0.0","event":"<snake_case>",
 //! "data":{…}}` line (the variant name is lower-snake-cased into `event`).
@@ -48,6 +50,13 @@ pub enum PurserEvent {
         recipient: String,
         amount: NearToken,
         request_id: RequestId,
+        /// The contract-constructed audit anchor (`sha256` of the domain-separated preimage),
+        /// carried so an event-only indexer can hydrate it without a `get_commitment` call —
+        /// same 32-byte array the `get_commitment` view returns. Re-derive via `payload_scheme()`.
+        payload_hash: [u8; 32],
+        /// The scheme version `payload_hash` was computed under — so the event stays re-derivable
+        /// across a future `PAYLOAD_VERSION` bump (mirrors `Commitment.payload_version`).
+        payload_version: u16,
     },
     /// A reservation settled on a proven-successful transfer (`on_near_settled`). Carries no
     /// `near_tx`: the contract cannot observe its own receipt id on-chain, so the indexer
@@ -71,6 +80,13 @@ pub enum PurserEvent {
     /// Owner added recipients to a task's payee allowlist (Prompt 4; refined in Prompt 5).
     #[event_version("1.0.0")]
     RecipientAllowlistSet {
+        task_id: TaskId,
+        recipients: Vec<String>,
+    },
+    /// Owner removed recipients from a task's payee allowlist (honest revocation of a payee).
+    /// Idempotent: lists the recipients the owner requested removed, whether or not each was present.
+    #[event_version("1.0.0")]
+    RecipientAllowlistRemoved {
         task_id: TaskId,
         recipients: Vec<String>,
     },
