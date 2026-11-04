@@ -31,8 +31,8 @@ pub use error::{
     MSG_DELEGATE_EXISTS, MSG_DELEGATE_NOT_AUTHORIZED, MSG_EXCEEDS_BUDGET, MSG_INVALID_PATH,
     MSG_INVALID_RECIPIENT, MSG_INVALID_REQUEST_ID, MSG_INVALID_TASK_ID, MSG_IN_FLIGHT,
     MSG_MEMO_TOO_LONG, MSG_NOT_RECONCILABLE, MSG_NO_SUCH_COMMITMENT, MSG_NO_SUCH_DELEGATE,
-    MSG_NO_SUCH_TASK, MSG_ONLY_OWNER, MSG_RECIPIENT_NOT_ALLOWED, MSG_TASK_EXISTS,
-    MSG_UNSUPPORTED_CHAIN, MSG_UNSUPPORTED_TOKEN, MSG_ZERO_AMOUNT,
+    MSG_NO_SUCH_TASK, MSG_ONLY_OWNER, MSG_RECIPIENT_NOT_ALLOWED, MSG_REQUEST_ID_REUSED,
+    MSG_TASK_EXISTS, MSG_UNSUPPORTED_CHAIN, MSG_UNSUPPORTED_TOKEN, MSG_ZERO_AMOUNT,
 };
 pub use events::PurserEvent;
 pub use idempotency::{classify, IdemDecision};
@@ -403,7 +403,19 @@ impl Purser {
         // (b) IDEMPOTENCY (tri-state, synchronous), namespaced by (predecessor, request_id).
         let idem_key = (caller.clone(), request_id.clone());
         match classify(self.idempotency.get(&idem_key)) {
-            IdemDecision::Replay { commitment_id } => return PromiseOrValue::Value(commitment_id),
+            IdemDecision::Replay { commitment_id } => {
+                // A replay must be the SAME request. Returning the prior cid for a different task
+                // or intent would report success for a payment that never happened.
+                let prior = self
+                    .commitments
+                    .get(&commitment_id)
+                    .expect("a Committed idempotency entry names an existing commitment");
+                require!(
+                    prior.task == task && prior.intent == intent,
+                    MSG_REQUEST_ID_REUSED
+                );
+                return PromiseOrValue::Value(commitment_id);
+            }
             IdemDecision::InFlight => env::panic_str(MSG_IN_FLIGHT),
             IdemDecision::AlreadyFailed => env::panic_str(MSG_ALREADY_FAILED),
             IdemDecision::Fresh => {}

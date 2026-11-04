@@ -375,6 +375,30 @@ async fn wrong_token_intent_rejected() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// A retry must replay the SAME request: an identical retry returns the prior cid with no second
+/// transfer, but reusing a settled `request_id` for a different intent is refused instead of
+/// reporting the earlier payment as this one's success.
+#[tokio::test]
+async fn replay_with_a_different_intent_is_refused() -> anyhow::Result<()> {
+    let (_w, c, _owner, delegate, recipient) = setup().await?;
+    let first = propose(&delegate, &c, &recipient, "400000", "r1").await?;
+    assert!(first.is_success(), "{:?}", first.failures());
+    let cid: u64 = first.json()?;
+    let before = recipient.view_account().await?.balance;
+
+    let other = propose(&delegate, &c, &recipient, "300000", "r1").await?;
+    assert!(err_string(other).contains(purser_contract::MSG_REQUEST_ID_REUSED));
+
+    let same = propose(&delegate, &c, &recipient, "400000", "r1").await?;
+    assert!(same.is_success(), "{:?}", same.failures());
+    assert_eq!(same.json::<u64>()?, cid);
+    assert_eq!(recipient.view_account().await?.balance, before);
+    let task = view_json(&c, "get_task", json!({ "task_id": "t1" })).await?;
+    assert_eq!(task["completed"], "400000");
+    assert_eq!(task["outstanding"], "0");
+    Ok(())
+}
+
 /// Honest revocation of a payee: after the owner removes a previously-allowlisted recipient, a
 /// payment to it is refused deny-by-default, the budget is untouched, and no commitment is burned.
 #[tokio::test]

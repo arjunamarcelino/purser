@@ -59,6 +59,8 @@ pub const MSG_INVALID_REQUEST_ID: &str = "invalid request_id";
 pub const MSG_RECIPIENT_NOT_ALLOWED: &str = "recipient not allowlisted";
 pub const MSG_NO_SUCH_COMMITMENT: &str = "no such commitment";
 pub const MSG_NOT_RECONCILABLE: &str = "not reconcilable";
+// A retry must replay the SAME request (task + intent); a settled request_id is never reused.
+pub const MSG_REQUEST_ID_REUSED: &str = "request_id reused with a different request";
 
 /// Why an accounting, state-machine, or payload-validation operation refused.
 ///
@@ -152,5 +154,9 @@ mod tests {
         assert_eq!(MSG_RECIPIENT_NOT_ALLOWED, "recipient not allowlisted");
         assert_eq!(MSG_NO_SUCH_COMMITMENT, "no such commitment");
         assert_eq!(MSG_NOT_RECONCILABLE, "not reconcilable");
+        assert_eq!(
+            MSG_REQUEST_ID_REUSED,
+            "request_id reused with a different request"
+        );
     }
 }
