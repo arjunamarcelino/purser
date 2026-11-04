@@ -25,9 +25,11 @@ jobs:
           workspaces: contract
       - run: cargo fmt --all -- --check
       - run: cargo clippy --all-targets -- -D warnings
-      - run: cargo test
+      # Installed BEFORE `cargo test`: the near-workspaces suites compile the contract via
+      # `compile_project`, which spawns the `cargo near` CLI from PATH.
       - name: Install cargo-near (official prebuilt binary — avoids a source build of hidapi/libudev)
         run: curl --proto '=https' --tlsv1.2 -LsSf https://github.com/near/cargo-near/releases/download/cargo-near-v0.22.0/cargo-near-installer.sh | sh
+      - run: cargo test
       - run: cargo near build non-reproducible-wasm   # also emits target/near/*_abi.json
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
