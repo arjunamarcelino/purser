@@ -17,9 +17,8 @@
 //!
 //! The anchor is an INTEGRITY/AUDIT artifact, not a signature: a NEAR-native transfer is authorized
 //! by issuing a `Promise`, not by signing a hash. The domain tag + `version` are a re-derivation /
-//! versioning signal, not a security boundary. `intent.chain` selects HOW the hash re-derives:
-//! NEAR-native = this sha256 scheme; EVM (Prompt 12) = un-prefixed `keccak256(RLP(tx))`. The EVM
-//! signing digest must build its OWN replay-safe preimage — do not copy this one blindly.
+//! versioning signal, not a security boundary. How the hash re-derives is chain-dependent — the
+//! `Commitment.payload_hash` doc ([`crate::types`]) is the single source for that per-chain contract.
 //!
 //! [`NearPayload`] is a transient return value; it is never stored and carries no Borsh-freeze
 //! obligation. `amount > 0` is deliberately NOT checked here — [`crate::budget::try_reserve`] is the
@@ -34,9 +33,16 @@ use near_sdk::AccountId;
 /// schema version is the `u16` first borsh field, not this string.
 pub const PAYLOAD_DOMAIN: [u8; 32] = *b"purser.near-native.transfer\0\0\0\0\0";
 
-/// Canonical preimage schema version — the FIRST borsh field. Bump on ANY encoding change
-/// (field add/reorder, type change); never silently change `v1`, or previously-stored
-/// `payload_hash` values stop re-deriving.
+/// Canonical preimage schema version — the FIRST borsh field, and the authoritative scheme signal
+/// (fetchable off-chain via [`crate::Purser::payload_scheme`]). Bump on ANY encoding change (field
+/// add/reorder, type change); never silently change `v1`, or previously-stored `payload_hash`
+/// values stop re-deriving. OBLIGATION ON BUMP: from the first bump, persist the version in effect
+/// per-commitment (so historical anchors stay re-derivable); until then every commitment is `v1`.
+///
+/// The re-derivation contract treats `recipient` as a borsh `String` — NEAR `AccountId` has the
+/// same Borsh layout as `String` today. The `canonical_bytes_..._match_the_wire_layout` unit test
+/// is LOAD-BEARING for off-chain verifiers: it pins that layout, so an SDK change to `AccountId`'s
+/// Borsh repr fails CI there before it can silently break re-derivation.
 pub const PAYLOAD_VERSION: u16 = 1;
 
 /// The validated, contract-constructed NEAR-native payload: the parsed recipient. The signing /
@@ -85,6 +91,13 @@ pub fn build_near_payload(
 /// determinism-safe. Borsh wire layout (the off-chain re-derivation contract): `u16` = 2B LE,
 /// `String`/`AccountId` = u32-LE length + UTF-8, `u64` = 8B LE, `u128` = 16B LE; tuple fields in
 /// order, no padding/prefix.
+///
+/// SCOPE: the anchor attests the executed action + its identity (`recipient`, `amount_yocto`,
+/// `task`, `commitment_id`) — it does NOT attest `token` (validated constant `NearNative` here),
+/// the proposing `delegate`, or `memo` (a native transfer carries none); read those from the
+/// `Commitment`, not the hash. Keep the preimage PRIMITIVES-ONLY (no enum/map) if it is ever
+/// extended: borsh over primitives + length-prefixed strings is the determinism guarantee the
+/// infallible `to_writer` below relies on.
 pub fn canonical_payload_bytes(
     task: &TaskId,
     commitment_id: CommitmentId,
