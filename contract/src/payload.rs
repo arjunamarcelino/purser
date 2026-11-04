@@ -26,7 +26,7 @@
 //! single zero-amount authority.
 
 use crate::error::PurserError;
-use crate::types::{Chain, PaymentIntent, TokenSpec};
+use crate::types::{Chain, CommitmentId, PaymentIntent, TaskId, TokenSpec};
 use near_sdk::AccountId;
 
 /// Fixed-length (32-byte) domain tag. Fixed WIDTH removes any tag/payload boundary ambiguity (an
@@ -86,8 +86,8 @@ pub fn build_near_payload(
 /// `String`/`AccountId` = u32-LE length + UTF-8, `u64` = 8B LE, `u128` = 16B LE; tuple fields in
 /// order, no padding/prefix.
 pub fn canonical_payload_bytes(
-    task: &str,
-    commitment_id: u64,
+    task: &TaskId,
+    commitment_id: CommitmentId,
     recipient: &AccountId,
     amount_yocto: u128,
 ) -> Vec<u8> {
@@ -247,6 +247,10 @@ mod tests {
         s.parse().unwrap()
     }
 
+    fn tid(s: &str) -> TaskId {
+        s.to_string()
+    }
+
     /// Independently hand-assemble the borsh wire layout (the off-chain re-derivation contract) so
     /// any drift in field order / endianness / length-prefixing fails here — a pure golden vector.
     fn hand_assembled_body(
@@ -269,7 +273,7 @@ mod tests {
 
     #[test]
     fn canonical_bytes_are_domain_prefixed_and_match_the_wire_layout() {
-        let got = canonical_payload_bytes("t1", 0, &acct("alice.near"), 100);
+        let got = canonical_payload_bytes(&tid("t1"), 0, &acct("alice.near"), 100);
         let mut expected = PAYLOAD_DOMAIN.to_vec();
         expected.extend_from_slice(&hand_assembled_body(
             PAYLOAD_VERSION,
@@ -288,25 +292,25 @@ mod tests {
 
     #[test]
     fn canonical_bytes_change_with_each_bound_field() {
-        let base = canonical_payload_bytes("t1", 7, &acct("alice.near"), 42);
+        let base = canonical_payload_bytes(&tid("t1"), 7, &acct("alice.near"), 42);
         assert_ne!(
             base,
-            canonical_payload_bytes("t2", 7, &acct("alice.near"), 42),
+            canonical_payload_bytes(&tid("t2"), 7, &acct("alice.near"), 42),
             "task"
         );
         assert_ne!(
             base,
-            canonical_payload_bytes("t1", 8, &acct("alice.near"), 42),
+            canonical_payload_bytes(&tid("t1"), 8, &acct("alice.near"), 42),
             "commitment_id"
         );
         assert_ne!(
             base,
-            canonical_payload_bytes("t1", 7, &acct("bob.near"), 42),
+            canonical_payload_bytes(&tid("t1"), 7, &acct("bob.near"), 42),
             "recipient"
         );
         assert_ne!(
             base,
-            canonical_payload_bytes("t1", 7, &acct("alice.near"), 43),
+            canonical_payload_bytes(&tid("t1"), 7, &acct("alice.near"), 43),
             "amount"
         );
     }
