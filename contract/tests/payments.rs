@@ -240,13 +240,15 @@ async fn swapped_recipient_is_rejected_and_budget_unchanged() -> anyhow::Result<
 /// `env::sha256_array`: in this test binary (the `unit-testing` feature is on) that routes through
 /// the SDK mock, so it would not be an independent oracle.
 fn rederive_payload_hash(
+    domain: &[u8],
+    version: u16,
     task: &str,
     commitment_id: u64,
     recipient: &str,
     amount_yocto: u128,
 ) -> [u8; 32] {
-    let mut preimage = purser_contract::PAYLOAD_DOMAIN.to_vec();
-    preimage.extend_from_slice(&purser_contract::PAYLOAD_VERSION.to_le_bytes()); // u16 LE
+    let mut preimage = domain.to_vec();
+    preimage.extend_from_slice(&version.to_le_bytes()); // u16 LE
     preimage.extend_from_slice(&(task.len() as u32).to_le_bytes()); // String: u32 LE len
     preimage.extend_from_slice(task.as_bytes()); //         + UTF-8
     preimage.extend_from_slice(&commitment_id.to_le_bytes()); // u64 LE
@@ -254,6 +256,15 @@ fn rederive_payload_hash(
     preimage.extend_from_slice(recipient.as_bytes());
     preimage.extend_from_slice(&amount_yocto.to_le_bytes()); // u128 LE
     Sha256::digest(&preimage).into()
+}
+
+/// Minimal hex decoder so the view-driven re-derivation test uses ZERO repo constants — exactly
+/// what a non-Rust client has.
+fn hex_decode(s: &str) -> Vec<u8> {
+    (0..s.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap())
+        .collect()
 }
 
 /// "Sign only what you can read": the contract records a per-spend `payload_hash` that an external
@@ -272,11 +283,13 @@ async fn payload_hash_recorded_and_independently_rederivable() -> anyhow::Result
     let got: [u8; 32] = serde_json::from_value(cmt["payload_hash"].clone())
         .expect("payload_hash must be a recorded 32-byte array, not null");
 
-    // Independent oracle: sha2 crate over the hand-assembled borsh preimage.
+    // Independent oracle: sha2 crate over the hand-assembled borsh preimage, scheme from the Rust consts.
     let rcpt = recipient.id().as_str();
+    let domain = &purser_contract::PAYLOAD_DOMAIN;
+    let version = purser_contract::PAYLOAD_VERSION;
     assert_eq!(
         got,
-        rederive_payload_hash("t1", 0, rcpt, 400_000),
+        rederive_payload_hash(domain, version, "t1", 0, rcpt, 400_000),
         "on-chain payload_hash is not independently re-derivable (tamper-evidence broken)"
     );
 
@@ -284,7 +297,37 @@ async fn payload_hash_recorded_and_independently_rederivable() -> anyhow::Result
     // parsing is validate-only — no normalization — so the stored string and the parsed account agree).
     let stored_raw = cmt["intent"]["recipient"].as_str().unwrap();
     assert_eq!(stored_raw, rcpt);
-    assert_eq!(rederive_payload_hash("t1", 0, stored_raw, 400_000), got);
+    assert_eq!(
+        rederive_payload_hash(domain, version, "t1", 0, stored_raw, 400_000),
+        got
+    );
+    Ok(())
+}
+
+/// P2-3: a NON-Rust client can re-derive `payload_hash` using ONLY the `payload_scheme()` view +
+/// the commitment — no repo constants. Proves the scheme is reachable off-chain at runtime.
+#[tokio::test]
+async fn payload_scheme_view_lets_a_nonrust_client_rederive() -> anyhow::Result<()> {
+    let (_w, c, _owner, delegate, recipient) = setup().await?;
+    propose(&delegate, &c, &recipient, "400000", "r1")
+        .await?
+        .into_result()?;
+
+    // Fetch the scheme the way a TS/Python verifier would — from the deployed contract, not source.
+    let scheme = view_json(&c, "payload_scheme", json!({})).await?;
+    assert_eq!(scheme["hash"], "sha256");
+    assert_eq!(scheme["encoding"], "borsh");
+    let domain = hex_decode(scheme["domain_hex"].as_str().unwrap());
+    assert_eq!(domain.len(), 32, "domain must be the fixed 32-byte tag");
+    let version = scheme["version"].as_u64().unwrap() as u16;
+
+    let cmt = view_json(&c, "get_commitment", json!({ "commitment_id": 0 })).await?;
+    let got: [u8; 32] = serde_json::from_value(cmt["payload_hash"].clone()).unwrap();
+    assert_eq!(
+        got,
+        rederive_payload_hash(&domain, version, "t1", 0, recipient.id().as_str(), 400_000),
+        "scheme view is insufficient to re-derive the on-chain payload_hash"
+    );
     Ok(())
 }
 

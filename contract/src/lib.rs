@@ -112,6 +112,24 @@ pub struct Purser {
     allowlist: LookupMap<(TaskId, AccountId), bool>,
 }
 
+/// The NEAR-native `payload_hash` scheme, surfaced by [`Purser::payload_scheme`] so a NON-Rust
+/// verifier (TS indexer / dashboard / judge) can fetch it at runtime instead of copying constants
+/// out of the repo. Re-derive a NEAR-native commitment's hash as:
+/// `sha256( domain || borsh(version:u16, task:String, commitment_id:u64, recipient:String(AccountId), amount_yocto:u128) )`
+/// where `domain` is the 32 bytes of `domain_hex`. JSON-only (view DTO) — never stored, no freeze.
+#[near(serializers = [json])]
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct PayloadScheme {
+    /// Hex of the fixed 32-byte `PAYLOAD_DOMAIN` prefix.
+    pub domain_hex: String,
+    /// The authoritative schema version (the first borsh field of the preimage).
+    pub version: u16,
+    /// Digest algorithm for the NEAR-native path.
+    pub hash: String,
+    /// Preimage encoding of the body following the domain prefix.
+    pub encoding: String,
+}
+
 #[near]
 impl Purser {
     /// Initialize the contract.
@@ -136,6 +154,19 @@ impl Purser {
     /// Crate version — a trivial view to confirm the contract is live.
     pub fn version(&self) -> String {
         env!("CARGO_PKG_VERSION").to_string()
+    }
+
+    /// The NEAR-native `payload_hash` scheme (domain, version, algorithm, encoding), so an
+    /// off-chain verifier in ANY language can re-derive `Commitment.payload_hash` without reading
+    /// the Rust source. See [`PayloadScheme`] for the exact re-derivation formula. Constant per
+    /// deploy; `version` bumps only when the preimage encoding changes.
+    pub fn payload_scheme(&self) -> PayloadScheme {
+        PayloadScheme {
+            domain_hex: PAYLOAD_DOMAIN.iter().map(|b| format!("{b:02x}")).collect(),
+            version: PAYLOAD_VERSION,
+            hash: "sha256".to_string(),
+            encoding: "borsh".to_string(),
+        }
     }
 
     // ---- owner-gated control plane (APP-FLOW §3, §4, §9) -----------------------
