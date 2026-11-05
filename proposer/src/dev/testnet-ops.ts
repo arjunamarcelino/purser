@@ -6,6 +6,9 @@
 //   node testnet-ops.ts chain-id                <rpc>
 //   node testnet-ops.ts account-exists          <rpc> <account>
 //   node testnet-ops.ts code-matches            <rpc> <account> <wasm>
+//   node testnet-ops.ts has-code                <rpc> <account>
+//   node testnet-ops.ts balance                 <rpc> <account>     (whole NEAR, rounded down)
+//   node testnet-ops.ts can-fund                <rpc> <account> <cap-near>  (spendable after storage stake covers ~cap)
 //   node testnet-ops.ts keygen                  <secret-file>
 //   node testnet-ops.ts pubkey                  <secret-file>
 //   node testnet-ops.ts verify-fc-key           <rpc> <account> <public-key> <contract> <min-allowance-near>
@@ -73,6 +76,34 @@ async function run(): Promise<void> {
       const local = base58(createHash("sha256").update(readFileSync(wasm!)).digest());
       const view = await (await testnet(rpc!)).viewAccount({ accountId: account! });
       console.log(view.code_hash === local ? "yes" : "no");
+      return;
+    }
+    case "has-code": {
+      const [rpc, account] = need(2);
+      const view = await (await testnet(rpc!)).viewAccount({ accountId: account! });
+      console.log(view.code_hash === "11111111111111111111111111111111" ? "no" : "yes");
+      return;
+    }
+    case "balance": {
+      const [rpc, account] = need(2);
+      const view = await (await testnet(rpc!)).viewAccount({ accountId: account! });
+      console.log((BigInt(view.amount) / 10n ** 24n).toString());
+      return;
+    }
+    case "can-fund": {
+      // Storage stake is locked (10^19 yocto per byte), so total balance overstates what can be paid out.
+      const [rpc, account, cap] = need(3);
+      const view = await (await testnet(rpc!)).viewAccount({ accountId: account! });
+      const spendable = BigInt(view.amount) - BigInt(view.storage_usage) * 10n ** 19n;
+      const [w = "0", f = ""] = cap!.split(".");
+      const capYocto = BigInt(w) * 10n ** 24n + BigInt(f.padEnd(24, "0"));
+      const needYocto = (capYocto * 9n) / 10n + 5n * 10n ** 22n; // 90 units paid out, plus task storage and slack
+      const fmt = (y: bigint) => (Number(y / 10n ** 21n) / 1000).toFixed(3);
+      if (spendable < needYocto) {
+        console.log(`no: ${account} has ${fmt(spendable < 0n ? 0n : spendable)} NEAR spendable, a run needs ${fmt(needYocto)}`);
+        return;
+      }
+      console.log("yes");
       return;
     }
     case "keygen": {
