@@ -1,0 +1,27 @@
+{
+  "name": "@purser/relayer",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Stateless EVM relayer: broadcasts contract-signed Sepolia transactions and attests their finalized outcome. Holds no EVM key; the contract is the queue.",
+  "bin": {
+    "relayer": "./src/cli.ts"
+  },
+  "scripts": {
+    "relay": "node --env-file-if-exists=../.env --env-file-if-exists=../.env.testnet src/cli.ts relay",
+    "cli": "node --env-file-if-exists=../.env --env-file-if-exists=../.env.testnet src/cli.ts",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run --project unit",
+    "test:sandbox": "vitest run --project sandbox --passWithNoTests"
+  },
+  "dependencies": {
+    "@purser/chain-read": "workspace:*",
+    "@purser/types": "workspace:*",
+    "near-api-js": "7.4.0",
+    "viem": "2.57.13",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "vitest": "5.0.5"
+  }
+}

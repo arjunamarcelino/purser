@@ -2,7 +2,7 @@
         contract-build contract-build-release contract-test contract-fmt contract-lint prove \
         ts-install ts-lint ts-test ts-test-sandbox types-gen crew board \
         indexer-poll indexer-serve indexer-counts \
-        deploy-testnet demo metrics hooks evm-spike
+        deploy-testnet demo metrics hooks evm-spike relayer
 
 # Aggregate targets: the contract plus the TS workspace (packages/*, proposer).
 build: contract-build
@@ -36,6 +36,9 @@ types-gen: contract-build ts-install ; pnpm --filter @purser/types run gen
 ts-test-sandbox: contract-build ts-install
 	NEAR_SANDBOX_BIN_PATH="$$(scripts/sandbox-bin.sh)" pnpm --filter @purser/proposer run test:sandbox
 	NEAR_SANDBOX_BIN_PATH="$$(scripts/sandbox-bin.sh)" pnpm --filter @purser/indexer run test:sandbox
+
+# The EVM relayer loop (Sepolia; reads EVM_PURSER_CONTRACT_ID, RELAYER_*, EVM_RPC_URL* from .env/.env.testnet). Stateless: restart freely.
+relayer: ts-install ; pnpm --filter @purser/relayer run relay
 
 # The operator board (http://127.0.0.1:5173), with the localhost companion for the demo buttons.
 board: ts-install ; pnpm --filter @purser/app dev
