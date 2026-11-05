@@ -38,8 +38,8 @@ pub use error::{
 pub use events::PurserEvent;
 pub use idempotency::{classify, IdemDecision};
 pub use payload::{
-    build_near_payload, canonical_payload_bytes, NearPayload, PAYLOAD_CHAIN_TAG, PAYLOAD_DOMAIN,
-    PAYLOAD_ENCODING, PAYLOAD_HASH_ALG, PAYLOAD_PREIMAGE_SPEC, PAYLOAD_VERSION,
+    build_near_payload, canonical_payload_bytes, same_request, NearPayload, PAYLOAD_CHAIN_TAG,
+    PAYLOAD_DOMAIN, PAYLOAD_ENCODING, PAYLOAD_HASH_ALG, PAYLOAD_PREIMAGE_SPEC, PAYLOAD_VERSION,
 };
 pub use reservation::{transition, Event};
 pub use types::{
@@ -449,7 +449,7 @@ impl Purser {
                     .get(&commitment_id)
                     .expect("a Committed idempotency entry names an existing commitment");
                 require!(
-                    prior.task == task && prior.intent == intent,
+                    prior.task == task && same_request(&prior.intent, &intent),
                     MSG_REQUEST_ID_REUSED
                 );
                 return PromiseOrValue::Value(commitment_id);
