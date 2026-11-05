@@ -46,6 +46,34 @@ pub fn assert_invariant(b: &TaskBudget) {
     );
 }
 
+/// The invariant (I) verdict on the stored aggregates, as data rather than a panic.
+/// Produced by [`invariant_report`]; the `invariant` view wraps it for the dashboard.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct InvariantReport {
+    /// `completed + outstanding`. If that sum overflows `u128` (unreachable under (I), since
+    /// `cap <= u128::MAX`), this is `NearToken::MAX`: the true sum is larger still, so `MAX` is
+    /// the closest representable lower bound, and `holds` is `false`.
+    pub used: NearToken,
+    /// `completed + outstanding <= cap` (computed without saturation, so an overflow is `false`).
+    pub holds: bool,
+}
+
+/// The non-panicking twin of [`assert_invariant`]: report whether (I) holds instead of
+/// asserting it. Pure, total, and infallible, so a read-only view can call it on any stored
+/// budget. `checked_add` overflow reports `holds = false` (see [`InvariantReport::used`]).
+pub fn invariant_report(b: &TaskBudget) -> InvariantReport {
+    match b.completed.checked_add(b.outstanding) {
+        Some(used) => InvariantReport {
+            used,
+            holds: used <= b.cap,
+        },
+        None => InvariantReport {
+            used: NearToken::MAX,
+            holds: false,
+        },
+    }
+}
+
 /// Unspent headroom: `cap - (completed + outstanding)`, floored at `ZERO`. Pure,
 /// total, and infallible — safe to call from a read-only view (it never panics even
 /// if a future edit broke invariant (I)). The single source of the "remaining"
@@ -407,6 +435,44 @@ mod tests {
         // Defensive: even a (should-be-unreachable) breach floors at ZERO, never panics.
         b.outstanding = yocto(81);
         assert_eq!(remaining(&b), NearToken::ZERO);
+    }
+
+    #[test]
+    fn invariant_report_holds_up_to_and_at_the_cap() {
+        let mut b = budget(100);
+        let r = invariant_report(&b);
+        assert_eq!(r.used, NearToken::ZERO);
+        assert!(r.holds);
+        b.completed = yocto(60);
+        b.outstanding = yocto(40); // used == cap: the boundary still holds
+        let r = invariant_report(&b);
+        assert_eq!(r.used, yocto(100));
+        assert!(r.holds);
+    }
+
+    #[test]
+    fn invariant_report_flags_over_cap_without_panicking() {
+        // The frozen-task shape: a contradicted reconcile recorded a spend past the cap.
+        let mut b = budget(100);
+        b.completed = yocto(90);
+        b.outstanding = yocto(11);
+        b.frozen = true;
+        let r = invariant_report(&b);
+        assert_eq!(r.used, yocto(101));
+        assert!(!r.holds);
+    }
+
+    #[test]
+    fn invariant_report_overflow_is_false_not_a_panic() {
+        let mut b = budget(u128::MAX);
+        b.completed = NearToken::MAX;
+        b.outstanding = yocto(1);
+        let r = invariant_report(&b);
+        assert_eq!(r.used, NearToken::MAX);
+        assert!(
+            !r.holds,
+            "an overflowing sum must not read as holding, even at cap == MAX"
+        );
     }
 
     #[test]

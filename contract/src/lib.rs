@@ -24,8 +24,8 @@ mod reservation;
 mod types;
 
 pub use budget::{
-    assert_invariant, authorize, cancel, mark_unknown, record_contradicted_spend, release_failed,
-    remaining, settle_confirmed, try_reserve,
+    assert_invariant, authorize, cancel, invariant_report, mark_unknown, record_contradicted_spend,
+    release_failed, remaining, settle_confirmed, try_reserve, InvariantReport,
 };
 pub use error::{
     PurserError, MSG_ALREADY_FAILED, MSG_CAP_POSITIVE, MSG_CREW_CAP_MIN, MSG_CREW_CAP_REACHED,
@@ -190,6 +190,23 @@ pub struct Config {
     pub max_memo_len: u32,
     /// Max byte length of a `task_id`.
     pub max_task_id_len: u32,
+}
+
+/// The contract's own verdict on safety invariant (I) `completed + outstanding <= cap` for one
+/// task, surfaced by [`Purser::invariant`]. JSON-only (view DTO) — never stored, no Borsh-freeze
+/// obligation. `used` is `completed + outstanding`; if that sum would overflow `u128` (unreachable
+/// under (I)) it reads `NearToken::MAX` and `holds` is `false` — see [`InvariantReport`].
+#[near(serializers = [json])]
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct InvariantView {
+    pub cap: NearToken,
+    pub completed: NearToken,
+    pub outstanding: NearToken,
+    pub used: NearToken,
+    /// `completed + outstanding <= cap`, computed by the contract (not the client).
+    pub holds: bool,
+    /// Mirrors `TaskBudget.frozen`: the only state in which `holds` may legitimately be `false`.
+    pub frozen: bool,
 }
 
 #[near]
@@ -841,6 +858,29 @@ impl Purser {
             .get(&task_id)
             .map(remaining)
             .unwrap_or(NearToken::ZERO)
+    }
+
+    /// The CONTRACT's own verdict on invariant (I) `completed + outstanding <= cap` for a task,
+    /// or `None` if the task is unknown. The dashboard shows this instead of re-deriving the sum
+    /// client-side. Never panics on stored data ([`budget::invariant_report`] is total).
+    ///
+    /// `holds` is `true` for every task reachable through normal operation. The one legitimate
+    /// `holds: false` is a FROZEN task: an owner `reconcile(false)` was contradicted by a
+    /// settlement proving the transfer landed, and recording that real spend pushed the task over
+    /// its cap (the task then refuses every new proposal). That is the dashboard's one true-red
+    /// case; `holds: false` with `frozen: false` would mean a contract bug.
+    pub fn invariant(&self, task_id: TaskId) -> Option<InvariantView> {
+        self.tasks.get(&task_id).map(|b| {
+            let report = invariant_report(b);
+            InvariantView {
+                cap: b.cap,
+                completed: b.completed,
+                outstanding: b.outstanding,
+                used: report.used,
+                holds: report.holds,
+                frozen: b.frozen,
+            }
+        })
     }
 
     /// A page of a task's delegates (active and revoked), for the dashboard crew view —

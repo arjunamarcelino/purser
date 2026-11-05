@@ -200,6 +200,47 @@ async fn over_budget_payment_refused_and_budget_unchanged() -> anyhow::Result<()
     Ok(())
 }
 
+/// The `invariant` view is the contract's own verdict on `completed + outstanding <= cap`: it
+/// holds after a legit payment (aggregates matching `get_task`), is unchanged by an over-budget
+/// refusal, and is `null` for an unknown task.
+#[tokio::test]
+async fn invariant_view_reports_the_contract_verdict() -> anyhow::Result<()> {
+    let (_w, c, _owner, delegate, recipient) = setup().await?;
+
+    let res = propose(&delegate, &c, &recipient, "400000", "r1").await?;
+    assert!(
+        res.is_success(),
+        "propose_payment failed: {:?}",
+        res.failures()
+    );
+
+    let inv = view_json(&c, "invariant", json!({ "task_id": "t1" })).await?;
+    let task = view_json(&c, "get_task", json!({ "task_id": "t1" })).await?;
+    assert_eq!(inv["holds"], true);
+    assert_eq!(inv["frozen"], false);
+    assert_eq!(inv["cap"], task["cap"]);
+    assert_eq!(inv["completed"], task["completed"]);
+    assert_eq!(inv["outstanding"], task["outstanding"]);
+    assert_eq!(inv["completed"], "400000");
+    assert_eq!(inv["outstanding"], "0");
+    assert_eq!(inv["used"], "400000");
+
+    // 600_001 > remaining 600_000: refused, and the verdict is byte-for-byte unchanged.
+    let res = propose(&delegate, &c, &recipient, "600001", "r2").await?;
+    assert!(res.is_failure());
+    assert!(err_string(res).contains(purser_contract::MSG_EXCEEDS_BUDGET));
+    let after = view_json(&c, "invariant", json!({ "task_id": "t1" })).await?;
+    assert_eq!(
+        after, inv,
+        "an over-budget refusal changed the invariant view"
+    );
+
+    let unknown = view_json(&c, "invariant", json!({ "task_id": "nope" })).await?;
+    assert_eq!(unknown, serde_json::Value::Null);
+
+    Ok(())
+}
+
 /// Fail-closed recipient confinement (APP-FLOW §8 Flow F — tampered/swapped recipient): a
 /// within-budget payment to an account that is NOT on the allowlist is refused deny-by-default,
 /// the budget is byte-for-byte untouched, and no commitment is created. This is the representative
