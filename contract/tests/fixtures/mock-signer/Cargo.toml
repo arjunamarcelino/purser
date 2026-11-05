@@ -1,0 +1,36 @@
+# TEST-ONLY fixture mimicking the MPC signer v1.signer-prod.testnet 3.18.0 for the Purser EVM suite.
+# NEVER deploy it anywhere but a near-workspaces sandbox: its root key is a public, fake constant.
+[package]
+name = "mock-signer"
+version = "0.0.0"
+edition = "2021"
+rust-version = "1.95"
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+near-sdk = "=5.30.0"   # lock-step with contract/Cargo.toml
+# k256 lives ONLY in this fixture, never in the shipped contract. No default features: no getrandom/OS rng
+# (RFC 6979 signing is deterministic), which keeps the wasm free of unsupported host imports.
+k256 = { version = "=0.13.4", default-features = false, features = ["arithmetic", "ecdsa"] }
+sha3 = { version = "=0.10.9", default-features = false }
+
+[dev-dependencies]
+near-sdk = { version = "=5.30.0", features = ["unit-testing", "unstable"] }   # unit-testing satisfies near-sdk's host-build cfg guard; unstable exposes env::ecrecover for the tests
+
+[lints.rust.unexpected_cfgs]
+level = "warn"
+check-cfg = ['cfg(near)']
+
+[profile.release]
+codegen-units = 1
+opt-level = "z"
+lto = true
+debug = false
+panic = "abort"
+overflow-checks = true
+
+# Standalone: never part of any parent workspace.
+[workspace]
