@@ -25,40 +25,71 @@ pub fn units(n: u128) -> String {
 
 // ---- artifacts ----------------------------------------------------------------------------------
 
-pub struct Wasms {
-    /// The production contract: default features, exactly what `make build` ships.
-    pub prod: Vec<u8>,
-    /// The test-only `fault-injection` build (settlement callback always dies).
-    pub fault: Vec<u8>,
-    /// The race-driver fan-out fixture.
-    pub driver: Vec<u8>,
+/// One built artifact. A path in its env var (CI builds the wasms once and passes them in) wins;
+/// otherwise it is built on first use. Builds never overlap: they share one lock.
+struct Artifact {
+    env: &'static str,
+    manifest: &'static str,
+    features: Option<&'static str>,
+    target_subdir: Option<&'static str>,
+    cell: OnceCell<Vec<u8>>,
 }
 
-static WASMS: OnceCell<Wasms> = OnceCell::const_new();
+static BUILD_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
-/// Build all three artifacts once per test binary, one after another (never concurrently), with
-/// absolute paths and `--locked`. The fault and driver builds use their own target dirs under
-/// `contract/target`, so they never thrash the production build's fingerprints.
-pub async fn wasms() -> &'static Wasms {
-    WASMS
-        .get_or_init(|| async {
-            tokio::task::spawn_blocking(|| Wasms {
-                prod: build_wasm("Cargo.toml", None, None),
-                fault: build_wasm(
-                    "Cargo.toml",
-                    Some("fault-injection"),
-                    Some("fault-injection"),
-                ),
-                driver: build_wasm(
-                    "tests/fixtures/race-driver/Cargo.toml",
-                    None,
-                    Some("race-driver"),
-                ),
+/// The production contract: default features, exactly what `make build` ships.
+static PROD: Artifact = Artifact {
+    env: "PURSER_WASM_PROD",
+    manifest: "Cargo.toml",
+    features: None,
+    target_subdir: None,
+    cell: OnceCell::const_new(),
+};
+/// The test-only `fault-injection` build (settlement callback always dies). Its own target dir
+/// under `contract/target`, so it never thrashes the production build's fingerprints.
+static FAULT: Artifact = Artifact {
+    env: "PURSER_WASM_FAULT",
+    manifest: "Cargo.toml",
+    features: Some("fault-injection"),
+    target_subdir: Some("fault-injection"),
+    cell: OnceCell::const_new(),
+};
+/// The race-driver fan-out fixture.
+static DRIVER: Artifact = Artifact {
+    env: "PURSER_WASM_DRIVER",
+    manifest: "tests/fixtures/race-driver/Cargo.toml",
+    features: None,
+    target_subdir: Some("race-driver"),
+    cell: OnceCell::const_new(),
+};
+
+pub async fn prod_wasm() -> &'static [u8] {
+    PROD.get().await
+}
+pub async fn fault_wasm() -> &'static [u8] {
+    FAULT.get().await
+}
+pub async fn driver_wasm() -> &'static [u8] {
+    DRIVER.get().await
+}
+
+impl Artifact {
+    async fn get(&'static self) -> &'static [u8] {
+        self.cell
+            .get_or_init(|| async {
+                if let Some(path) = std::env::var_os(self.env) {
+                    return std::fs::read(&path)
+                        .unwrap_or_else(|e| panic!("{}={path:?}: {e}", self.env));
+                }
+                let _serial = BUILD_LOCK.lock().await;
+                tokio::task::spawn_blocking(move || {
+                    build_wasm(self.manifest, self.features, self.target_subdir)
+                })
+                .await
+                .expect("artifact build task")
             })
             .await
-            .expect("artifact build task")
-        })
-        .await
+    }
 }
 
 fn build_wasm(manifest: &str, features: Option<&str>, target_subdir: Option<&str>) -> Vec<u8> {
@@ -143,7 +174,7 @@ pub async fn deploy_driver(
     worker: &Worker<Sandbox>,
     coordinator: &AccountId,
 ) -> anyhow::Result<Contract> {
-    let driver = worker.dev_deploy(&wasms().await.driver).await?;
+    let driver = worker.dev_deploy(driver_wasm().await).await?;
     driver
         .call("new")
         .args_json(json!({ "coordinator": coordinator }))

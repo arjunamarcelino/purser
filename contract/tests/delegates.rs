@@ -12,21 +12,15 @@
 //! constants (the runtime wraps the literal in a "Smart contract panicked: …" envelope),
 //! so the entrypoint and the test share one source of truth and cannot drift.
 
+mod common;
+
 use near_workspaces::network::Sandbox;
 use near_workspaces::{Account, Contract, Worker};
 use serde_json::json;
-use tokio::sync::OnceCell;
 
-// Compile the contract to wasm exactly once, shared across all tests in this binary.
-static WASM: OnceCell<Vec<u8>> = OnceCell::const_new();
-
-async fn wasm() -> &'static Vec<u8> {
-    WASM.get_or_init(|| async {
-        near_workspaces::compile_project(".")
-            .await
-            .expect("compile contract to wasm")
-    })
-    .await
+/// The production wasm, shared with the attack suite (built once, or read from `PURSER_WASM_PROD`).
+async fn wasm() -> &'static [u8] {
+    common::prod_wasm().await
 }
 
 /// Fresh sandbox + deployed, initialized contract. Returns the worker, the contract, an

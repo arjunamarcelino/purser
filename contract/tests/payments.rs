@@ -14,22 +14,16 @@
 //! The genuinely-concurrent / in-flight-retry / replay / revoke / timeout attack suite is Prompt 6.
 //! Refusals are asserted by substring against the canonical `purser_contract::MSG_*` constants.
 
+mod common;
+
 use near_workspaces::network::Sandbox;
 use near_workspaces::{Account, Contract, Worker};
 use serde_json::json;
 use sha2::{Digest, Sha256};
-use tokio::sync::OnceCell;
 
-// Compile the contract to wasm exactly once, shared across all tests in this binary.
-static WASM: OnceCell<Vec<u8>> = OnceCell::const_new();
-
-async fn wasm() -> &'static Vec<u8> {
-    WASM.get_or_init(|| async {
-        near_workspaces::compile_project(".")
-            .await
-            .expect("compile contract to wasm")
-    })
-    .await
+/// The production wasm, shared with the attack suite (built once, or read from `PURSER_WASM_PROD`).
+async fn wasm() -> &'static [u8] {
+    common::prod_wasm().await
 }
 
 /// Fresh sandbox with: a deployed+initialized contract, an `owner`, a registered+active

@@ -94,7 +94,7 @@ async fn case_1_three_delegates_legit_purchases_succeed() -> anyhow::Result<()> 
         w.dev_create_account().await?,
     ];
     let ids: Vec<_> = crew_accts.iter().map(|a| a.id()).collect();
-    let crew = setup(w, &wasms().await.prod, owner, 100, &ids).await?;
+    let crew = setup(w, prod_wasm().await, owner, 100, &ids).await?;
     let before = balance(&crew.merchant).await?;
 
     let mut hashes = std::collections::HashSet::new();
@@ -138,7 +138,7 @@ async fn case_2_concurrent_overbudget_exactly_floor_r_over_a_admitted() -> anyho
         drivers.push(deploy_driver(&w, coordinator.id()).await?);
     }
     let ids: Vec<_> = drivers.iter().map(|d| d.id()).collect();
-    let crew = setup(w, &wasms().await.prod, owner, 100, &ids).await?;
+    let crew = setup(w, prod_wasm().await, owner, 100, &ids).await?;
 
     // Two legit purchases first: 100 -> 40 remaining.
     for (i, d) in drivers[..2].iter().enumerate() {
@@ -208,7 +208,7 @@ async fn case_2c_external_parallel_dispatch_races() -> anyhow::Result<()> {
             w.dev_create_account().await?,
         ];
         let ids: Vec<_> = accts.iter().map(|a| a.id()).collect();
-        let crew = setup(w.clone(), &wasms().await.prod, owner, 100, &ids).await?;
+        let crew = setup(w.clone(), prod_wasm().await, owner, 100, &ids).await?;
         for (i, who) in accts[..2].iter().enumerate() {
             assert!(propose(who, &crew, 30, &format!("pre-{i}"))
                 .await?
@@ -251,7 +251,7 @@ async fn case_3_retry_after_completion_no_duplicate() -> anyhow::Result<()> {
         w.dev_create_account().await?,
     ];
     let ids: Vec<_> = accts.iter().map(|a| a.id()).collect();
-    let crew = setup(w, &wasms().await.prod, owner, 100, &ids).await?;
+    let crew = setup(w, prod_wasm().await, owner, 100, &ids).await?;
     let scout = &accts[0];
 
     let first = propose(scout, &crew, 30, "r1").await?;
@@ -303,7 +303,7 @@ async fn case_4_retry_while_in_flight_returns_in_flight() -> anyhow::Result<()> 
     let w = near_workspaces::sandbox().await?;
     let owner = w.dev_create_account().await?;
     let scout = deploy_driver(&w, &owner.id().clone()).await?;
-    let crew = setup(w, &wasms().await.prod, owner, 100, &[scout.id()]).await?;
+    let crew = setup(w, prod_wasm().await, owner, 100, &[scout.id()]).await?;
     let before = balance(&crew.merchant).await?;
 
     let call = driver_call(
@@ -352,7 +352,7 @@ async fn case_4b_external_in_flight_retry() -> anyhow::Result<()> {
     let w = near_workspaces::sandbox().await?;
     let owner = w.dev_create_account().await?;
     let scout = w.dev_create_account().await?;
-    let crew = setup(w, &wasms().await.prod, owner, 100, &[scout.id()]).await?;
+    let crew = setup(w, prod_wasm().await, owner, 100, &[scout.id()]).await?;
     // Warm the signer's nonce cache first: two concurrent FIRST transactions both fetch the same
     // nonce from RPC and become one byte-identical transaction.
     assert!(propose(&scout, &crew, 10, "warm-up").await?.is_success());
@@ -402,7 +402,7 @@ async fn case_5_tampered_recipient_rejected() -> anyhow::Result<()> {
     let owner = w.dev_create_account().await?;
     let scout = w.dev_create_account().await?;
     let attacker = w.dev_create_account().await?;
-    let crew = setup(w, &wasms().await.prod, owner, 100, &[scout.id()]).await?;
+    let crew = setup(w, prod_wasm().await, owner, 100, &[scout.id()]).await?;
     let loot = balance(&attacker).await?;
 
     for (recipient, msg) in [
@@ -442,14 +442,7 @@ async fn case_6_revoked_delegate_blocked() -> anyhow::Result<()> {
     let owner = w.dev_create_account().await?;
     let scout = w.dev_create_account().await?;
     let buyer = w.dev_create_account().await?;
-    let crew = setup(
-        w,
-        &wasms().await.prod,
-        owner,
-        100,
-        &[scout.id(), buyer.id()],
-    )
-    .await?;
+    let crew = setup(w, prod_wasm().await, owner, 100, &[scout.id(), buyer.id()]).await?;
 
     assert!(propose(&buyer, &crew, 30, "b1").await?.is_success());
     let revoked: bool = crew
@@ -499,14 +492,7 @@ async fn case_7_timeout_on_issued_payment_reservation_retained() -> anyhow::Resu
     let owner = w.dev_create_account().await?;
     let scout = w.dev_create_account().await?;
     let buyer = w.dev_create_account().await?;
-    let crew = setup(
-        w,
-        &wasms().await.fault,
-        owner,
-        100,
-        &[scout.id(), buyer.id()],
-    )
-    .await?;
+    let crew = setup(w, fault_wasm().await, owner, 100, &[scout.id(), buyer.id()]).await?;
     let before = balance(&crew.merchant).await?;
 
     let res = propose(&buyer, &crew, 30, "b1").await?;
@@ -609,7 +595,7 @@ async fn case_8_reconcile_cannot_race_live_callback() -> anyhow::Result<()> {
     let w = near_workspaces::sandbox().await?;
     let host = deploy_driver(&w, &"unused.test.near".parse()?).await?; // the owner hosts a driver
     let owner = host.as_account().clone();
-    let crew = setup(w, &wasms().await.prod, owner.clone(), 100, &[owner.id()]).await?;
+    let crew = setup(w, prod_wasm().await, owner.clone(), 100, &[owner.id()]).await?;
     let before = balance(&crew.merchant).await?;
 
     let propose = driver_call(
@@ -676,7 +662,7 @@ async fn case_9_callbacks_and_owner_ops_reject_outsiders() -> anyhow::Result<()>
     let w = near_workspaces::sandbox().await?;
     let owner = w.dev_create_account().await?;
     let scout = w.dev_create_account().await?;
-    let crew = setup(w, &wasms().await.prod, owner, 100, &[scout.id()]).await?;
+    let crew = setup(w, prod_wasm().await, owner, 100, &[scout.id()]).await?;
     assert!(propose(&scout, &crew, 30, "r1").await?.is_success());
     let books = accounting(&crew).await?;
 
@@ -715,11 +701,10 @@ async fn case_9_callbacks_and_owner_ops_reject_outsiders() -> anyhow::Result<()>
 #[tokio::test]
 async fn fault_hook_absent_from_production_wasm() -> anyhow::Result<()> {
     let contains = |wasm: &[u8]| wasm.windows(FAULT_MARKER.len()).any(|w| w == FAULT_MARKER);
-    let wasms = wasms().await;
     assert!(
-        !contains(&wasms.prod),
+        !contains(prod_wasm().await),
         "production wasm carries the fault hook"
     );
-    assert!(contains(&wasms.fault), "fault build lacks its hook");
+    assert!(contains(fault_wasm().await), "fault build lacks its hook");
     Ok(())
 }
