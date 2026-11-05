@@ -156,7 +156,7 @@ jobs:
         with:
           name: test-wasms
           path: wasm/test
-      - run: cargo test --test attacks --test payments --test delegates -- --test-threads=4
+      - run: cargo test --test attacks --test payments --test delegates --test evm -- --test-threads=4
 
   # TS workspace: typecheck + unit tests against the COMMITTED generated types (no wasm needed).
   ts:
