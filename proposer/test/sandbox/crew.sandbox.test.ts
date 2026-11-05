@@ -14,7 +14,7 @@ import { Journal } from "../../src/journal.ts";
 import type { LogEvent } from "../../src/log.ts";
 import { type ProposeFn, scriptedModel } from "../../src/model.ts";
 import { PERSONAS as PERSONA_DEFS, catalogFor } from "../../src/personas.ts";
-import { DelegateSender, PROPOSE_GAS, PurserViewer, type Sender } from "../../src/purser-client.ts";
+import { DelegateSender, PROPOSE_GAS, PurserViewer, type Sender, assertProposeOnlyKey, classifySendError } from "../../src/purser-client.ts";
 
 let d: PurserDeployment;
 let viewer: PurserViewer;
@@ -176,6 +176,13 @@ describe("a rogue (compromised-model) proposal is refused by the contract", () =
 });
 
 describe("the proposer's key has no authority beyond propose_payment", () => {
+  it("the CLI's startup check accepts the function-call key and refuses a full-access key", async () => {
+    const del = d.delegates.scout;
+    await expect(assertProposeOnlyKey(d.provider, del.accountId, new Secret(del.fcKey), d.contractId)).resolves.toBeUndefined();
+    await expect(assertProposeOnlyKey(d.provider, del.accountId, new Secret(del.fullKey), d.contractId)).rejects.toThrow(/FULL-ACCESS/);
+    await expect(assertProposeOnlyKey(d.provider, del.accountId, new Secret(del.fcKey), "other.sandbox")).rejects.toThrow(/scoped to/);
+  });
+
   it("the access key on chain is scoped to Purser.propose_payment", async () => {
     const k = await d.provider.viewAccessKey({ accountId: d.delegates.scout.accountId, publicKey: d.delegates.scout.fcPublicKey });
     expect(k.permission).toMatchObject({ FunctionCall: { receiver_id: d.contractId, method_names: ["propose_payment"] } });
@@ -193,7 +200,7 @@ describe("the proposer's key has no authority beyond propose_payment", () => {
       (e: unknown) => e,
     );
     expect(err).toBeInstanceOf(Error);
-    expect((err as Error).constructor.name).toMatch(/AccessKey|InvalidTx/);
+    expect(classifySendError(err)).toMatchObject({ kind: "rejected_by_protocol" });
   });
 
   it("cannot transfer funds out of the delegate account", async () => {
@@ -202,7 +209,7 @@ describe("the proposer's key has no authority beyond propose_payment", () => {
       () => null,
       (e: unknown) => e,
     );
-    expect((err as Error).constructor.name).toMatch(/AccessKey|InvalidTx/);
+    expect(classifySendError(err)).toMatchObject({ kind: "rejected_by_protocol" });
   });
 });
 

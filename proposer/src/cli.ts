@@ -21,7 +21,7 @@ import { Journal } from "./journal.ts";
 import { type Logger, sanitizeForTerminal, silentLogger, stderrLogger } from "./log.ts";
 import { type ProposeFn, nearAiModel, scriptedModel } from "./model.ts";
 import { type Merchants, PERSONAS, catalogFor } from "./personas.ts";
-import { DelegateSender, PurserViewer } from "./purser-client.ts";
+import { DelegateSender, PurserViewer, assertProposeOnlyKey } from "./purser-client.ts";
 
 const SCENARIOS = ["legit", "race", "rogue", "demo"] as const;
 type Scenario = (typeof SCENARIOS)[number];
@@ -44,7 +44,8 @@ const usage = `usage: crew --network sandbox|testnet [--scenario legit|race|rogu
 async function sandboxCrew(cfg: Config): Promise<Crew> {
   // Dev tooling, loaded only for --network sandbox.
   const { Sandbox, DEFAULT_ACCOUNT_ID, DEFAULT_PRIVATE_KEY } = await import("near-sandbox");
-  const { deployPurser } = await import("./dev/purser-sandbox.ts");
+  const { deployPurser, requireVerifiedSandboxBinary } = await import("./dev/purser-sandbox.ts");
+  requireVerifiedSandboxBinary();
   const sandbox = await Sandbox.start({ version: process.env.NEAR_SANDBOX_VERSION ?? "2.14.0" });
   const d = await deployPurser({ rpcUrl: sandbox.rpcUrl, rootId: DEFAULT_ACCOUNT_ID, rootKey: DEFAULT_PRIVATE_KEY });
   let n = 0;
@@ -129,6 +130,7 @@ async function main(): Promise<number> {
   let failures = 0;
   try {
     assertChainId(cfg.network, await crew.viewer.chainId());
+    for (const p of PERSONA_IDS) await assertProposeOnlyKey(crew.provider, crew.delegates[p].accountId, crew.delegates[p].fcKey, crew.contractId);
     log({ event: "config", network: cfg.network, contract_id: crew.contractId, task: cfg.taskId ?? null, model: useRealModel ? cfg.nearAi.model : "scripted", personas: [...PERSONA_IDS] });
     const real = useRealModel ? nearAiModel({ baseUrl: cfg.nearAi.baseUrl, apiKey: cfg.nearAi.apiKey!, model: cfg.nearAi.model }) : undefined;
 

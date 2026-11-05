@@ -15,6 +15,16 @@ export type SandboxPersona = (typeof PERSONAS)[number];
 
 export const PROD_WASM = process.env.PURSER_WASM_PROD ?? resolve(import.meta.dirname, "../../../contract/target/near/purser_contract.wasm");
 
+/**
+ * near-sandbox would otherwise download nearcore itself, with no integrity check. Require the
+ * sha256-pinned binary from scripts/sandbox-bin.sh (what `make crew` / `make ts-test-sandbox` set).
+ */
+export function requireVerifiedSandboxBinary(): void {
+  if (!process.env.NEAR_SANDBOX_BIN_PATH) {
+    throw new Error('NEAR_SANDBOX_BIN_PATH is not set — run via make, or: export NEAR_SANDBOX_BIN_PATH="$(scripts/sandbox-bin.sh)"');
+  }
+}
+
 export function readProdWasm(): Uint8Array {
   if (!existsSync(PROD_WASM)) throw new Error(`contract wasm not found at ${PROD_WASM} — run \`make build\` first`);
   return readFileSync(PROD_WASM);

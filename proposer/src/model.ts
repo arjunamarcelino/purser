@@ -7,7 +7,7 @@
 //     safety proof must never depend on a real model misbehaving on cue.
 
 import { createHash } from "node:crypto";
-import { InferenceClient } from "@nearai/inference-sdk/node";
+import { InferenceClient, type VerifiedCompletionResult, getSdkError, isVerificationError } from "@nearai/inference-sdk/node";
 import OpenAI from "openai";
 import { zodResponseFormat } from "openai/helpers/zod";
 import type { Secret } from "./config.ts";
@@ -17,6 +17,7 @@ import { buildMessages, type PromptInput } from "./personas.ts";
 export type ModelErrorReason = "schema" | "refusal" | "length" | "http";
 
 export interface ModelMeta {
+  /** The canonical model id we requested (what attestation is checked against). */
   model: string;
   chatId: string | null;
   promptSha256: string;
@@ -24,7 +25,7 @@ export interface ModelMeta {
   prompt: string;
   completion: string;
   /** Verify this completion's attestation (NEAR AI Cloud only). */
-  verify?: () => Promise<unknown>;
+  verify?: () => Promise<VerifiedCompletionResult>;
   /** Why the verified transport was not used, if it was not. */
   unverifiedReason?: string;
 }
@@ -77,15 +78,17 @@ export function nearAiModel(opts: NearAiOptions): ProposeFn {
 
   const send = async (
     body: OpenAI.Chat.Completions.ChatCompletionCreateParamsNonStreaming,
-  ): Promise<{ c: Completion; verify?: () => Promise<unknown>; unverifiedReason?: string }> => {
+  ): Promise<{ c: Completion; verify?: () => Promise<VerifiedCompletionResult>; unverifiedReason?: string }> => {
     try {
       const c = await (verified.chat.completions.create as unknown as CompletionCreate)(body);
       return { c, verify: () => verified.verifyResponse(c.id) };
     } catch (err) {
-      const name = err instanceof Error ? err.name : "Error";
-      if (name !== "VerificationError") throw err;
+      // The SDK sends through an internal OpenAI client, which wraps a preflight failure (e.g. as
+      // APIConnectionError); getSdkError walks the cause chain to the SDK's own error.
+      const sdkErr = getSdkError(err);
+      if (!isVerificationError(sdkErr)) throw err;
       const c = await plain.chat.completions.create(body);
-      return { c, unverifiedReason: `attestation preflight failed: ${err instanceof Error ? err.message : name}` };
+      return { c, unverifiedReason: `attestation preflight failed: ${sdkErr.message}` };
     }
   };
 
@@ -108,7 +111,8 @@ export function nearAiModel(opts: NearAiOptions): ProposeFn {
       }
       const choice = res.c.choices[0];
       const content = choice?.message.content ?? "";
-      const meta: ModelMeta = { ...metaFor(res.c.model ?? opts.model, prompt, content, res.c.id ?? null) };
+      // Record the id we REQUESTED: attestation must prove that model, not whatever the server names.
+      const meta: ModelMeta = { ...metaFor(opts.model, prompt, content, res.c.id ?? null) };
       if (res.verify) meta.verify = res.verify;
       if (res.unverifiedReason) meta.unverifiedReason = res.unverifiedReason;
       if (choice?.message.refusal) return { ok: false, reason: "refusal", detail: choice.message.refusal, meta };
