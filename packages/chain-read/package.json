@@ -1,0 +1,21 @@
+{
+  "name": "@purser/chain-read",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "View-only NEAR chain reads (pinned final block, 429-aware retry). No signer code: nothing here can move funds.",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@purser/types": "workspace:*",
+    "near-api-js": "7.4.0"
+  },
+  "devDependencies": {
+    "vitest": "5.0.5"
+  }
+}
