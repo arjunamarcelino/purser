@@ -191,6 +191,8 @@ trap 'rm -f "$tmp_env"' EXIT
   echo "PROPOSER_MERCHANT_COMPUTE=compute.$OP"
   echo "PROPOSER_MERCHANT_PROCUREMENT=procure.$OP"
   echo "PROPOSER_MERCHANT_ATTACKER=attacker.$OP"
+  # Keep the EVM path's entries (written by scripts/evm-testnet.sh) across a re-deploy of the demo contract.
+  if [ -f "$OUT_ENV" ]; then grep -E '^(EVM_|RELAYER_)' "$OUT_ENV" || true; fi
 } > "$tmp_env"
 chmod 600 "$tmp_env"
 mv -f "$tmp_env" "$OUT_ENV"
