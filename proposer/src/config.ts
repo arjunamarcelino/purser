@@ -71,6 +71,10 @@ const EnvSchema = z.object({
   PROPOSER_FORGE_FC_PRIVATE_KEY: optionalString,
   PROPOSER_BUYER_ACCOUNT_ID: optionalString,
   PROPOSER_BUYER_FC_PRIVATE_KEY: optionalString,
+  PROPOSER_MERCHANT_DATA: optionalString,
+  PROPOSER_MERCHANT_COMPUTE: optionalString,
+  PROPOSER_MERCHANT_PROCUREMENT: optionalString,
+  PROPOSER_MERCHANT_ATTACKER: optionalString,
   PROPOSER_JOURNAL_PATH: optionalString,
   PROPOSER_EVIDENCE_PATH: optionalString,
   PROPOSER_LOG_CONTENT: optionalString.transform((v) => v === "1"),
@@ -89,6 +93,8 @@ export interface Config {
   taskId: string | undefined;
   nearAi: { baseUrl: string; apiKey: Secret | undefined; model: string };
   delegates: Partial<Record<PersonaId, DelegateCredentials>>;
+  /** Vendor accounts for the offer catalog (testnet; the sandbox creates its own). */
+  merchants: { data: string; compute: string; procurement: string; attacker: string } | undefined;
   journalDir: string;
   evidencePath: string;
   logContent: boolean;
@@ -123,6 +129,12 @@ export function loadConfig(env: NodeJS.ProcessEnv, outDir = resolve(import.meta.
     };
   }
 
+  const m = [e.PROPOSER_MERCHANT_DATA, e.PROPOSER_MERCHANT_COMPUTE, e.PROPOSER_MERCHANT_PROCUREMENT, e.PROPOSER_MERCHANT_ATTACKER];
+  if (m.some((v) => v !== undefined) && m.some((v) => v === undefined)) {
+    throw new ConfigError("set all four PROPOSER_MERCHANT_* variables, or none");
+  }
+  const [data, compute, procurement, attacker] = m.map((v, i) => v && assertAccountId(v, network, `PROPOSER_MERCHANT_${["DATA", "COMPUTE", "PROCUREMENT", "ATTACKER"][i]}`));
+
   return {
     network,
     rpcUrl: e.NEAR_RPC_URL ?? DEFAULT_RPC[network],
@@ -134,6 +146,7 @@ export function loadConfig(env: NodeJS.ProcessEnv, outDir = resolve(import.meta.
       model: e.NEAR_AI_MODEL,
     },
     delegates,
+    merchants: data && compute && procurement && attacker ? { data, compute, procurement, attacker } : undefined,
     journalDir: e.PROPOSER_JOURNAL_PATH ?? resolve(outDir, "journal"),
     evidencePath: e.PROPOSER_EVIDENCE_PATH ?? resolve(outDir, "evidence.jsonl"),
     logContent: e.PROPOSER_LOG_CONTENT,
@@ -143,11 +156,11 @@ export function loadConfig(env: NodeJS.ProcessEnv, outDir = resolve(import.meta.
 /**
  * Refuse to run against anything but the configured network, judged by what the RPC node
  * itself reports — not by a URL denylist. `status.chain_id` is "testnet" on testnet and
- * "mainnet" on mainnet; a local sandbox reports its own id (see SANDBOX_CHAIN_IDS).
+ * "mainnet" on mainnet; a local near-sandbox reports a random `test-chain-XXXXX`.
  */
-export const SANDBOX_CHAIN_IDS = new Set(["localnet", "sandbox", "test-chain-sandbox"]);
+const SANDBOX_CHAIN_ID = /^(localnet|test-chain-[A-Za-z0-9]{1,16})$/;
 
 export function assertChainId(network: Network, chainId: string): void {
-  const ok = network === "testnet" ? chainId === "testnet" : SANDBOX_CHAIN_IDS.has(chainId);
+  const ok = network === "testnet" ? chainId === "testnet" : SANDBOX_CHAIN_ID.test(chainId);
   if (!ok) throw new ConfigError(`RPC reports chain_id "${chainId}", expected ${network}; refusing to run`);
 }

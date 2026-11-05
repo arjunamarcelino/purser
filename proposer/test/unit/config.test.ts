@@ -58,5 +58,6 @@ describe("assertChainId (what the RPC node reports, not the URL)", () => {
     expect(() => assertChainId("testnet", "mainnet")).toThrow(/refusing/);
     expect(() => assertChainId("sandbox", "mainnet")).toThrow(/refusing/);
     expect(() => assertChainId("sandbox", "testnet")).toThrow(/refusing/);
+    expect(() => assertChainId("sandbox", "test-chain-k1EY5")).not.toThrow(); // what near-sandbox 2.14 reports
   });
 });
