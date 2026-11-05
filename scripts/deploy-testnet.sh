@@ -53,16 +53,24 @@ OP="$OPERATOR_ACCOUNT_ID"
 CONTRACT="purser.$OP"
 TX=(network-config testnet sign-with-keychain send)
 
+# near-cli prints a full transcript (to stderr) for every call; keep it, and show it only on failure.
+near_quiet() {
+  local out
+  if ! out="$(near "$@" 2>&1)"; then
+    printf '%s\n' "$out" >&2
+    die "near $1 $2 failed (transcript above)"
+  fi
+}
 exists() { [ "$("${OPS[@]}" account-exists "$RPC" "$1")" = "yes" ]; }
 view() { "${OPS[@]}" view "$RPC" "$CONTRACT" "$1" "$2"; }
 call() { # call <method> <json-args>  (as the owner)
-  near contract call-function as-transaction "$CONTRACT" "$1" json-args "$2" \
-    prepaid-gas '30 Tgas' attached-deposit '0 NEAR' sign-as "$OP" "${TX[@]}" >/dev/null
+  near_quiet contract call-function as-transaction "$CONTRACT" "$1" json-args "$2" \
+    prepaid-gas '30 Tgas' attached-deposit '0 NEAR' sign-as "$OP" "${TX[@]}"
 }
 subaccount() { # subaccount <id> <near>  (full-access key into the near-cli keychain)
   if exists "$1"; then echo "    $1 exists"; return; fi
-  near account create-account fund-myself "$1" "$2 NEAR" autogenerate-new-keypair save-to-keychain \
-    sign-as "$OP" "${TX[@]}" >/dev/null
+  near_quiet account create-account fund-myself "$1" "$2 NEAR" autogenerate-new-keypair save-to-keychain \
+    sign-as "$OP" "${TX[@]}"
   echo "    created $1"
 }
 
@@ -76,12 +84,12 @@ if [ "$("${OPS[@]}" code-matches "$RPC" "$CONTRACT" "$WASM")" = "yes" ]; then
   echo "    code already deployed (sha256 matches)"
 else
   if [ "$(view version '{}' 2>/dev/null || true)" != "" ]; then
-    near contract deploy "$CONTRACT" use-file "$WASM" without-init-call "${TX[@]}" >/dev/null
+    near_quiet contract deploy "$CONTRACT" use-file "$WASM" without-init-call "${TX[@]}"
     echo "    upgraded code (state kept)"
   else
-    near contract deploy "$CONTRACT" use-file "$WASM" with-init-call new \
-      json-args "{\"owner\":\"$OP\",\"signer_id\":\"v1.signer-prod.testnet\"}" \
-      prepaid-gas '30 Tgas' attached-deposit '0 NEAR' "${TX[@]}" >/dev/null
+    init_args="{\"owner\":\"$OP\",\"signer_id\":\"v1.signer-prod.testnet\"}"
+    near_quiet contract deploy "$CONTRACT" use-file "$WASM" with-init-call new \
+      json-args "$init_args" prepaid-gas '30 Tgas' attached-deposit '0 NEAR' "${TX[@]}"
     echo "    deployed and initialized (owner $OP)"
   fi
 fi
@@ -118,9 +126,9 @@ for p in scout forge buyer; do
     pk="$("${OPS[@]}" keygen "$keyfile")"
   fi
   if ! "${OPS[@]}" verify-fc-key "$RPC" "$p.$OP" "$pk" "$CONTRACT" 0 >/dev/null 2>&1; then
-    near account add-key "$p.$OP" grant-function-call-access \
+    near_quiet account add-key "$p.$OP" grant-function-call-access \
       --allowance "$FC_ALLOWANCE_NEAR NEAR" --contract-account-id "$CONTRACT" --function-names propose_payment \
-      use-manually-provided-public-key "$pk" "${TX[@]}" >/dev/null
+      use-manually-provided-public-key "$pk" "${TX[@]}"
     echo "    added key for $p.$OP"
   fi
   # Assert the on-chain scope; fail loudly if the key could do anything but propose_payment.
