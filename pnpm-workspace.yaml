@@ -1,7 +1,8 @@
-# TS services join this list when they land (indexer, relayer).
+# TS services join this list when they land (relayer).
 packages:
   - packages/*
   - proposer
+  - indexer
   - app
 
 # Supply chain: refuse versions published less than 7 days ago, and run no dependency

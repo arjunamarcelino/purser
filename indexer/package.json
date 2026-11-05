@@ -1,0 +1,26 @@
+{
+  "name": "@purser/indexer",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Derived, non-authoritative cache of the Purser contract (poller + read-only API). The contract is the only source of truth.",
+  "scripts": {
+    "poll": "node --env-file-if-exists=../.env --env-file-if-exists=../.env.testnet src/cli.ts poll",
+    "serve": "node --env-file-if-exists=../.env --env-file-if-exists=../.env.testnet src/cli.ts serve",
+    "counts": "node --env-file-if-exists=../.env --env-file-if-exists=../.env.testnet src/cli.ts counts",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run --project unit",
+    "test:sandbox": "vitest run --project sandbox"
+  },
+  "dependencies": {
+    "@purser/chain-read": "workspace:*",
+    "@purser/types": "workspace:*",
+    "pg": "8.23.1",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@types/pg": "8.15.5",
+    "near-sandbox": "0.3.4",
+    "vitest": "5.0.5"
+  }
+}
