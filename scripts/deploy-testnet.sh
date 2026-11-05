@@ -90,14 +90,18 @@ step "tasks (cap $CAP_NEAR NEAR each)"
 CAP_YOCTO="${CAP_NEAR}$(printf '0%.0s' {1..24})"
 for s in legit race rogue; do
   t="$TASK_PREFIX-$s"
-  if [ "$(view get_task "{\"task_id\":\"$t\"}")" = "null" ]; then
+  # JSON goes in a variable first: macOS's bash 3.2 mangles escaped quotes inside "$(...)" and then
+  # brace-expands the commas, splitting the JSON into separate words.
+  args="{\"task_id\":\"$t\"}"
+  if [ "$(view get_task "$args")" = "null" ]; then
     call create_task "{\"task_id\":\"$t\",\"cap\":\"$CAP_YOCTO\",\"token\":\"NearNative\",\"crew_cap\":3}"
     echo "    created $t"
   else
     echo "    $t exists"
   fi
   for p in scout forge buyer; do
-    if [ "$(view is_delegate_authorized "{\"task_id\":\"$t\",\"account_id\":\"$p.$OP\"}")" != "true" ]; then
+    args="{\"task_id\":\"$t\",\"account_id\":\"$p.$OP\"}"
+    if [ "$(view is_delegate_authorized "$args")" != "true" ]; then
       call add_delegate "{\"task_id\":\"$t\",\"account_id\":\"$p.$OP\",\"derivation_path\":\"purser/$t/$p\"}"
     fi
   done
