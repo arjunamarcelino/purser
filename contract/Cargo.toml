@@ -14,6 +14,10 @@ crate-type = ["cdylib", "rlib"]   # cdylib -> wasm; rlib -> in-crate integration
 # TEST-ONLY lost-callback fault for the attack suite; build.rs refuses it without
 # PURSER_ALLOW_FAULT_INJECTION=1 (see README "Develop").
 fault-injection = []
+# EVM sighash FEASIBILITY SPIKE (docs/plans/2026-11-05-feat-evm-sighash-feasibility-spike-plan.md): MEASUREMENT
+# ONLY. Adds two raw wasm exports (not #[near], so not in the ABI) and nothing else. build.rs refuses it
+# without PURSER_ALLOW_EVM_SPIKE=1; scripts/check-wasm-clean.sh refuses any wasm that contains it.
+evm-spike = []
 
 [dependencies]
 near-sdk = "=5.30.0"
@@ -29,6 +33,10 @@ proptest = "=1.12.0"
 # crate near-sdk-env uses for its off-chain backend; the digest is identical across any sha2 version.
 # Do NOT touch the near-workspaces `unstable` feature above — `compile_project` needs it.
 sha2 = "0.11"
+# TEST-ONLY independent oracles for the EVM spike (hand-rolled RLP vs the parity `rlp` crate, host keccak vs
+# `sha3`). Exact pins; never normal dependencies, so they cannot reach the wasm.
+rlp = "=0.6.1"
+sha3 = "=0.10.9"
 
 # REQUIRED: near-sdk 5.27+ expands cfg(near)-gated code into this crate. Plain
 # `cargo clippy`/`cargo test` (no --cfg near) would otherwise raise unexpected_cfgs,

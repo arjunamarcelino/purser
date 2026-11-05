@@ -2,7 +2,7 @@
         contract-build contract-build-release contract-test contract-fmt contract-lint prove \
         ts-install ts-lint ts-test ts-test-sandbox types-gen crew board \
         indexer-poll indexer-serve indexer-counts \
-        deploy-testnet demo metrics hooks
+        deploy-testnet demo metrics hooks evm-spike
 
 # Aggregate targets: the contract plus the TS workspace (packages/*, proposer).
 build: contract-build
@@ -21,6 +21,9 @@ contract-lint: ; cd contract && cargo clippy --all-targets -- -D warnings
 
 # Security evidence: the property tests + the named attack cases, with race-proof heights printed.
 prove: ; cd contract && cargo test --test properties --test attacks -- --nocapture --test-threads=4
+
+# STRETCH spike (docs/EVM-SPIKE.md): size + gas of building and hashing an EIP-1559 tx in-contract. Local/sandbox only.
+evm-spike: ; scripts/evm-spike.sh
 
 # TypeScript workspace (pnpm). Node runs .ts directly; `tsc` is the only type check.
 ts-install: ; pnpm install --frozen-lockfile

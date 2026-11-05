@@ -62,6 +62,16 @@ static FAULT: Artifact = Artifact {
     target_subdir: Some("fault-injection"),
     cell: OnceCell::const_new(),
 };
+/// The `evm-spike` measurement build (EVM sighash feasibility spike). Its own target dir, like the fault build,
+/// so it never thrashes the production fingerprints, and `no_abi` (set in `build_wasm`) so it can never touch
+/// the ABI that `packages/types` is generated from.
+static EVM: Artifact = Artifact {
+    env: "PURSER_WASM_EVM",
+    manifest: "Cargo.toml",
+    features: Some("evm-spike"),
+    target_subdir: Some("evm-spike"),
+    cell: OnceCell::const_new(),
+};
 /// The race-driver fan-out fixture.
 static DRIVER: Artifact = Artifact {
     env: "PURSER_WASM_DRIVER",
@@ -76,6 +86,9 @@ pub async fn prod_wasm() -> &'static [u8] {
 }
 pub async fn fault_wasm() -> &'static [u8] {
     FAULT.get().await
+}
+pub async fn evm_wasm() -> &'static [u8] {
+    EVM.get().await
 }
 pub async fn driver_wasm() -> &'static [u8] {
     DRIVER.get().await
@@ -107,10 +120,16 @@ fn build_wasm(manifest: &str, features: Option<&str>, target_subdir: Option<&str
     let opts = BuildOpts {
         manifest_path: Some(manifest),
         features: features.map(str::to_string),
-        // build.rs refuses the test-only fault feature without this explicit opt-in
-        env: features
-            .map(|_| vec![("PURSER_ALLOW_FAULT_INJECTION".to_string(), "1".to_string())])
-            .unwrap_or_default(),
+        // build.rs refuses the test-only features without an explicit opt-in; set only the one matching the
+        // requested feature (build.rs also refuses the two features together)
+        env: match features {
+            Some("fault-injection") => {
+                vec![("PURSER_ALLOW_FAULT_INJECTION".to_string(), "1".to_string())]
+            }
+            Some("evm-spike") => vec![("PURSER_ALLOW_EVM_SPIKE".to_string(), "1".to_string())],
+            Some(other) => panic!("no build.rs opt-in known for feature {other:?}"),
+            None => Vec::new(),
+        },
         override_cargo_target_dir: target_dir,
         no_abi: true,
         skip_rust_version_check: true,

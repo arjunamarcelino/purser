@@ -39,6 +39,7 @@ new proposals BLOCKED, with a caption noting already-issued signatures cannot be
 | `make fmt`   | `cargo fmt` |
 | `make hooks` | install the pre-commit secret-scan hook |
 | `make prove` | the security evidence: property tests + the named attack cases |
+| `make evm-spike` | the stretch EVM go/no-go spike (feature-gated, local + sandbox only): sizes, the wasm gate, per-hash gas and the load tax. Verdict: **GO** |
 | `make ts-test-sandbox` | the AI proposer on a local chain: attack case 2 through the AI path, rogue proposals, key scope, exactly-once retries, model-independence property |
 | `make crew` | run Scout, Forge and Buyer against Purser (`NETWORK=sandbox\|testnet`, `SCENARIO=demo\|legit\|race\|rogue`) |
 | `make board` | the operator board at http://127.0.0.1:5173: live invariant, manifest, Revoke, demo buttons (see [`app/README.md`](app/README.md)) |
