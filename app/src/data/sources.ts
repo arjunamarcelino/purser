@@ -1,0 +1,125 @@
+// The board's data layer: two small sources behind interfaces, so Prompt 9 can swap the history
+// source for the indexer without touching the board.
+//
+//   BoardSource   — authoritative chain state, every view read at ONE final block (no tearing).
+//   HistorySource — the proposer's records (refusals, tx links): self-asserted, untrusted, validated.
+
+import { JsonRpcProvider } from "near-api-js";
+import {
+  type Commitment,
+  type Delegate,
+  type InvariantView,
+  ProposalRecord,
+  type PurserViews,
+  type TaskBudget,
+  parseU64Safe,
+} from "@purser/types";
+
+export interface BoardSnapshot {
+  task: string;
+  blockHeight: number;
+  budget: TaskBudget;
+  invariant: InvariantView;
+  remaining: string;
+  delegates: Delegate[];
+  commitments: Commitment[];
+}
+
+export interface BoardSource {
+  snapshot(task: string, signal: AbortSignal): Promise<BoardSnapshot | null>;
+  taskIds(signal: AbortSignal): Promise<string[]>;
+  chainId(): Promise<string>;
+}
+
+export interface HistorySource {
+  readonly available: boolean;
+  records(task: string, signal: AbortSignal): Promise<ProposalRecord[]>;
+}
+
+const decoder = new TextDecoder();
+const encoder = new TextEncoder();
+const PAGE = 100;
+
+export class ChainBoardSource implements BoardSource {
+  readonly #provider: JsonRpcProvider;
+  readonly #contractId: string;
+
+  constructor(rpcUrl: string, contractId: string) {
+    this.#provider = new JsonRpcProvider({ url: rpcUrl });
+    this.#contractId = contractId;
+  }
+
+  async #view<M extends keyof PurserViews>(method: M, args: PurserViews[M]["args"], blockId: number | undefined, signal: AbortSignal): Promise<PurserViews[M]["result"]> {
+    signal.throwIfAborted();
+    const raw = await this.#provider.callFunctionRaw({
+      contractId: this.#contractId,
+      method,
+      args: encoder.encode(JSON.stringify(args)),
+      blockQuery: blockId === undefined ? { finality: "final" } : { blockId },
+    });
+    signal.throwIfAborted();
+    return parseU64Safe(decoder.decode(Uint8Array.from(raw.result))) as PurserViews[M]["result"];
+  }
+
+  async snapshot(task: string, signal: AbortSignal): Promise<BoardSnapshot | null> {
+    // Pin every read to one final block: invariant, budget and the ledger then describe the SAME
+    // chain state (separate "final" reads can land on different blocks or RPC nodes).
+    const block = await this.#provider.viewBlock({ finality: "final" });
+    const h = block.header.height;
+    const budget = await this.#view("get_task", { task_id: task }, h, signal);
+    if (budget === null) return null;
+    const [invariant, remaining, delegates, commitments] = await Promise.all([
+      this.#view("invariant", { task_id: task }, h, signal),
+      this.#view("remaining_budget", { task_id: task }, h, signal),
+      this.#pages((from) => this.#view("list_delegates", { task_id: task, from_index: from, limit: PAGE }, h, signal)),
+      this.#pages((from) => this.#view("list_commitments", { task_id: task, from_index: from, limit: PAGE }, h, signal)),
+    ]);
+    if (invariant === null) return null;
+    return { task, blockHeight: h, budget, invariant, remaining, delegates, commitments };
+  }
+
+  async #pages<T>(page: (from: number) => Promise<T[]>): Promise<T[]> {
+    const all: T[] = [];
+    for (let from = 0; ; from += PAGE) {
+      const rows = await page(from);
+      all.push(...rows);
+      if (rows.length < PAGE || all.length >= 2000) return all; // list_commitments scans the ledger; Prompt 9's indexer is the scale path
+    }
+  }
+
+  async taskIds(signal: AbortSignal): Promise<string[]> {
+    return this.#pages((from) => this.#view("list_task_ids", { from_index: from, limit: PAGE }, undefined, signal));
+  }
+
+  async chainId(): Promise<string> {
+    return (await this.#provider.viewNodeStatus()).chain_id;
+  }
+}
+
+/** Reads the proposer's records through the localhost companion (dev only). */
+export class CompanionHistorySource implements HistorySource {
+  readonly available: boolean;
+  readonly #token: string | null;
+
+  constructor() {
+    this.#token = document.querySelector<HTMLMetaElement>('meta[name="purser-token"]')?.content ?? null;
+    this.available = this.#token !== null;
+  }
+
+  async records(task: string, signal: AbortSignal): Promise<ProposalRecord[]> {
+    if (!this.#token) return [];
+    const res = await fetch("/__purser/records", {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-purser-token": this.#token },
+      body: JSON.stringify({ task }),
+      signal,
+    });
+    if (!res.ok) throw new Error(`records: HTTP ${res.status}`);
+    const body = (await res.json()) as { records?: unknown[] };
+    // Validate again here: the board treats records as untrusted whatever the server did.
+    return (body.records ?? []).flatMap((r) => {
+      const parsed = ProposalRecord.safeParse(r);
+      return parsed.success ? [parsed.data] : [];
+    });
+  }
+}
