@@ -1,0 +1,15 @@
+# gitleaks (CI `secrets` job) — the default ruleset plus Purser-specific key formats.
+[extend]
+useDefault = true
+
+[[rules]]
+id = "near-ai-cloud-api-key"
+description = "NEAR AI Cloud API key (OpenAI-compatible sk- format)"
+regex = '''\bsk-[A-Za-z0-9_-]{20,}'''
+keywords = ["sk-"]
+
+[[rules]]
+id = "near-ed25519-secret-key"
+description = "NEAR ed25519 secret key"
+regex = '''ed25519:[1-9A-HJ-NP-Za-km-z]{80,}'''
+keywords = ["ed25519:"]

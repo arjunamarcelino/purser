@@ -6,9 +6,10 @@ set -euo pipefail
 # Scan ONLY added lines (avoids false-triggers on removed/context lines).
 added="$(git diff --cached -U0 | grep '^+' | grep -v '^+++' || true)"
 
-# High-signal key material: NEAR ed25519 secret keys, PEM private keys, AWS access-key ids.
+# High-signal key material: NEAR ed25519 secret keys, PEM private keys, AWS access-key ids,
+# NEAR AI Cloud / OpenAI-style API keys (sk-...).
 if printf '%s\n' "$added" | grep -nE \
-  'ed25519:[A-Za-z0-9]{40,}|-----BEGIN [A-Z ]*PRIVATE KEY-----|AKIA[0-9A-Z]{16}'; then
+  'ed25519:[A-Za-z0-9]{40,}|-----BEGIN [A-Z ]*PRIVATE KEY-----|AKIA[0-9A-Z]{16}|sk-[A-Za-z0-9_-]{20,}'; then
   echo "✋ Possible secret key in staged additions. Commit aborted (override with --no-verify only if sure)."
   exit 1
 fi
