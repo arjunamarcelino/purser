@@ -2,7 +2,16 @@ import { describe, expect, it } from "vitest";
 import { evaluate, type Pins } from "../../src/attestation.ts";
 
 const MODEL = "z-ai/glm-5.3-flash";
-const pins: Pins[] = [{ model: MODEL, compose_hash: "c".repeat(64), os_image_hash: "o".repeat(64) }];
+const pins: Pins[] = [
+  {
+    model: MODEL,
+    os_image_hash: "o".repeat(64),
+    compose_hashes: [
+      { hash: "c".repeat(64), observed_at: "2026-11-05", note: "instance a" },
+      { hash: "e".repeat(64), observed_at: "2026-11-05", note: "instance b" },
+    ],
+  },
+];
 const ctx = { decisionId: "8f0e6a1c-1d2b-4c3d-9e4f-5a6b7c8d9e0f", persona: "scout", accountId: "scout.sandbox", requestId: null, commitmentId: null, payloadHash: null, model: MODEL, chatId: "chatcmpl-1" };
 
 // Shaped like the SDK's VerifiedModelCompletionResult (facts the SDK already verified).
@@ -32,7 +41,7 @@ describe("attestation policy over SDK-verified facts", () => {
   it.each([
     ["a gateway signature", { kind: "gateway" as const }, "gateway_signature"],
     ["a non-canonical model", { text: "glm-latest:aa:bb" }, "model_not_canonical"],
-    ["changed measurements", { compose: "d".repeat(64) }, "measurement_changed"],
+    ["an unpinned deployment", { compose: "d".repeat(64) }, "measurement_changed"],
     ["missing NVIDIA evidence", { gpu: "not_provided" as const }, "nvidia_evidence_missing"],
     ["an out-of-date TCB", { tcb: "OutOfDate" }, "tcb_OutOfDate"],
   ])("is NOT verified with %s", (_name, over, reason) => {
@@ -47,6 +56,10 @@ describe("attestation policy over SDK-verified facts", () => {
       checks: { sdk_verification: "fail" },
     });
     expect(evaluate(ctx, { unavailable: "attestation preflight failed" }, pins)).toMatchObject({ verified: false, reasons: ["attestation preflight failed"] });
+  });
+
+  it("accepts any pinned instance of the deployment", () => {
+    expect(evaluate(ctx, teeResult({ compose: "e".repeat(64) }), pins).verified).toBe(true);
   });
 
   it("is NOT verified without pins for the model", () => {

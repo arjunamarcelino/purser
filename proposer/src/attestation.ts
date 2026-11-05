@@ -18,8 +18,9 @@ import { Evidence } from "@purser/types";
 
 export interface Pins {
   model: string;
-  compose_hash: string;
   os_image_hash: string;
+  /** Every observed deployment of the model (instances can differ, e.g. by an instance label). */
+  compose_hashes: { hash: string; observed_at: string; note: string }[];
 }
 
 type Check = Evidence["checks"][keyof Evidence["checks"]];
@@ -100,7 +101,8 @@ export function evaluate(
       if (pin === undefined) {
         reasons.push("no_pinned_measurements_for_model");
       } else {
-        checks.pinned_measurements = pass(m.composeHash === pin.compose_hash && m.osImageHash === pin.os_image_hash, "measurement_changed");
+        const known = pin.compose_hashes.some((c) => c.hash === m.composeHash);
+        checks.pinned_measurements = pass(known && m.osImageHash === pin.os_image_hash, "measurement_changed");
       }
       checks.nvidia_gpu = pass(a.gpuEvidence === "verified", "nvidia_evidence_missing");
       checks.tcb_up_to_date = pass(a.tcbStatus === "UpToDate", `tcb_${a.tcbStatus}`);
