@@ -75,6 +75,24 @@ dev-server plugin (`companion/plugin.ts`) that
 
 A production build (`pnpm --filter @purser/app build`) contains no runner and works read-only.
 
+## History cache (indexer)
+
+Optional, display-only. The board can show an "On-chain history (cached)" list and a second footer segment
+(`history cache Ns · block M`, amber past 60 s, never green; `history offline` when unreachable) from the
+off-chain indexer. It never touches the chain-read path, the invariant line or any owner action.
+
+```bash
+make indexer-poll              # fill the cache from the chain
+make indexer-serve             # read API on 127.0.0.1:8787 (override with INDEXER_PORT)
+INDEXER_ENABLED=1 make board   # the dashboard reads it through the same-origin /__indexer proxy
+```
+
+Vite proxies `/__indexer` (dev and `preview`) to `127.0.0.1:$INDEXER_PORT`; the bundle holds only the boolean
+`INDEXER_ENABLED`, never a host. Every field is validated at the boundary (invalid rows are dropped and
+counted), rendered as text only, and a `/status` for another network or contract is rejected as "wrong
+indexer". A production build has no proxy, so the panel shows "history offline" unless you route
+`/__indexer` yourself.
+
 ## Development
 
 ```bash

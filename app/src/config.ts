@@ -1,15 +1,16 @@
-// Runtime config, frozen at build time by vite.config.ts from an explicit allowlist of three keys.
+// Runtime config, frozen at build time by vite.config.ts from an explicit allowlist of keys.
 // Nothing else from the repo's .env files can reach the bundle.
 
 import { NEAR_ACCOUNT_ID } from "@purser/types";
 
-declare const __PURSER_CONFIG__: { contractId: string; network: string; rpcUrl: string };
+declare const __PURSER_CONFIG__: { contractId: string; network: string; rpcUrl: string; indexerEnabled?: boolean };
 
 export interface AppConfig {
   readonly contractId: string;
   readonly network: "testnet";
   readonly rpcUrl: string;
   readonly explorer: string;
+  readonly indexerEnabled: boolean;
 }
 
 function load(): AppConfig {
@@ -20,7 +21,7 @@ function load(): AppConfig {
   }
   const rpc = new URL(raw.rpcUrl);
   if (rpc.protocol !== "https:") throw new Error("NEAR_RPC_URL must be https");
-  return Object.freeze({ contractId: raw.contractId, network: "testnet", rpcUrl: rpc.toString(), explorer: "https://testnet.nearblocks.io" });
+  return Object.freeze({ contractId: raw.contractId, network: "testnet", rpcUrl: rpc.toString(), explorer: "https://testnet.nearblocks.io", indexerEnabled: raw.indexerEnabled === true });
 }
 
 export const config: AppConfig = load();
