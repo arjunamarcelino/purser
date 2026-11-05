@@ -113,7 +113,8 @@ async function runPassAt(opts: PassOptions, reader: ChainReader, h: bigint): Pro
   const storedMax = await repo.maxCommitmentId();
   const cursorRaw = await repo.getMeta(CURSOR_KEY);
   const cursor = cursorRaw !== null && /^\d+$/.test(cursorRaw) ? Number(cursorRaw) : null;
-  const probeStart = cursor === null ? storedMax + 1 : Math.min(cursor, storedMax + 1);
+  // No cursor means no proof of what was written: start from the beginning (re-reads are idempotent).
+  const probeStart = cursor === null ? 0 : Math.min(cursor, storedMax + 1);
   const byId = new Map<number, Commitment>();
   let probeEnd = probeStart;
   for (;;) {
@@ -126,6 +127,7 @@ async function runPassAt(opts: PassOptions, reader: ChainReader, h: bigint): Pro
   const open = await repo.openCommitmentIds({ includeFailed: opts.includeFailed ?? passNo % FULL_REREAD_EVERY === 0 });
   for (const id of open) {
     if (byId.has(id)) continue;
+    if (signal.aborted || now().getTime() - startedMs > config.passBudgetMs) break;
     const c = await readCommitment(reader, { commitment_id: id }, h, signal);
     if (c !== null) byId.set(id, c);
   }
@@ -169,7 +171,6 @@ async function runPassAt(opts: PassOptions, reader: ChainReader, h: bigint): Pro
     }
   }
 
-  const newBound = storedMax;
   for (const r of reads) {
     const cs = byTask.get(r.taskId) ?? [];
     if (signal.aborted) {
@@ -177,21 +178,46 @@ async function runPassAt(opts: PassOptions, reader: ChainReader, h: bigint): Pro
       result.tasks.push({ taskId: r.taskId, status: "deferred", commitmentsSeen: cs.length, asOfHeight: h });
       continue;
     }
-    const rows: CommitmentRow[] = [];
-    for (const c of cs) {
-      let row = commitmentToRow(c);
-      if (row.near_tx === null && row.state === "Confirmed") {
-        const hit = await resolver.resolve(row, { network: config.network, contractId: config.contractId, height: h, signal });
-        if (hit) row = { ...row, near_tx: hit.near_tx, tx_status: "resolved" };
+    try {
+      const rows: CommitmentRow[] = [];
+      let cut = false;
+      for (const c of cs) {
+        let row = commitmentToRow(c);
+        if (row.near_tx === null && row.state === "Confirmed") {
+          if (signal.aborted || now().getTime() - startedMs > config.passBudgetMs) {
+            cut = true;
+            break;
+          }
+          const hit = await resolver.resolve(row, { network: config.network, contractId: config.contractId, height: h, signal });
+          if (hit) row = { ...row, near_tx: hit.near_tx, tx_status: "resolved" };
+        }
+        rows.push(row);
       }
-      rows.push(row);
+      if (cut) {
+        if (signal.aborted) result.aborted = true;
+        result.tasks.push({ taskId: r.taskId, status: "deferred", commitmentsSeen: cs.length, asOfHeight: h });
+        continue;
+      }
+      const outcome = await repo.applyTaskSnapshot({ ...r.base, commitments: rows }, h);
+      result.tasks.push({ taskId: r.taskId, status: outcome, commitmentsSeen: rows.length, asOfHeight: h });
+    } catch (e) {
+      if (e instanceof UnknownBlockError || e instanceof MetaMismatchError || e instanceof RepoUnavailableError) throw e;
+      if (signal.aborted) {
+        result.aborted = true;
+        result.tasks.push({ taskId: r.taskId, status: "deferred", commitmentsSeen: cs.length, asOfHeight: h });
+        continue;
+      }
+      result.tasks.push({ taskId: r.taskId, status: "failed", commitmentsSeen: 0, asOfHeight: h, error: "apply_failed" });
+      result.failureKinds.push("apply_failed");
+      result.rateLimited ||= isRateLimited(e);
+      log(`task ${r.taskId}: apply_failed: ${e instanceof Error ? e.name : "unknown"}`);
     }
-    const outcome = await repo.applyTaskSnapshot({ ...r.base, commitments: rows }, h);
-    result.tasks.push({ taskId: r.taskId, status: outcome, commitmentsSeen: rows.length, asOfHeight: h });
   }
   const done = new Set(result.tasks.filter((t) => t.status === "applied" || t.status === "skipped_stale").map((t) => t.taskId));
+  // Every id read by the probe whose task is not done is unwritten, whatever is stored above it.
+  // Ids below probeStart came from the stored open set, so they are already written.
   const unwritten: number[] = [];
-  for (const [taskId, cs] of byTask) if (!done.has(taskId)) for (const c of cs) if (c.id > newBound) unwritten.push(c.id);
+  for (const [taskId, cs] of byTask) if (!done.has(taskId)) for (const c of cs) if (c.id >= probeStart) unwritten.push(c.id);
 
   await repo.setMeta(CURSOR_KEY, String(Math.min(probeEnd, ...unwritten)));
 

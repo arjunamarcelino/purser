@@ -1,7 +1,8 @@
 import { render, screen, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
+import type { CachedCommitment } from "../src/data/cache.ts";
 import type { Commitment, ProposalRecord } from "@purser/types";
-import { InvariantLine, Manifest } from "../src/components/panels.tsx";
+import { CachedHistory, InvariantLine, Manifest } from "../src/components/panels.tsx";
 import { lineHealth } from "../src/lib/semantics.ts";
 
 const N = 10n ** 24n;
@@ -73,5 +74,32 @@ describe("InvariantLine", () => {
     const stale = lineHealth({ cap: 100n * N, completed: 90n * N, outstanding: 0n, holds: true, frozen: false }, { hasUnknown: false, syncedAt: NOW - 60_000, now: NOW });
     rerender(<InvariantLine health={stale} completed={90n * N} outstanding={0n} cap={100n * N} />);
     expect(screen.getByRole("status").className).toContain("tone-dim");
+  });
+});
+
+describe("CachedHistory", () => {
+  const row = (o: Partial<CachedCommitment> = {}): CachedCommitment => ({
+    taskId: "board-1", commitmentId: "11", delegate: "scout.op.testnet", recipient: "data.op.testnet", reservedAmount: (30n * N).toString(),
+    actualSpent: null, state: "Confirmed", requestId: null, nearTx: null, txStatus: "pending", asOfHeight: 100, ...o,
+  });
+  const HASH = "5dRpkX87653fAYGwh3cnAy8F4YSNCqhviDKBc2vcjhyw";
+  const show = (r: CachedCommitment, offline = false, tx: string | null = null) =>
+    render(<CachedHistory rows={[r]} dropped={0} boardBlock={100} personaOf={persona} recordTx={() => tx} contractId="purser.op.testnet" offline={offline} />);
+
+  it("labels a proposer-asserted hash visibly as unverified", () => {
+    show(row(), false, HASH);
+    expect(screen.getByText(/proposer-reported, unverified/)).toBeTruthy();
+  });
+  it("gives an indexer-resolved hash the plain link with no caveat", () => {
+    show(row({ txStatus: "resolved", nearTx: HASH }));
+    expect(screen.queryByText(/unverified/)).toBeNull();
+  });
+  it("marks stale rows when offline", () => {
+    show(row(), true);
+    expect(screen.getByText(/offline — showing last known/)).toBeTruthy();
+  });
+  it("shows no offline marker while online", () => {
+    show(row());
+    expect(screen.queryByText(/offline/)).toBeNull();
   });
 });

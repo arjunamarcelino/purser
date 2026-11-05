@@ -1,4 +1,5 @@
 // Read-only loopback HTTP API over the cache. Never calls a Repo write method.
+import { createHash } from "node:crypto";
 import { createServer } from "node:http";
 import type { IncomingMessage, Server, ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -52,11 +53,14 @@ export function createApi(opts: ApiOptions): Api {
   const now = opts.now ?? (() => new Date());
   let boundPort = opts.port;
 
+  // IPv6 literals are bracketed in Host/Origin; only allowed when bound to ::1.
+  const v6 = host === "::1";
   const hostOk = (h: string | undefined): boolean =>
-    h === `127.0.0.1:${boundPort}` || h === `localhost:${boundPort}`;
+    h === `127.0.0.1:${boundPort}` || h === `localhost:${boundPort}` || (v6 && h === `[::1]:${boundPort}`);
   const originOk = (o: string): boolean =>
     o === `http://127.0.0.1:${boundPort}` ||
     o === `http://localhost:${boundPort}` ||
+    (v6 && o === `http://[::1]:${boundPort}`) ||
     (opts.allowedOrigins ?? []).includes(o);
 
   function send(req: IncomingMessage, res: ServerResponse, status: number, body: unknown, extra: Record<string, string> = {}): void {
@@ -138,10 +142,10 @@ export function createApi(opts: ApiOptions): Api {
       if (c !== undefined && (c.length > 256 || !CURSOR_RE.test(c))) throw new HttpError(400, "bad_cursor");
 
       const page = await repo.listHistory(c ? { task, limit, cursor: c } : { task, limit });
-      const height = page.rows[0]?.as_of_height ?? 0n;
-      const etag = `"${height.toString()}-${page.rows.length}-${page.next ?? ""}"`;
+      const body = { rows: page.rows, next: page.next };
+      const etag = `"${createHash("sha256").update(toJson(body)).digest("hex").slice(0, 32)}"`;
       if (req.headers["if-none-match"] === etag) return send(req, res, 304, null, { ETag: etag });
-      return send(req, res, 200, { rows: page.rows, next: page.next }, { ETag: etag });
+      return send(req, res, 200, body, { ETag: etag });
     }
 
     throw new HttpError(404, "not_found");

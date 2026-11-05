@@ -236,6 +236,80 @@ describe("runPass", () => {
     await pass(2);
     expect((await repo.counts()).commitment_event).toBe(2);
   });
+
+  it("never skips a failed task's id when a later id of another task is stored (todo 001)", async () => {
+    l.commitments = [
+      { task: "t1", state: "Confirmed", actual: "5" },
+      { task: "t2", state: "Confirmed", actual: "5" },
+      { task: "t1", state: "Confirmed", actual: "5" },
+    ];
+    const failT2 = (m: string, a: Record<string, unknown>) => {
+      if (m === "get_task" && a.task_id === "t2") throw new Error("429 Too Many Requests");
+    };
+    l.hook = failT2;
+    await pass(1);
+    expect((await repo.counts()).commitment_event).toBe(2);
+    l.height = 1001n;
+    l.commitments.push({ task: "t1", state: "Confirmed", actual: "5" });
+    await pass(2);
+    expect((await repo.counts()).commitment_event).toBe(3);
+    delete l.hook;
+    l.height = 1002n;
+    const r = await pass(3);
+    expect(r.complete).toBe(true);
+    expect((await repo.counts()).commitment_event).toBe(4);
+    expect((await repo.listHistory({ task: "t2", limit: 10 })).rows.map((x) => x.commitment_id)).toEqual([1]);
+  });
+
+  it("a throw in the resolver fails only that task and never advances the cursor past it (todo 003)", async () => {
+    let broken = true;
+    const resolver = {
+      resolve: async (row: { task_id?: string; task?: string }) => {
+        if (broken) throw new TypeError("boom");
+        void row;
+        return null;
+      },
+    };
+    const r = await pass(1, { resolver });
+    expect(r.complete).toBe(false);
+    expect(r.tasks.find((t) => t.taskId === "t1")?.status).toBe("failed");
+    expect(r.tasks.find((t) => t.taskId === "t2")?.status).toBe("applied");
+    expect(r.failureKinds.length).toBeGreaterThan(0);
+    expect(await repo.getMeta("last_pass_at")).toBeNull();
+    expect(await repo.getMeta("commitment_cursor")).toBe("0");
+    broken = false;
+    l.height = 1001n;
+    const r2 = await pass(2, { resolver });
+    expect(r2.complete).toBe(true);
+    expect((await repo.counts()).commitment_event).toBe(3);
+  });
+
+  it("the open-set re-read stops on abort (todo 008)", async () => {
+    for (let i = 0; i < 10; i++) l.commitments.push({ task: "t1", state: "Reserved", actual: null });
+    await pass(1);
+    const ac = new AbortController();
+    let n = 0;
+    l.hook = (m) => {
+      if (m === "get_commitment" && ++n === 3) ac.abort();
+    };
+    l.height = 1001n;
+    await runPass({ reader: reader(l), repo, signal: ac.signal, config, passNo: 2, now });
+    expect(n).toBeLessThanOrEqual(4);
+  });
+
+  it("the open-set re-read honours the pass budget (todo 008)", async () => {
+    for (let i = 0; i < 10; i++) l.commitments.push({ task: "t1", state: "Reserved", actual: null });
+    await pass(1);
+    let n = 0;
+    let jump = 0;
+    l.hook = (m) => {
+      if (m === "get_commitment" && ++n === 3) jump = 1_000_000;
+    };
+    l.height = 1001n;
+    const r = await runPass({ reader: reader(l), repo, signal: ctl.signal, config, passNo: 2, now: () => new Date(Date.UTC(2026, 10, 5) + jump) });
+    expect(n).toBeLessThanOrEqual(4);
+    expect(r.complete).toBe(false);
+  });
 });
 
 describe("runPoller", () => {

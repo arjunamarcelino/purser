@@ -30,10 +30,11 @@ interface Stub {
   writes: string[];
   fail: { err: unknown };
   lastHistory: unknown;
+  rows: HistoryRow[];
 }
 
 function stub(): Stub {
-  const s: Stub = { repo: undefined as unknown as Repo, writes: [], fail: { err: null }, lastHistory: null };
+  const s: Stub = { repo: undefined as unknown as Repo, writes: [], fail: { err: null }, lastHistory: null, rows: [row(2), row(1)] };
   const guard = () => {
     if (s.fail.err) throw s.fail.err;
   };
@@ -44,17 +45,17 @@ function stub(): Stub {
       guard(),
       [{ task_id: "t1", synced_at: "2026-11-05T00:00:00.000Z", as_of_height: 5n, missing_since_height: null }]
     ),
-    listHistory: async (o: unknown) => (guard(), (s.lastHistory = o), { rows: [row(2), row(1)], next: "abc_-" }),
+    listHistory: async (o: unknown) => (guard(), (s.lastHistory = o), { rows: s.rows, next: "abc_-" }),
   };
   for (const w of WRITES) base[w] = async () => void s.writes.push(w);
   s.repo = base as unknown as Repo;
   return s;
 }
 
-function raw(port: number, opts: { method?: string; path: string; headers?: Record<string, string> }) {
+function raw(port: number, opts: { method?: string; path: string; headers?: Record<string, string>; connect?: string }) {
   return new Promise<{ status: number; headers: Record<string, string | string[] | undefined>; body: string }>((resolve, reject) => {
     const req = request(
-      { host: "127.0.0.1", port, method: opts.method ?? "GET", path: opts.path, headers: opts.headers ?? {} },
+      { host: opts.connect ?? "127.0.0.1", port, method: opts.method ?? "GET", path: opts.path, headers: opts.headers ?? {} },
       (res) => {
         let body = "";
         res.on("data", (c: Buffer) => (body += c.toString()));
@@ -140,10 +141,41 @@ describe("api", () => {
     expect(j.next).toBe("abc_-");
     expect(s.lastHistory).toEqual({ task: "t1", limit: 50 });
     const etag = r.headers.etag as string;
-    expect(etag).toContain("123456789012");
+    expect(etag).toMatch(/^"[0-9a-f]{32}"$/);
     const r2 = await get("/tasks/t1/history", { "if-none-match": etag });
     expect(r2.status).toBe(304);
     expect(r2.body).toBe("");
+  });
+
+  it("ETag changes when only a non-first row changes", async () => {
+    const a = (await get("/tasks/t1/history")).headers.etag;
+    s.rows = [row(2), { ...row(1), state: "Confirmed", actual_spent: "5" }];
+    const b = (await get("/tasks/t1/history")).headers.etag;
+    expect(b).not.toBe(a);
+    const r = await get("/tasks/t1/history", { "if-none-match": a as string });
+    expect(r.status).toBe(200);
+    expect((await get("/tasks/t1/history", { "if-none-match": b as string })).status).toBe(304);
+  });
+
+  it("serves on ::1 with a bracketed Host, still rejecting others", async () => {
+    const v6 = createApi({ repo: s.repo, scope: { network: "n", contractId: "c" }, host: "::1", port: 0 });
+    let p: number;
+    try {
+      p = (await v6.listen()).port;
+    } catch {
+      return; // no IPv6 loopback in this environment
+    }
+    try {
+      const ok = await raw(p, { connect: "::1", path: "/status", headers: { host: `[::1]:${p}` } });
+      expect(ok.status).toBe(200);
+      const okOrigin = await raw(p, { connect: "::1", path: "/status", headers: { host: `[::1]:${p}`, origin: `http://[::1]:${p}` } });
+      expect(okOrigin.status).toBe(200);
+      for (const h of [`::1:${p}`, `[::1]`, `[::1]:${p + 1}`, `[::2]:${p}`, `evil.example:${p}`]) {
+        expect((await raw(p, { connect: "::1", path: "/status", headers: { host: h } })).status, h).toBe(403);
+      }
+    } finally {
+      await v6.close();
+    }
   });
 
   it("clamps and validates limit and cursor", async () => {

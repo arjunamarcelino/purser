@@ -14,8 +14,9 @@ export class PostgresRepo extends SqlRepo {
   private readonly pool: pg.Pool;
   private readonly secrets: string[];
 
-  constructor(connectionString: string) {
+  constructor(connectionString: string, opts: { readOnly?: boolean } = {}) {
     super("pg");
+    this.readOnly = opts.readOnly ?? false;
     this.secrets = [connectionString];
     try {
       const u = new URL(connectionString);
@@ -26,6 +27,13 @@ export class PostgresRepo extends SqlRepo {
     this.pool = new pg.Pool({ connectionString, max: 5 });
     // An idle client erroring would otherwise crash the process; the next query surfaces the failure.
     this.pool.on("error", () => undefined);
+    // Defence in depth for the API process: even a stray write statement is rejected by the server.
+    // pg queues this ahead of the first query the pool hands out on the new client.
+    if (this.readOnly) {
+      this.pool.on("connect", (c) => {
+        c.query("SET default_transaction_read_only = on").catch(() => undefined);
+      });
+    }
   }
 
   /** Errors must never carry the connection string or credentials. */
@@ -85,6 +93,7 @@ export class PostgresRepo extends SqlRepo {
   }
 
   async init(): Promise<void> {
+    if (this.readOnly) return this.snapshot((q) => this.verifySchema(q));
     await this.tx(async (q) => {
       // serve and poll may both start against a fresh database
       await q.run("SELECT pg_advisory_xact_lock(?)", [String(MIGRATION_LOCK)]);

@@ -72,7 +72,10 @@ export function validateRow(raw: unknown, task: string): CachedCommitment | null
   if (!isObj(raw)) return null;
   const taskId = clean(raw.task_id, SAFE_TASK_ID);
   if (taskId === null || taskId !== task) return null;
-  const commitmentId = clean(raw.commitment_id, DIGITS);
+  // The API serialises commitment_id as a JSON number; a digit string is also accepted.
+  const rawId = raw.commitment_id;
+  const commitmentId =
+    typeof rawId === "number" ? (Number.isSafeInteger(rawId) && rawId >= 0 ? String(rawId) : null) : clean(rawId, DIGITS);
   const delegate = clean(raw.delegate, NEAR_ACCOUNT_ID);
   const recipient = clean(raw.recipient, NEAR_ACCOUNT_ID);
   const reservedAmount = clean(raw.reserved_amount, YOCTO);

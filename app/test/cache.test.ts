@@ -67,3 +67,23 @@ describe("cache isolation", () => {
     expect(text).not.toMatch(/dangerouslySetInnerHTML/);
   });
 });
+
+describe("real API shape", () => {
+  // Copied from live /history output: commitment_id is a JSON number, as_of_height a string.
+  const live = {
+    rows: [
+      { commitment_id: 11, delegate: "scout.arjuna-purser.testnet", recipient: "data.arjuna-purser.testnet", reserved_amount: "60000000000000000000000", actual_spent: "60000000000000000000000", state: "Confirmed", request_id: "d113caf5-888d-44dd-86cd-cea5b87da415", payload_hash: "bb8b7f10455fde53966f32dbc7352721a2dc0ca063a70b82366cfb647353bcee", near_tx: null, evm_tx: null, tx_status: "pending", task_id: "board-1", as_of_height: "276354090" },
+    ],
+    next: "YzE6MTE",
+  };
+  it("parseHistory keeps rows whose commitment_id is a number", () => {
+    const h = parseHistory(live, "board-1");
+    expect(h.dropped).toBe(0);
+    expect(h.rows).toHaveLength(1);
+    expect(h.rows[0]).toMatchObject({ commitmentId: "11", asOfHeight: 276354090 });
+  });
+  it("still accepts a string id and rejects unsafe or negative numeric ids", () => {
+    expect(validateRow(good({ commitment_id: "7" }), "board-1")?.commitmentId).toBe("7");
+    for (const id of [-1, 1.5, 2 ** 53, Number.NaN, "x1"]) expect(validateRow(good({ commitment_id: id }), "board-1")).toBeNull();
+  });
+});

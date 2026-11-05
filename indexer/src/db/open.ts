@@ -24,8 +24,8 @@ export async function openRepo(databaseUrl: string): Promise<Repo> {
   return t.kind === "sqlite" ? new SqliteRepo(t.path) : new PostgresRepo(t.url);
 }
 
-/** For the API process: sqlite gets its own read-only connection; `init()` only verifies the schema. */
+/** For the API process: both backends open read-only (sqlite: read-only connection; postgres: no migrations, read-only sessions); `init()` only verifies the schema. */
 export async function openRepoReadOnly(databaseUrl: string): Promise<Repo> {
   const t = parse(databaseUrl);
-  return t.kind === "sqlite" ? new SqliteRepo(t.path, { readOnly: true }) : new PostgresRepo(t.url);
+  return t.kind === "sqlite" ? new SqliteRepo(t.path, { readOnly: true }) : new PostgresRepo(t.url, { readOnly: true });
 }

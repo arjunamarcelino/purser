@@ -298,6 +298,7 @@ export function CachedHistory({
   personaOf,
   recordTx,
   contractId,
+  offline = false,
 }: {
   rows: CachedCommitment[];
   dropped: number;
@@ -305,16 +306,18 @@ export function CachedHistory({
   personaOf: (a: string) => string;
   recordTx: (r: CachedCommitment) => string | null;
   contractId: string;
+  offline?: boolean;
 }) {
   return (
     <section className="panel cached-history" aria-labelledby="cache-h">
       <h2 id="cache-h" className="label">
         On-chain history <span className="dim">(cached)</span>
       </h2>
+      {offline && rows.length > 0 && <p className="tone-warn small">offline — showing last known</p>}
       {rows.length === 0 ? (
         <p className="dim small">No cached history for this task yet.</p>
       ) : (
-        <ul aria-labelledby="cache-h">
+        <ul aria-labelledby="cache-h" style={offline ? { opacity: 0.6 } : undefined}>
           {[...rows]
             .sort((a, b) => Number(b.commitmentId) - Number(a.commitmentId))
             .map((r) => {
@@ -333,10 +336,12 @@ export function CachedHistory({
                   </span>
                   <span className="mtx">
                     {hash ? (
-                      <a href={explorer.tx(hash)} target="_blank" rel="noopener noreferrer" className="mono">
-                        <Icon name="link" size={14} /> tx {shortHash(hash)}
-                        {r.txStatus !== "resolved" && <span className="sr-only"> (hash reported by proposer)</span>}
-                      </a>
+                      <>
+                        <a href={explorer.tx(hash)} target="_blank" rel="noopener noreferrer" className="mono">
+                          <Icon name="link" size={14} /> tx {shortHash(hash)}
+                        </a>
+                        {r.txStatus !== "resolved" && <span className="dim small"> proposer-reported, unverified</span>}
+                      </>
                     ) : (
                       <a href={explorer.account(contractId)} target="_blank" rel="noopener noreferrer" className="dim small">
                         {r.txStatus === "unavailable" ? "tx unavailable" : r.txStatus === "pending" ? "tx pending" : "tx not indexed"}

@@ -203,7 +203,7 @@ export function App() {
             </div>
             <Manifest commitments={snap.commitments} records={state.records} personaOf={personaOf} delegateIds={delegateIds} now={now} />
             {config.indexerEnabled && !cache.wrongIndexer && (
-              <CachedHistory rows={cache.rows} dropped={cache.dropped} boardBlock={snap.blockHeight} personaOf={personaOf} recordTx={recordTx} contractId={config.contractId} />
+              <CachedHistory rows={cache.rows} dropped={cache.dropped} boardBlock={snap.blockHeight} personaOf={personaOf} recordTx={recordTx} contractId={config.contractId} offline={cache.offline} />
             )}
             {isOwner && <OwnerPanel task={task} request={(r) => owner.request({ ...r, onSuccess: refresh })} busy={owner.busy} />}
           </>
@@ -235,7 +235,7 @@ export function App() {
                   <span className={cache.offline ? "tone-warn" : ""}>{cache.offline ? "history offline" : "history cache …"}</span>
                 ) : (
                   <span className={cache.offline || (cacheAge ?? Infinity) > 60_000 ? "tone-warn" : ""}>
-                    history cache {cacheAge === null ? "never" : `${Math.round(cacheAge / 1000)}s`} · block {cache.status.asOfHeight ?? "—"}
+                    history cache {cacheAge === null ? "never" : `${Math.round(cacheAge / 1000)}s`} · cache block {cache.status.asOfHeight ?? "—"}
                     {cache.offline && " · history offline"}
                     {cacheLag !== null && cacheLag > 100 && ` · Δ ${cacheLag} blocks`}
                   </span>
