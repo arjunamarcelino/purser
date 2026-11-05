@@ -8,7 +8,8 @@ timeouts, and revocation. The AI only proposes; the contract enforces.
 
 **Tracks:** security (primary) · swarms · agents
 
-**Status:** scaffold. Specs live in `docs/`; build steps in `docs/PURSER-BUILD-PROMPTS.md`.
+**Status:** contract (NEAR-native core, property + attack suites) and the untrusted AI proposer
+crew (`proposer/`) are built; dashboard, indexer and testnet demo are next. Specs live in `docs/`.
 
 ## Authorization & honest revocation
 
@@ -32,11 +33,19 @@ new proposals BLOCKED, with a caption noting already-issued signatures cannot be
 | Command | What it does |
 |---|---|
 | `make build` | `cargo near build` → wasm + ABI in `contract/target/near/` |
-| `make test`  | contract unit + integration tests |
-| `make lint`  | `cargo clippy --all-targets -- -D warnings` |
+| `make test`  | contract unit + integration tests, TS unit tests |
+| `make lint`  | `cargo clippy --all-targets -- -D warnings`, `tsc` typecheck of the TS workspace |
 | `make fmt`   | `cargo fmt` |
 | `make hooks` | install the pre-commit secret-scan hook |
 | `make prove` | the security evidence: property tests + the named attack cases |
+| `make ts-test-sandbox` | the AI proposer on a local chain: attack case 2 through the AI path, rogue proposals, key scope, exactly-once retries, model-independence property |
+| `make crew` | run Scout, Forge and Buyer against Purser (`NETWORK=sandbox\|testnet`, `SCENARIO=demo\|legit\|race\|rogue`) |
+| `make types-gen` | regenerate `@purser/types` from the contract ABI |
+| `make deploy-testnet` | deploy to testnet and provision the crew (`OPERATOR_ACCOUNT_ID=<you>.testnet`) |
+
+The AI proposer is untrusted by design: it holds one function-call key per persona that can call
+only `propose_payment`, and does no client-side policy — every limit is the contract's. See
+[`proposer/README.md`](proposer/README.md).
 
 The test-only `fault-injection` feature never builds by accident: `build.rs` refuses it unless
 `PURSER_ALLOW_FAULT_INJECTION=1` is set (so `--all-features` fails loudly), and
@@ -74,5 +83,6 @@ the owner's own account: `#[private]` callbacks would then accept the owner as t
 
 - Rust (via rustup) with the `wasm32-unknown-unknown` target
 - [`cargo-near`](https://github.com/near/cargo-near) and [`near-cli-rs`](https://github.com/near/near-cli-rs)
+- Node 26 and pnpm 10 (`corepack enable`); TS runs directly on Node's type stripping
 
 Target network: **NEAR testnet** only.
