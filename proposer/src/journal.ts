@@ -9,10 +9,12 @@
 //   - a refusal is terminal: the panic rolled the call back, so no idempotency record exists,
 //     and resending the same request_id could be admitted later, when budget frees up.
 //
-// One file per (network, contract, account), one process per file (O_EXCL lock), appends
-// serialized in-process, fsync'd. A torn last line (crash mid-write) is ignored on load.
+// One file per (network, contract, account), one process per file (an atomically created lock),
+// appends serialized in-process, fsync'd. A torn last line (crash mid-write) is truncated away on
+// load; an unreadable line anywhere else refuses the journal, since it might be the only record
+// of an unresolved request.
 
-import { closeSync, constants, fsyncSync, mkdirSync, openSync, readFileSync, unlinkSync, writeSync } from "node:fs";
+import { closeSync, constants, fsyncSync, ftruncateSync, linkSync, mkdirSync, openSync, readFileSync, renameSync, unlinkSync, writeFileSync, writeSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { z } from "zod";
 
@@ -39,6 +41,10 @@ export type JournalEntry = z.infer<typeof Entry>;
 
 export class JournalLockedError extends Error {
   override name = "JournalLockedError";
+}
+
+export class JournalCorruptError extends Error {
+  override name = "JournalCorruptError";
 }
 
 const fileFor = (dir: string, s: JournalScope) =>
@@ -77,8 +83,20 @@ export class Journal {
     this.#lockPath = `${path}.lock`;
     this.#scope = scope;
     this.#acquireLock();
-    const created = !this.#load(warn);
+    let loaded: ReturnType<Journal["load"]>;
+    try {
+      loaded = this.load(warn);
+    } catch (e) {
+      this.#releaseLock();
+      throw e;
+    }
     this.#fd = openSync(path, constants.O_WRONLY | constants.O_APPEND | constants.O_CREAT, 0o600);
+    if (loaded.keepBytes !== undefined) {
+      // Cut the torn tail so the next append starts on a fresh line, not glued to the fragment.
+      ftruncateSync(this.#fd, loaded.keepBytes);
+      fsyncSync(this.#fd);
+    }
+    const created = !loaded.existed;
     if (created) {
       fsyncSync(this.#fd);
       fsyncDir(dirname(path)); // make the new file's directory entry durable too
@@ -90,33 +108,80 @@ export class Journal {
     return new Journal(fileFor(dir, scope), scope, warn);
   }
 
+  // The lock file appears atomically WITH its pid (written to a temp file, then hard-linked into
+  // place), so no reader ever sees an empty lock. A stale lock (dead pid) is taken over by renaming
+  // it aside and checking that what was renamed is the stale lock we inspected; if another process
+  // got there first, its live lock is put back and we report the journal as locked.
   #acquireLock() {
-    for (let attempt = 0; attempt < 2; attempt++) {
-      try {
-        const fd = openSync(this.#lockPath, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL, 0o600);
-        writeSync(fd, String(process.pid));
-        closeSync(fd);
-        return;
-      } catch (e) {
-        if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e;
-        const holder = Number.parseInt(readFileSync(this.#lockPath, "utf8"), 10);
-        if (Number.isInteger(holder) && pidAlive(holder)) {
-          throw new JournalLockedError(`journal ${this.#path} is in use by pid ${holder}`);
+    const tmp = `${this.#lockPath}.${process.pid}.${Math.random().toString(36).slice(2)}`;
+    writeFileSync(tmp, String(process.pid), { mode: 0o600 });
+    try {
+      for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+          linkSync(tmp, this.#lockPath);
+          return;
+        } catch (e) {
+          if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e;
         }
-        unlinkSync(this.#lockPath); // stale lock from a dead process
+        const seen = this.#readLockPid();
+        if (seen !== undefined && pidAlive(seen)) throw new JournalLockedError(`journal ${this.#path} is in use by pid ${seen}`);
+        const aside = `${tmp}.stale`;
+        try {
+          renameSync(this.#lockPath, aside);
+        } catch (e) {
+          if ((e as NodeJS.ErrnoException).code === "ENOENT") continue; // someone removed it; retry
+          throw e;
+        }
+        const moved = Number.parseInt(readFileSync(aside, "utf8"), 10);
+        if (moved !== seen && Number.isInteger(moved) && pidAlive(moved)) {
+          try {
+            linkSync(aside, this.#lockPath); // restore the live lock we raced with
+          } finally {
+            unlinkSync(aside);
+          }
+          throw new JournalLockedError(`journal ${this.#path} is in use by pid ${moved}`);
+        }
+        unlinkSync(aside);
       }
+      throw new JournalLockedError(`could not lock journal ${this.#path}`);
+    } finally {
+      unlinkSync(tmp);
     }
-    throw new JournalLockedError(`could not lock journal ${this.#path}`);
   }
 
-  /** Returns whether the file existed. */
-  #load(warn: (m: string) => void): boolean {
+  #readLockPid(): number | undefined {
+    try {
+      const pid = Number.parseInt(readFileSync(this.#lockPath, "utf8"), 10);
+      return Number.isInteger(pid) ? pid : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  #releaseLock() {
+    if (this.#readLockPid() !== process.pid) return; // never remove a lock we do not hold
+    try {
+      unlinkSync(this.#lockPath);
+    } catch {
+      // already gone
+    }
+  }
+
+  /** Load existing entries. `keepBytes` is set when a torn tail must be truncated. */
+  private load(warn: (m: string) => void): { existed: boolean; keepBytes?: number } {
     let text: string;
     try {
       text = readFileSync(this.#path, "utf8");
     } catch (e) {
-      if ((e as NodeJS.ErrnoException).code === "ENOENT") return false;
+      if ((e as NodeJS.ErrnoException).code === "ENOENT") return { existed: false };
       throw e;
+    }
+    let keepBytes: number | undefined;
+    if (text.length > 0 && !text.endsWith("\n")) {
+      const cut = text.lastIndexOf("\n") + 1;
+      keepBytes = Buffer.byteLength(text.slice(0, cut), "utf8");
+      text = text.slice(0, cut);
+      warn(`journal: truncating a torn last line in ${this.#path}`);
     }
     const lines = text.split("\n").filter((l) => l.length > 0);
     lines.forEach((line, i) => {
@@ -124,9 +189,7 @@ export class Journal {
       try {
         entry = Entry.parse(JSON.parse(line));
       } catch {
-        if (i === lines.length - 1) warn(`journal: ignoring a torn last line in ${this.#path}`);
-        else warn(`journal: ignoring an unreadable line ${i + 1} in ${this.#path}`);
-        return;
+        throw new JournalCorruptError(`journal ${this.#path}: line ${i + 1} is unreadable; refusing to guess whether a request is unresolved — inspect the file`);
       }
       const s = this.#scope;
       if (entry.network !== s.network || entry.contract_id !== s.contractId || entry.account_id !== s.accountId) {
@@ -136,7 +199,7 @@ export class Journal {
       this.#seq = Math.max(this.#seq, entry.seq + 1);
       this.#latest.set(entry.request_id, entry);
     });
-    return true;
+    return keepBytes === undefined ? { existed: true } : { existed: true, keepBytes };
   }
 
   /** The unresolved entry for a task, if any (at most one by construction). */
@@ -180,10 +243,6 @@ export class Journal {
     this.#closed = true;
     await this.#chain;
     closeSync(this.#fd);
-    try {
-      unlinkSync(this.#lockPath);
-    } catch {
-      // already gone
-    }
+    this.#releaseLock();
   }
 }

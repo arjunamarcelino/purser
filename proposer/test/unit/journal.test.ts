@@ -2,7 +2,7 @@ import { mkdtempSync, readFileSync, appendFileSync, writeFileSync, readdirSync, 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { Journal, JournalLockedError, type JournalScope } from "../../src/journal.ts";
+import { Journal, JournalCorruptError, JournalLockedError, type JournalScope } from "../../src/journal.ts";
 
 const scope: JournalScope = { network: "sandbox", contractId: "purser.sandbox", accountId: "scout.sandbox" };
 const open: Journal[] = [];
@@ -63,16 +63,32 @@ describe("Journal", () => {
     expect(warnings.join()).toMatch(/another network/);
   });
 
-  it("tolerates a torn last line", async () => {
+  it("truncates a torn last line, so the next append is not glued to the fragment", async () => {
+    const dir = fresh();
+    const j1 = make(dir);
+    await j1.resolve(await j1.begin("t", "d", "r", "{}"), "refused");
+    await j1.close();
+    const file = join(dir, readdirSync(dir).find((f) => f.endsWith(".jsonl"))!);
+    appendFileSync(file, '{"seq":2,"netw'); // crash mid-write
+    const warnings: string[] = [];
+    const j2 = make(dir, scope, (m) => warnings.push(m));
+    expect(warnings.join()).toMatch(/torn/);
+    await j2.begin("t", "d2", "r2", "{}"); // left open, as after an unknown send
+    await j2.close();
+    open.splice(open.indexOf(j2), 1);
+    // Reloads cleanly and still sees the unresolved request (no silent loss → no double decision).
+    expect(make(dir).openEntry("t")).toMatchObject({ request_id: "r2" });
+  });
+
+  it("refuses to open when a line other than the last is unreadable", async () => {
     const dir = fresh();
     const j1 = make(dir);
     await j1.begin("t", "d", "r", "{}");
     await j1.close();
     const file = join(dir, readdirSync(dir).find((f) => f.endsWith(".jsonl"))!);
-    appendFileSync(file, '{"seq":1,"netw');
-    const warnings: string[] = [];
-    expect(make(dir, scope, (m) => warnings.push(m)).openEntry("t")).toMatchObject({ request_id: "r" });
-    expect(warnings.join()).toMatch(/torn/);
+    writeFileSync(file, `garbage\n${readFileSync(file, "utf8")}`);
+    expect(() => Journal.open(dir, scope)).toThrow(JournalCorruptError);
+    expect(() => make(dir)).toThrow(JournalCorruptError); // and it released its lock
   });
 
   it("allows one process per journal, and recovers a stale lock", async () => {
@@ -82,6 +98,9 @@ describe("Journal", () => {
     await open.splice(0)[0]!.close();
     const lock = join(dir, `${readdirSync(dir).find((f) => f.endsWith(".jsonl"))!}.lock`);
     writeFileSync(lock, "999999"); // a pid that does not exist
+    expect(() => make(dir)).not.toThrow();
+    await open.splice(0)[0]!.close();
+    writeFileSync(lock, ""); // a lock left empty by a crash
     expect(() => make(dir)).not.toThrow();
   });
 
