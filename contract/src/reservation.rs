@@ -37,9 +37,14 @@ pub enum Event {
     Timeout,
     /// `Unknown -> Cancelled`: attested nonce-burn cancel (stretch).
     Cancel,
-    /// `Failed -> Confirmed`: the settlement callback proves a transfer the owner attested as
-    /// failed actually landed. The only edge out of a terminal state: proof beats attestation.
+    /// `Failed -> Confirmed` or `Cancelled -> Confirmed`: proof that a transfer the owner attested
+    /// as failed (or released as cancelled) actually landed. The only edges out of a terminal state:
+    /// proof beats attestation.
     Contradict,
+    /// `Reserved -> Unknown`: an EVM `sign` outcome that is not proof of "no signature" (a callback
+    /// `Err`, an unverifiable response, or a `Reserved` commitment that never resolved). A signature
+    /// may exist in public, so the reservation stays held (EVM path only).
+    Ambiguous,
 }
 
 /// Human-readable event name for [`PurserError::IllegalTransition`].
@@ -51,16 +56,18 @@ const fn event_name(e: Event) -> &'static str {
         Event::Timeout => "Timeout",
         Event::Cancel => "Cancel",
         Event::Contradict => "Contradict",
+        Event::Ambiguous => "Ambiguous",
     }
 }
 
 /// Return the target state for a legal `(from, event)` edge, else
 /// [`PurserError::IllegalTransition`]. Pure and total.
 ///
-/// The legal edge set is EXACTLY these seven: the six of the §4 diagram plus
-/// `Failed -> Confirmed` on [`Event::Contradict`]. Any other pair (including every other event
-/// from a terminal state, re-`Signed`, `Signed -> Failed`, `Unknown -> Failed`, and
-/// `Unknown -> Unknown`) is rejected.
+/// The legal edge set is EXACTLY these nine: the six of the §4 diagram, `Failed -> Confirmed` and
+/// `Cancelled -> Confirmed` on [`Event::Contradict`], and `Reserved -> Unknown` on
+/// [`Event::Ambiguous`] (the EVM path, where a failed `sign` is not proof that no signature exists).
+/// Any other pair (including every other event from a terminal state, re-`Signed`,
+/// `Signed -> Failed`, `Unknown -> Failed`, and `Unknown -> Unknown`) is rejected.
 pub fn transition(from: ReservationState, event: Event) -> Result<ReservationState, PurserError> {
     use Event::*;
     use ReservationState::*;
@@ -72,6 +79,8 @@ pub fn transition(from: ReservationState, event: Event) -> Result<ReservationSta
         (Unknown, Confirm) => Confirmed,
         (Unknown, Cancel) => Cancelled,
         (Failed, Contradict) => Confirmed,
+        (Cancelled, Contradict) => Confirmed,
+        (Reserved, Ambiguous) => Unknown,
         // NOTE: there is intentionally no (Unknown, Timeout) => Unknown row. The §4
         // "stays reserved" self-loop is INACTION, not an Ok-returning edge; adding
         // it would make `mark_unknown(Unknown)` wrongly succeed.
@@ -91,18 +100,19 @@ mod tests {
     use crate::types::ReservationState::*;
 
     const STATES: [ReservationState; 6] = [Reserved, Signed, Confirmed, Unknown, Failed, Cancelled];
-    const EVENTS: [Event; 6] = [
+    const EVENTS: [Event; 7] = [
         Event::Authorize,
         Event::Fail,
         Event::Confirm,
         Event::Timeout,
         Event::Cancel,
         Event::Contradict,
+        Event::Ambiguous,
     ];
 
-    /// The seven legal edges, as (from, event, to). Any change to `transition` that
+    /// The nine legal edges, as (from, event, to). Any change to `transition` that
     /// widens or narrows the edge set breaks `transition_table_is_exactly_the_legal_set`.
-    const LEGAL: [(ReservationState, Event, ReservationState); 7] = [
+    const LEGAL: [(ReservationState, Event, ReservationState); 9] = [
         (Reserved, Event::Authorize, Signed),
         (Reserved, Event::Fail, Failed),
         (Signed, Event::Confirm, Confirmed),
@@ -110,9 +120,11 @@ mod tests {
         (Unknown, Event::Confirm, Confirmed),
         (Unknown, Event::Cancel, Cancelled),
         (Failed, Event::Contradict, Confirmed),
+        (Cancelled, Event::Contradict, Confirmed),
+        (Reserved, Event::Ambiguous, Unknown),
     ];
 
-    /// Exhaustive 6x6 = 36-pair check: exactly the seven legal edges are `Ok` (with
+    /// Exhaustive 6x7 = 42-pair check: exactly the nine legal edges are `Ok` (with
     /// the correct target), every other pair is `Err(IllegalTransition)`.
     #[test]
     fn transition_table_is_exactly_the_legal_set() {
@@ -137,7 +149,7 @@ mod tests {
                 }
             }
         }
-        assert_eq!(legal_count, 7, "expected exactly 7 legal edges");
+        assert_eq!(legal_count, 9, "expected exactly 9 legal edges");
     }
 
     /// The safety-critical rejections, asserted by name so a regression is obvious.
@@ -167,10 +179,20 @@ mod tests {
             transition(Reserved, Event::Confirm),
             Err(PurserError::IllegalTransition { .. })
         ));
-        // Terminal states accept no event, except the proof-beats-attestation edge.
+        // Ambiguity is a Reserved-only edge: a Signed/Unknown commitment is already holding its budget.
+        for from in [Signed, Unknown, Confirmed, Failed, Cancelled] {
+            assert!(matches!(
+                transition(from, Event::Ambiguous),
+                Err(PurserError::IllegalTransition { .. })
+            ));
+        }
+        // Terminal states accept no event, except the proof-beats-attestation edges.
         for from in [Confirmed, Failed, Cancelled] {
             for event in EVENTS {
-                if (from, event) == (Failed, Event::Contradict) {
+                if matches!(
+                    (from, event),
+                    (Failed, Event::Contradict) | (Cancelled, Event::Contradict)
+                ) {
                     continue;
                 }
                 assert!(

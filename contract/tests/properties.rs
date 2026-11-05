@@ -10,7 +10,13 @@
 //! 2. **Invariant (I):** `completed + outstanding <= cap`.
 //! 3. **No release on silence:** an op that carries no proof of outcome never decreases
 //!    `outstanding`, and never moves a live (`Reserved | Signed | Unknown`) commitment anywhere
-//!    except the zero-accounting `Reserved -> Signed` / `Signed -> Unknown` edges.
+//!    except the zero-accounting `Reserved -> Signed` / `Signed -> Unknown` /
+//!    `Reserved -> Unknown` (EVM ambiguity) edges.
+//!
+//! Invariant (I) holds after every op EXCEPT the one modelled, frozen breach: a `Cancelled` or `Failed`
+//! commitment whose transfer is later PROVEN to have landed (`contradict`) is recorded even if that
+//! pushes `completed + outstanding` over `cap`, and the task freezes. The model predicts the freeze
+//! exactly; a frozen task refuses every new proposal.
 //!
 //! Layer A (`core_*`) drives the pure, env-free accounting core, including the
 //! `Signed -> Unknown -> Confirmed | Cancelled` edges the NEAR-native path never reaches
@@ -25,9 +31,10 @@ use near_sdk::{AccountId, NearToken};
 use proptest::prelude::*;
 use proptest::sample::Index;
 use purser_contract::{
-    assert_invariant, authorize, cancel, classify, mark_unknown, release_failed, settle_confirmed,
-    try_reserve, Chain, Commitment, IdemDecision, IdemState, PaymentIntent, PurserError,
-    ReservationState, TaskBudget, TokenSpec,
+    assert_invariant, authorize, cancel, classify, contradict_cancelled, mark_ambiguous,
+    mark_unknown, record_contradicted_spend, release_failed, settle_confirmed, try_reserve, Chain,
+    Commitment, IdemDecision, IdemState, PaymentIntent, PurserError, ReservationState, TaskBudget,
+    TokenSpec,
 };
 
 // ==== shared vocabulary =========================================================================
@@ -141,6 +148,17 @@ enum CoreOp {
     CancelAttested {
         pick: Index,
     },
+    /// EVM path: an ambiguous `sign` outcome (callback `Err`, unverifiable response): `Reserved ->
+    /// Unknown`, zero accounting, the request id is `Committed`.
+    Ambiguous {
+        pick: Index,
+    },
+    /// A transfer proven to have landed after a release: `Failed | Cancelled -> Confirmed`, the spend is
+    /// recorded even over cap and the task freezes.
+    Contradict {
+        pick: Index,
+        spent_per_mille: u16,
+    },
     Revoke {
         d: usize,
     },
@@ -154,7 +172,10 @@ impl CoreOp {
     fn carries_proof(&self) -> bool {
         matches!(
             self,
-            CoreOp::SettleOk { .. } | CoreOp::FailPreSig { .. } | CoreOp::CancelAttested { .. }
+            CoreOp::SettleOk { .. }
+                | CoreOp::FailPreSig { .. }
+                | CoreOp::CancelAttested { .. }
+                | CoreOp::Contradict { .. }
         )
     }
 }
@@ -170,6 +191,9 @@ fn core_op_strategy() -> impl Strategy<Value = CoreOp> {
         2 => any::<Index>().prop_map(|pick| CoreOp::FailPreSig { pick }),
         2 => any::<Index>().prop_map(|pick| CoreOp::Timeout { pick }),
         1 => any::<Index>().prop_map(|pick| CoreOp::CancelAttested { pick }),
+        2 => any::<Index>().prop_map(|pick| CoreOp::Ambiguous { pick }),
+        2 => (any::<Index>(), 0u16..=1100)
+            .prop_map(|(pick, spent_per_mille)| CoreOp::Contradict { pick, spent_per_mille }),
         // d0 is never revoked (revocation is terminal, as in the contract), so late proposals in a
         // long sequence are not starved
         1 => (1..DELEGATES).prop_map(|d| CoreOp::Revoke { d }),
@@ -184,6 +208,7 @@ enum Outcome {
     Replay(u64),
     InFlight,
     AlreadyFailed,
+    Frozen,
     NotAuthorized,
     ZeroAmount,
     Overflow,
@@ -247,6 +272,9 @@ impl CoreSut {
             IdemDecision::InFlight => return Outcome::InFlight,
             IdemDecision::AlreadyFailed => return Outcome::AlreadyFailed,
             IdemDecision::Fresh => {}
+        }
+        if self.budget.frozen {
+            return Outcome::Frozen; // a frozen task authorizes nothing (checked after idempotency, as in `propose_payment`)
         }
         let id = self.commitments.len() as u64;
         let intent = PaymentIntent {
@@ -313,6 +341,8 @@ struct CoreModel {
     commits: Vec<ModelCommit>,
     idem: BTreeMap<Key, IdemState>,
     active: [bool; DELEGATES],
+    /// Set (permanently) when a proven landing pushes `completed + outstanding` over `cap`.
+    frozen: bool,
 }
 
 impl CoreModel {
@@ -322,6 +352,7 @@ impl CoreModel {
             commits: Vec::new(),
             idem: BTreeMap::new(),
             active: [true; DELEGATES],
+            frozen: false,
         }
     }
 
@@ -354,6 +385,9 @@ impl CoreModel {
             Some(IdemState::Failed) => return Outcome::AlreadyFailed,
             Some(IdemState::Committed { commitment_id }) => return Outcome::Replay(*commitment_id),
             None => {}
+        }
+        if self.frozen {
+            return Outcome::Frozen;
         }
         if amount == 0 {
             return Outcome::ZeroAmount;
@@ -490,6 +524,72 @@ fn step_core(sut: &mut CoreSut, model: &mut CoreModel, op: &CoreOp) -> (Outcome,
                 (s, m)
             }
         },
+        CoreOp::Ambiguous { pick: p } => match pick(p) {
+            None => (Outcome::NoOp, Outcome::NoOp),
+            Some(i) => {
+                let s = sut.resolve(
+                    i,
+                    |_, c, now| mark_ambiguous(c, now),
+                    Some(IdemState::Committed {
+                        commitment_id: i as u64,
+                    }),
+                );
+                let m = model.edge(i, &[Reserved], Unknown);
+                if m == Outcome::Applied {
+                    model.idem.insert(
+                        model.commits[i].key,
+                        IdemState::Committed {
+                            commitment_id: i as u64,
+                        },
+                    );
+                }
+                (s, m)
+            }
+        },
+        CoreOp::Contradict {
+            pick: p,
+            spent_per_mille,
+        } => match pick(p) {
+            None => (Outcome::NoOp, Outcome::NoOp),
+            Some(i) => {
+                let spent = spent_for(model.commits[i].reserved, *spent_per_mille);
+                // the boundary picks the pure fn by the state it finds, and freezes on an over-cap NEAR
+                // contradiction; `contradict_cancelled` freezes itself
+                let state = sut.commitments[i].state;
+                let s = sut.resolve(
+                    i,
+                    |b, c, now| match state {
+                        Failed => {
+                            let over = record_contradicted_spend(b, c, yocto(spent), now)?;
+                            b.frozen |= over;
+                            Ok(())
+                        }
+                        _ => contradict_cancelled(b, c, yocto(spent), now).map(|_| ()),
+                    },
+                    Some(IdemState::Committed {
+                        commitment_id: i as u64,
+                    }),
+                );
+                let m = if !matches!(model.commits[i].state, Failed | Cancelled) {
+                    Outcome::Illegal
+                } else if spent > model.commits[i].reserved {
+                    Outcome::SpentExceeds
+                } else {
+                    let r = model.edge(i, &[Failed, Cancelled], Confirmed);
+                    model.commits[i].spent = Some(spent);
+                    model.idem.insert(
+                        model.commits[i].key,
+                        IdemState::Committed {
+                            commitment_id: i as u64,
+                        },
+                    );
+                    // the freeze is predicted from the model's own sums, never read from the SUT
+                    model.frozen |= model.used() > model.cap;
+                    r
+                };
+                (s, m)
+            }
+        },
         CoreOp::Revoke { d } => {
             sut.active[*d] = false;
             model.active[*d] = false;
@@ -511,6 +611,11 @@ fn check_core(
     prop_assert_eq!(s, m, "outcome disagrees with the model");
     prop_assert_eq!(sut.budget.outstanding, yocto(model.outstanding()));
     prop_assert_eq!(sut.budget.completed, yocto(model.completed()));
+    prop_assert_eq!(
+        sut.budget.frozen,
+        model.frozen,
+        "freeze disagrees with the model"
+    );
     prop_assert_eq!(sut.commitments.len(), model.commits.len());
     for (c, mc) in sut.commitments.iter().zip(&model.commits) {
         prop_assert_eq!(&c.delegate, &delegate_id(mc.key.0));
@@ -542,19 +647,32 @@ fn check_core(
     }
     if let Outcome::Replay(cid) = s {
         let c = &sut.commitments[cid as usize];
-        prop_assert_eq!(c.state, ReservationState::Confirmed);
+        // `Committed` means settled (Confirmed) or, on the EVM path, signed-or-ambiguous (Unknown, which
+        // may later settle or be released).
+        prop_assert!(matches!(
+            c.state,
+            ReservationState::Confirmed | ReservationState::Unknown
+        ));
         prop_assert_eq!(seen.get(&(&c.delegate, &c.request_id)), Some(&cid));
     }
 
-    // (2) Invariant (I), on the SUT's own aggregates.
-    assert_invariant(&sut.budget);
-    prop_assert!(
-        sut.budget
-            .completed
-            .checked_add(sut.budget.outstanding)
-            .unwrap()
-            <= sut.budget.cap
-    );
+    // (2) Invariant (I), on the SUT's own aggregates, EXCEPT the modelled frozen breach: (I) may fail
+    // only on a task the model also froze (and it can only have been broken by a `contradict`).
+    if !model.frozen {
+        assert_invariant(&sut.budget);
+        prop_assert!(
+            sut.budget
+                .completed
+                .checked_add(sut.budget.outstanding)
+                .unwrap()
+                <= sut.budget.cap
+        );
+    } else {
+        prop_assert!(
+            sut.budget.frozen,
+            "(I) may only be breached on a frozen task"
+        );
+    }
 
     // (3) No release on silence.
     if !op.carries_proof() {
@@ -564,7 +682,8 @@ fn check_core(
                 use ReservationState::*;
                 let allowed = old.state == new.state
                     || (old.state, new.state) == (Reserved, Signed)
-                    || (old.state, new.state) == (Signed, Unknown);
+                    || (old.state, new.state) == (Signed, Unknown)
+                    || (old.state, new.state) == (Reserved, Unknown);
                 prop_assert!(allowed, "{:?} -> {:?} without proof", old.state, new.state);
             }
         }
@@ -892,10 +1011,10 @@ mod contract_layer {
                 c.create_task(t.to_string(), yocto(cap), TokenSpec::NearNative, 3);
             }
             for a in 0..ACTORS {
-                c.add_delegate("t1".into(), actor(a), "m/0".into());
+                c.add_delegate("t1".into(), actor(a), format!("m/t1/{a}"));
             }
             for a in [0, OWNER] {
-                c.add_delegate("t2".into(), actor(a), "m/0".into());
+                c.add_delegate("t2".into(), actor(a), format!("m/t2/{a}"));
             }
             c.set_recipient_allowlist(
                 "t1".into(),
@@ -1199,7 +1318,7 @@ mod contract_layer {
             Op::AddDelegate { task, who } => {
                 let (t, a) = (*task, *who);
                 let actual = sut.call(before, owner.clone(), now, |c| {
-                    c.add_delegate(TASKS[t].into(), actor(a), "m/0".into())
+                    c.add_delegate(TASKS[t].into(), actor(a), format!("m/{}/{a}", TASKS[t]))
                 })?;
                 let actual = to_out(actual, |_| Out::Done);
                 let predicted = if m.registered[t][a].is_some() {

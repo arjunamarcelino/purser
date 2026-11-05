@@ -58,3 +58,16 @@ test("generated surface: client calls, timestamp fields, externally tagged enums
   const chains: Chain[] = ["NearNative", { Evm: { chain_id: 11155111 } }];
   assert.equal(chains.length, 2);
 });
+
+test("every EVM refusal constant in the contract is classified (no unclassified MSG_*)", async () => {
+  const { readFileSync } = await import("node:fs");
+  const src = readFileSync(new URL("../../../contract/src/error.rs", import.meta.url), "utf8");
+  const messages = [...src.matchAll(/pub const MSG_\w+: &str = "([^"]+)";/g)].map((m) => m[1] ?? "");
+  assert.ok(messages.length > 40, "the scan found the constants");
+  // the NEAR-era registry/setup guards were never classified (they are owner-side, not proposer-facing);
+  // every message added with the EVM path must be.
+  const known = new Set<string>(Object.values(REFUSALS).map((r) => r.message));
+  const evm = messages.slice(messages.indexOf("evm value below minimum"));
+  assert.ok(evm.length >= 26);
+  for (const m of evm) assert.ok(known.has(m), `unclassified EVM refusal: ${m}`);
+});

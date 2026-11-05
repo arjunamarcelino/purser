@@ -12,7 +12,8 @@
 //! Lives in its own module (not `delegates`) because the set spans task *and* delegate
 //! lifecycles — and Prompt 4 adds payment events here too.
 
-use crate::types::{CommitmentId, RequestId, TaskId, TokenSpec};
+use crate::types::{CommitmentId, RequestId, ReservationState, TaskId, TokenSpec};
+use near_sdk::json_types::{U128, U64};
 use near_sdk::{near, AccountId, NearToken};
 
 #[near(event_json(standard = "purser"))]
@@ -113,4 +114,94 @@ pub enum PurserEvent {
         transfer_succeeded: bool,
         frozen: bool,
     },
+    // ---- EVM payment path (Prompt 12). Hashes are `0x` + lowercase hex; every u64/u128 is a decimal string. ----
+    /// The MPC signature verified against the cached derived key (`Reserved -> Signed`), or a verified
+    /// signature recorded late (`late: true`, state unchanged: the commitment had already left `Reserved`).
+    #[event_version("1.0.0")]
+    PaymentSigned {
+        task_id: TaskId,
+        commitment_id: CommitmentId,
+        request_id: RequestId,
+        tx_hash: String,
+        nonce: U64,
+        from: String,
+        to: String,
+        late: bool,
+        state: ReservationState,
+    },
+    /// The commitment is `Unknown` and STAYS RESERVED: a signer error, an unverifiable response, an age
+    /// timeout, or attested revert evidence. `reason` is a closed vocabulary: `signer_error`,
+    /// `invalid_signature`, `timeout`, `ambiguous`, `reverted_original`, `late_invalid_signature`,
+    /// `signature_after_failed`, `cancel_signer_error`, `cancel_invalid_signature`.
+    #[event_version("1.0.0")]
+    PaymentUnknown {
+        task_id: TaskId,
+        commitment_id: CommitmentId,
+        request_id: RequestId,
+        reason: String,
+        state: ReservationState,
+    },
+    /// The nonce-burn cancel was signed and verified (`late: true` when recorded after the fact).
+    #[event_version("1.0.0")]
+    CancelSigned {
+        task_id: TaskId,
+        commitment_id: CommitmentId,
+        tx_hash: String,
+        max_fee: U128,
+        tip: U128,
+        late: bool,
+    },
+    /// The OWNER released an `Unknown` commitment on attested evidence (`cancel_landed` or
+    /// `original_reverted`): `Unknown -> Cancelled`, the reservation is returned.
+    #[event_version("1.0.0")]
+    PaymentCancelled {
+        task_id: TaskId,
+        commitment_id: CommitmentId,
+        request_id: RequestId,
+        evidence: String,
+    },
+    /// The relayer (or owner) attested what happened on the EVM chain. `kind` is derived from which stored
+    /// hash matched (`original` | `cancel`); `finality` is `finalized` | `safe`; `state` is the commitment
+    /// state AFTER applying it; `contradicted` marks a landing that disagrees with a release or a
+    /// confirmation. The block fields are audit-only: the contract cannot verify them.
+    #[event_version("1.0.0")]
+    ExternalAttested {
+        task_id: TaskId,
+        commitment_id: CommitmentId,
+        kind: String,
+        tx_hash: String,
+        success: bool,
+        finality: String,
+        block_number: U64,
+        block_hash: String,
+        contradicted: bool,
+        frozen: bool,
+        state: ReservationState,
+    },
+    /// Owner stored the EVM configuration.
+    #[event_version("1.0.0")]
+    EvmCfgSet {
+        chain_id: U64,
+        max_fee_ceiling: U128,
+        max_priority_ceiling: U128,
+        min_value: U128,
+        min_unknown_age_ns: U64,
+    },
+    /// Owner marked an empty task as an EVM task (irreversible; its amounts are wei).
+    #[event_version("1.0.0")]
+    EvmTaskEnabled { task_id: TaskId },
+    /// Outcome of `cache_derived_key`: `cached` is false when the signer's answer was refused (`reason`).
+    #[event_version("1.0.0")]
+    DerivedKeyCached {
+        path: String,
+        address: String,
+        cached: bool,
+        reason: String,
+    },
+    /// Owner seeded (or raised) a lane's next nonce.
+    #[event_version("1.0.0")]
+    EvmNonceSeeded { path: String, next_nonce: U64 },
+    /// Owner set the single relayer.
+    #[event_version("1.0.0")]
+    RelayerSet { relayer: AccountId },
 }

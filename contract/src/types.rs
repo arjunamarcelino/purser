@@ -48,7 +48,8 @@ pub enum Chain {
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct PaymentIntent {
     pub chain: Chain,
-    /// `AccountId` (NEAR) or `0x`-address (EVM). Validated/parsed by `payload::build_near_payload`.
+    /// `AccountId` (NEAR) or `0x`-address (EVM). Validated/parsed by `payload::build_near_payload` (NEAR)
+    /// or `evm_tx::parse_address` (EVM).
     pub recipient: String,
     pub amount: NearToken,
     pub token: TokenSpec,
@@ -164,4 +165,96 @@ pub enum IdemState {
     Committed { commitment_id: CommitmentId },
     /// Failed safely before any signature existed.
     Failed,
+}
+
+// ---- EVM payment path (Prompt 12) ---------------------------------------------------------------
+//
+// Everything below is APPENDED (Borsh layout is append-only; the types above are untouched). These are
+// STORED types: Borsh only, no JSON. Byte strings and u64/u128 amounts are exposed to clients through the
+// JSON view DTOs in `evm_api` (decimal strings for every u64/u128), never through these structs.
+
+/// A secp256k1 signature as an EVM transaction carries it: `r`, `s` and `yParity` (0/1; no 27/28 and no
+/// EIP-155 offset for a typed transaction).
+#[near(serializers = [borsh])]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct EvmSig {
+    pub r: [u8; 32],
+    pub s: [u8; 32],
+    pub y_parity: u8,
+}
+
+/// Owner-set EVM configuration (one `Option` on [`crate::Purser`]). The fee fields of an
+/// already-built transaction are copied into [`EvmMeta`], so a config change never alters a built tx.
+#[near(serializers = [borsh])]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct EvmCfg {
+    /// The only chain the contract will build for. Must be in `evm_tx::TESTNET_CHAIN_IDS`.
+    pub chain_id: u64,
+    /// `maxFeePerGas` of every ORIGINAL transaction (fee = ceiling: simplest and un-stuckable), and the
+    /// upper bound of any cancel.
+    pub max_fee_ceiling: u128,
+    /// `maxPriorityFeePerGas` of every original, and the upper bound of any cancel.
+    pub max_priority_ceiling: u128,
+    /// Smallest `value` (wei) an original may carry; also the fee-drain grief floor.
+    pub min_value: u128,
+    /// How old a `Signed` commitment must be (ns) before `mark_unknown` accepts it. Floored at 5 minutes.
+    pub min_unknown_age_ns: u64,
+}
+
+/// The single nonce-burn cancel of one commitment: same nonce, a 0-value self-send, higher fees.
+#[near(serializers = [borsh])]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct CancelMeta {
+    pub max_fee: u128,
+    pub tip: u128,
+    /// The digest the cancel was signed over (stored at request time, so a late signature can be
+    /// verified without rebuilding anything).
+    pub sighash: [u8; 32],
+    pub sig: Option<EvmSig>,
+    pub tx_hash: Option<[u8; 32]>,
+}
+
+/// Why the owner may `confirm_release` an `Unknown` commitment. Evidence is RECORDED by the relayer's
+/// attestation; only the owner acts on it.
+#[near(serializers = [borsh])]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ReleaseEvidence {
+    /// The cancel landed at the same nonce, so the original can never land.
+    CancelLanded,
+    /// The original landed but reverted: the nonce burned and no value moved.
+    OriginalReverted,
+}
+
+/// Everything EVM about one commitment (`Commitment` itself is not touched). Keyed by `CommitmentId`.
+#[near(serializers = [borsh])]
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct EvmMeta {
+    pub path: String,
+    pub nonce: u64,
+    pub sighash: [u8; 32],
+    pub from: [u8; 20],
+    pub to: [u8; 20],
+    pub value: u128,
+    pub chain_id: u64,
+    pub max_fee: u128,
+    pub tip: u128,
+    pub sig: Option<EvmSig>,
+    pub tx_hash: Option<[u8; 32]>,
+    pub signed_at_ns: Option<u64>,
+    pub cancel: Option<CancelMeta>,
+    pub evidence: Option<ReleaseEvidence>,
+}
+
+/// One serialized signing lane: a derived address, with at most one in-flight commitment.
+#[near(serializers = [borsh])]
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct Lane {
+    pub path: String,
+    pub chain_id: u64,
+    /// Uncompressed secp256k1 key (x || y), cached write-once from the signer's `derived_public_key`.
+    pub pubkey: [u8; 64],
+    pub address: [u8; 20],
+    /// `None` until the owner seeds it from `eth_getTransactionCount(address, finalized)`.
+    pub next_nonce: Option<u64>,
+    pub in_flight: Option<CommitmentId>,
 }

@@ -175,7 +175,7 @@ pub async fn setup(
     for d in delegates {
         batch = batch.call(
             Function::new("add_delegate")
-                .args_json(json!({ "task_id": TASK, "account_id": d, "derivation_path": "m/0" }))
+                .args_json(json!({ "task_id": TASK, "account_id": d, "derivation_path": format!("m/{d}") }))
                 .gas(Gas::from_tgas(20)),
         );
     }
