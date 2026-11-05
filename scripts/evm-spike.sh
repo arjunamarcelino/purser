@@ -12,6 +12,21 @@ cd "$ROOT/contract"
 # shellcheck disable=SC1090
 [ -f "$HOME/.cargo/env" ] && . "$HOME/.cargo/env"
 export PURSER_ALLOW_EVM_SPIKE=1   # build.rs refuses the feature without this explicit opt-in
+# A stale prebuilt wasm in the caller's environment would make step 4 measure the wrong artifact.
+unset PURSER_WASM_EVM PURSER_WASM_PROD PURSER_WASM_FAULT
+
+# build <target-dir> [cargo-near args...]: quiet on success, full output kept and shown on failure.
+build() {
+  local dir="$1" log; shift
+  log="$(mktemp)"
+  if ! CARGO_TARGET_DIR="$dir" cargo near build non-reproducible-wasm "$@" --no-abi >"$log" 2>&1; then
+    echo "FAIL: cargo near build $* failed; output:" >&2
+    cat "$log" >&2
+    rm -f "$log"
+    exit 1
+  fi
+  rm -f "$log"
+}
 
 echo "== 1. host tests: 36 chainsig.js/viem vectors, rlp-crate + sha3 oracles, 2000 random transactions"
 cargo test --features evm-spike --lib evm_spike
@@ -20,8 +35,8 @@ echo
 echo "== 2. wasm size: same toolchain, same cargo-near step, --no-abi, isolated target dirs"
 base_dir="$PWD/target/baseline-noabi"
 spike_dir="$PWD/target/evm-spike"
-CARGO_TARGET_DIR="$base_dir" cargo near build non-reproducible-wasm --no-abi >/dev/null 2>&1
-CARGO_TARGET_DIR="$spike_dir" cargo near build non-reproducible-wasm --features evm-spike --no-abi >/dev/null 2>&1
+build "$base_dir"
+build "$spike_dir" --features evm-spike
 base="$base_dir/near/purser_contract.wasm"
 spike="$spike_dir/near/purser_contract.wasm"
 b=$(wc -c < "$base"); s=$(wc -c < "$spike")
@@ -35,14 +50,29 @@ printf 'delta                  raw %+8d  gz %+8d  (%s%% raw)\n' "$((s - b))" "$(
 echo
 echo "== 3. wasm gate: the default build is clean, the spike build must be refused"
 ../scripts/check-wasm-clean.sh "$base"
-if ../scripts/check-wasm-clean.sh "$spike" 2>/dev/null; then
-  echo "FAIL: scripts/check-wasm-clean.sh accepted the spike wasm" >&2
-  exit 1
-fi
+gate_rc=0
+../scripts/check-wasm-clean.sh "$spike" || gate_rc=$?
+case "$gate_rc" in
+  1) ;;   # refused, as required
+  0) echo "FAIL: scripts/check-wasm-clean.sh accepted the spike wasm" >&2; exit 1 ;;
+  *) echo "FAIL: scripts/check-wasm-clean.sh errored (exit $gate_rc) instead of refusing" >&2; exit 1 ;;
+esac
 echo "✓ the spike wasm is refused"
 
 echo
 echo "== 4. sandbox gas (nearcore from scripts/sandbox-bin.sh): per-sighash gas and the load tax on existing methods"
-NEAR_SANDBOX_BIN_PATH="$(../scripts/sandbox-bin.sh)" \
-  cargo test --features evm-spike --test evm_spike -- --nocapture --test-threads=1 2>&1 \
-  | grep -vE '^\s*(Compiling|Downloaded|Downloading|Finished|Running)|^$|^running '
+out="$(mktemp)"
+trap 'rm -f "$out"' EXIT
+NEAR_SANDBOX_BIN_PATH="$(../scripts/sandbox-bin.sh)"
+export NEAR_SANDBOX_BIN_PATH
+if ! cargo test --features evm-spike --test evm_spike -- --nocapture --test-threads=1 >"$out" 2>&1; then
+  cat "$out" >&2
+  echo "FAIL: sandbox gas tests failed" >&2
+  exit 1
+fi
+{ grep -vE '^\s*(Compiling|Downloaded|Downloading|Finished|Running)|^$|^running ' "$out" || true; }
+# Not an exact count (it would drift whenever a test is added): require at least one passing test and no failures.
+if ! grep -qE 'test result: ok\. [1-9][0-9]* passed; 0 failed' "$out"; then
+  echo "FAIL: the sandbox run reported no passing tests or a failure (did no tests run?)" >&2
+  exit 1
+fi

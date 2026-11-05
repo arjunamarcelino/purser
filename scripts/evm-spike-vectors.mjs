@@ -12,16 +12,38 @@
 // (viem.serializeTransaction -> keccak256), and is asserted equal to viem used directly.
 
 import { createRequire } from "node:module";
-import { readFileSync, writeFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { createHash } from "node:crypto";
+import { existsSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { dirname, join, resolve, sep } from "node:path";
 import { parseArgs } from "node:util";
 
 const { values } = parseArgs({ options: { tools: { type: "string" }, out: { type: "string", default: "contract/tests/fixtures/evm-spike-vectors.json" } } });
 if (!values.tools) throw new Error("usage: evm-spike-vectors.mjs --tools <scratch dir with viem + chainsig.js>");
-const req = createRequire(join(resolve(values.tools), "package.json"));
+const toolsDir = resolve(values.tools);
+const nodeModules = join(toolsDir, "node_modules");
+if (!existsSync(join(toolsDir, "package.json"))) throw new Error(`${toolsDir}/package.json not found`);
+const req = createRequire(join(toolsDir, "package.json"));
+// Resolve a package ONLY from <tools>/node_modules (Node would otherwise walk up to ancestor node_modules),
+// then read its version and hash from the package.json that was actually resolved.
+const locate = (name) => {
+  const entry = req.resolve(name);
+  let dir = dirname(entry);
+  while (dir !== dirname(dir)) {
+    const pj = join(dir, "package.json");
+    if (existsSync(pj) && JSON.parse(readFileSync(pj, "utf8")).name === name) {
+      if (!realpathSync(dir).startsWith(`${realpathSync(nodeModules)}${sep}`)) throw new Error(`${name} resolved to ${dir}, outside ${nodeModules}`);
+      const raw = readFileSync(pj);
+      const lockFile = join(toolsDir, "package-lock.json");
+      const integrity = existsSync(lockFile) ? JSON.parse(readFileSync(lockFile, "utf8")).packages?.[`node_modules/${name}`]?.integrity : undefined;
+      return { version: JSON.parse(raw).version, package_json_sha256: createHash("sha256").update(raw).digest("hex"), ...(integrity && { lock_integrity: integrity }) };
+    }
+    dir = dirname(dir);
+  }
+  throw new Error(`no package.json named ${name} above ${entry}`);
+};
+const meta = { viem: locate("viem"), "chainsig.js": locate("chainsig.js") };
 const viem = req("viem");
 const { chainAdapters } = req("chainsig.js");
-const version = (name) => JSON.parse(readFileSync(join(resolve(values.tools), "node_modules", name, "package.json"), "utf8")).version;
 
 const SEPOLIA = 11155111n;
 const U64 = (1n << 64n) - 1n;
@@ -103,7 +125,8 @@ for (const [name, tx] of [...named, ...random]) {
 
 const out = {
   generator: "scripts/evm-spike-vectors.mjs",
-  tools: { viem: version("viem"), "chainsig.js": version("chainsig.js") },
+  tools: { viem: meta.viem.version, "chainsig.js": meta["chainsig.js"].version },
+  tool_integrity: meta,
   note: "sighash = chainsig.js EVM prepareTransactionForSigning (viem.serializeTransaction -> keccak256); data is empty and the access list is empty in every vector; chain_id and nonce are limited to 2^53-1 by viem's JS-number API (full u64 is covered by the Rust property test against the rlp crate)",
   vectors,
 };

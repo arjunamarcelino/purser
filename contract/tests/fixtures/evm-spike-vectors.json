@@ -4,6 +4,18 @@
     "viem": "2.57.16",
     "chainsig.js": "1.1.16"
   },
+  "tool_integrity": {
+    "viem": {
+      "version": "2.57.16",
+      "package_json_sha256": "a6aaca4624a9201d7fb3cdada180434621872a960fcc7baa89d1086b76512009",
+      "lock_integrity": "sha512-+4uaUw3NfkqjaqsZp8Zci94K33oc9rv7mIUgvPduJxsY/tI0ASi2YkaXoUVSBGfdIw/QPWuVnIf9LTFf35IoMg=="
+    },
+    "chainsig.js": {
+      "version": "1.1.16",
+      "package_json_sha256": "54829ac547e4fa38e8d6216bedad90d43a04e6efc2b2cdef27c119e4ad9ddfe1",
+      "lock_integrity": "sha512-DGMlAc2A1eVGqU66UuwIGILHknssJHHNSBFad4+/W2grob1+SVmUEH/DyGL77fK9SKKyvkMu/uXH8maNOLlYlA=="
+    }
+  },
   "note": "sighash = chainsig.js EVM prepareTransactionForSigning (viem.serializeTransaction -> keccak256); data is empty and the access list is empty in every vector; chain_id and nonce are limited to 2^53-1 by viem's JS-number API (full u64 is covered by the Rust property test against the rlp crate)",
   "vectors": [
     {
