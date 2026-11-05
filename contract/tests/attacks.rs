@@ -6,7 +6,7 @@
 //! check-in-propose / reserve-in-callback design overspends in. Cases 2 and 4 fan the proposals
 //! out through the race-driver fixture, so they land at Purser in ONE block, and then PROVE from
 //! on-chain receipt heights that every admission ran before the first settlement
-//! (`common::race_proof`). The external `transact_async` variants (2c, 4b) mirror the demo's
+//! (`common::race_proof`). The external `transact_async` variants (2b, 4b) mirror the demo's
 //! "agents fire at once" and are held to the same proof, with a bounded retry that fails loudly
 //! instead of silently passing when the sandbox happens not to race.
 //!
@@ -21,13 +21,11 @@ use common::*;
 use near_workspaces::result::ExecutionFinalResult;
 use near_workspaces::Account;
 use purser_contract::{
-    MSG_DELEGATE_NOT_AUTHORIZED, MSG_EXCEEDS_BUDGET, MSG_INVALID_RECIPIENT, MSG_IN_FLIGHT,
-    MSG_NOT_RECONCILABLE, MSG_ONLY_OWNER, MSG_RECIPIENT_NOT_ALLOWED, MSG_RECONCILE_TOO_EARLY,
-    MSG_REQUEST_ID_REUSED, RECONCILE_MIN_AGE_NS,
+    FAULT_MARKER, MSG_DELEGATE_NOT_AUTHORIZED, MSG_EXCEEDS_BUDGET, MSG_INVALID_RECIPIENT,
+    MSG_IN_FLIGHT, MSG_RECIPIENT_NOT_ALLOWED, MSG_RECONCILE_TOO_EARLY, RECONCILE_MIN_AGE_NS,
 };
 use serde_json::{json, Value};
 
-const FAULT_MARKER: &[u8] = b"PURSER_FAULT_INJECTION_LOST_CALLBACK";
 /// Bounded attempts for the externally-dispatched (non-deterministic) race variants.
 const RACE_ATTEMPTS: usize = 5;
 /// Upper bound on waiting for one async-dispatched transaction (sandbox blocks are ~1 s).
@@ -67,17 +65,6 @@ async fn settle(
     })
     .await
     .map_err(|_| anyhow::anyhow!("transaction did not finish within {SETTLE_TIMEOUT:?}"))?
-}
-
-fn propose_tx(
-    who: &Account,
-    crew: &Crew,
-    amount_units: u128,
-    rid: &str,
-) -> near_workspaces::operations::CallTransaction {
-    who.call(crew.purser.id(), "propose_payment")
-        .args_json(propose_args(crew.merchant.id(), amount_units, rid))
-        .max_gas()
 }
 
 // ---- (1) legit purchases -----------------------------------------------------------------------
@@ -132,7 +119,7 @@ async fn case_1_three_delegates_legit_purchases_succeed() -> anyhow::Result<()> 
 async fn case_2_concurrent_overbudget_exactly_floor_r_over_a_admitted() -> anyhow::Result<()> {
     let w = near_workspaces::sandbox().await?;
     let owner = w.dev_create_account().await?;
-    let coordinator = deploy_driver(&w, &owner.id().clone()).await?;
+    let coordinator = deploy_driver(&w, owner.id()).await?;
     let mut drivers = Vec::new();
     for _ in 0..3 {
         drivers.push(deploy_driver(&w, coordinator.id()).await?);
@@ -198,7 +185,7 @@ async fn case_2_concurrent_overbudget_exactly_floor_r_over_a_admitted() -> anyho
 /// The cap holds on every attempt; the race itself must be observed within a bounded number of
 /// attempts, or the test fails ("race not exercised") rather than passing on a serialized run.
 #[tokio::test]
-async fn case_2c_external_parallel_dispatch_races() -> anyhow::Result<()> {
+async fn case_2b_external_parallel_dispatch_races() -> anyhow::Result<()> {
     let w = near_workspaces::sandbox().await?;
     for attempt in 1..=RACE_ATTEMPTS {
         let owner = w.dev_create_account().await?;
@@ -229,7 +216,7 @@ async fn case_2c_external_parallel_dispatch_races() -> anyhow::Result<()> {
         assert_eq!(proof.refused(MSG_EXCEEDS_BUDGET), 2);
         assert_eq!(accounting(&crew).await?, (90 * UNIT, 0));
         if proof.raced() {
-            println!("case 2c: race observed on attempt {attempt}/{RACE_ATTEMPTS}");
+            println!("case 2b: race observed on attempt {attempt}/{RACE_ATTEMPTS}");
             return Ok(());
         }
     }
@@ -239,8 +226,8 @@ async fn case_2c_external_parallel_dispatch_races() -> anyhow::Result<()> {
 // ---- (3) retry after completion ----------------------------------------------------------------
 
 /// Retrying a completed request returns the SAME commitment with no second transfer; retrying a
-/// refused request is refused again (a refusal authorized nothing); reusing a settled request_id
-/// for a different intent is refused.
+/// refused request is refused again (a refusal authorized nothing). Reusing a settled request_id
+/// for a different request is covered next to its fix in `payments.rs`.
 #[tokio::test]
 async fn case_3_retry_after_completion_no_duplicate() -> anyhow::Result<()> {
     let w = near_workspaces::sandbox().await?;
@@ -273,9 +260,6 @@ async fn case_3_retry_after_completion_no_duplicate() -> anyhow::Result<()> {
         "no new commitment"
     );
 
-    let other = propose(scout, &crew, 20, "r1").await?;
-    assert!(err_string(other).contains(MSG_REQUEST_ID_REUSED));
-
     // Spend down to 10, then a refused request stays refused on retry.
     assert!(propose(&accts[1], &crew, 30, "f1").await?.is_success());
     assert!(propose(&accts[2], &crew, 30, "b1").await?.is_success());
@@ -302,7 +286,7 @@ async fn case_3_retry_after_completion_no_duplicate() -> anyhow::Result<()> {
 async fn case_4_retry_while_in_flight_returns_in_flight() -> anyhow::Result<()> {
     let w = near_workspaces::sandbox().await?;
     let owner = w.dev_create_account().await?;
-    let scout = deploy_driver(&w, &owner.id().clone()).await?;
+    let scout = deploy_driver(&w, owner.id()).await?;
     let crew = setup(w, prod_wasm().await, owner, 100, &[scout.id()]).await?;
     let before = balance(&crew.merchant).await?;
 
@@ -497,7 +481,7 @@ async fn case_7_timeout_on_issued_payment_reservation_retained() -> anyhow::Resu
 
     let res = propose(&buyer, &crew, 30, "b1").await?;
     assert!(
-        format!("{:?}", res.failures()).contains("PURSER_FAULT_INJECTION_LOST_CALLBACK"),
+        format!("{:?}", res.failures()).contains(FAULT_MARKER),
         "the callback must be the thing that died"
     );
     assert_eq!(
@@ -613,7 +597,6 @@ async fn case_8_reconcile_cannot_race_live_callback() -> anyhow::Result<()> {
     let res = fire(&owner, owner.id(), vec![propose, release]).await?;
 
     let purser = crew.purser.id();
-    let height = |o: &near_workspaces::result::ExecutionOutcome| o.block_hash;
     let early = res
         .receipt_outcomes()
         .iter()
@@ -622,24 +605,12 @@ async fn case_8_reconcile_cannot_race_live_callback() -> anyhow::Result<()> {
     let settled = res
         .receipt_outcomes()
         .iter()
-        .find(|o| {
-            o.logs
-                .iter()
-                .any(|l| l.contains("\"event\":\"payment_confirmed\""))
-        })
+        .find(|o| has_event(o, "payment_confirmed"))
         .expect("the payment settled");
     assert!(format!("{:?}", early.clone().into_result()).contains(MSG_RECONCILE_TOO_EARLY));
     let (h_early, h_settled) = (
-        crew.worker
-            .view_block()
-            .block_hash(height(early))
-            .await?
-            .height(),
-        crew.worker
-            .view_block()
-            .block_hash(height(settled))
-            .await?
-            .height(),
+        height(&crew.worker, early).await?,
+        height(&crew.worker, settled).await?,
     );
     println!("case 8: reconcile at height {h_early}, settlement at {h_settled}");
     assert!(h_early < h_settled, "the reconcile raced the live callback");
@@ -655,52 +626,12 @@ async fn case_8_reconcile_cannot_race_live_callback() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// The settlement callback is `#[private]` and reconcile is owner-only and Reserved-only: no
-/// outsider can forge a settlement, and a settled commitment cannot be reconciled again.
-#[tokio::test]
-async fn case_9_callbacks_and_owner_ops_reject_outsiders() -> anyhow::Result<()> {
-    let w = near_workspaces::sandbox().await?;
-    let owner = w.dev_create_account().await?;
-    let scout = w.dev_create_account().await?;
-    let crew = setup(w, prod_wasm().await, owner, 100, &[scout.id()]).await?;
-    assert!(propose(&scout, &crew, 30, "r1").await?.is_success());
-    let books = accounting(&crew).await?;
-
-    let forged = scout
-        .call(crew.purser.id(), "on_near_settled")
-        .args_json(json!({ "cid": 0, "request_id": "r1" }))
-        .max_gas()
-        .transact()
-        .await?;
-    assert!(err_string(forged).contains("is private"));
-
-    let as_delegate = scout
-        .call(crew.purser.id(), "reconcile")
-        .args_json(json!({ "commitment_id": 0, "confirmed": false }))
-        .max_gas()
-        .transact()
-        .await?;
-    assert!(err_string(as_delegate).contains(MSG_ONLY_OWNER));
-
-    for _ in 0..2 {
-        let settled = crew
-            .owner
-            .call(crew.purser.id(), "reconcile")
-            .args_json(json!({ "commitment_id": 0, "confirmed": false }))
-            .max_gas()
-            .transact()
-            .await?;
-        assert!(err_string(settled).contains(MSG_NOT_RECONCILABLE));
-    }
-    assert_eq!(accounting(&crew).await?, books);
-    Ok(())
-}
-
 /// The evidence uses two different artifacts, and the one that ships is clean: the fault marker
 /// is in the fault build and nowhere in the production build.
 #[tokio::test]
 async fn fault_hook_absent_from_production_wasm() -> anyhow::Result<()> {
-    let contains = |wasm: &[u8]| wasm.windows(FAULT_MARKER.len()).any(|w| w == FAULT_MARKER);
+    let marker = FAULT_MARKER.as_bytes();
+    let contains = |wasm: &[u8]| wasm.windows(marker.len()).any(|w| w == marker);
     assert!(
         !contains(prod_wasm().await),
         "production wasm carries the fault hook"

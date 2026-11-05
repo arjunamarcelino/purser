@@ -374,7 +374,7 @@ async fn wrong_token_intent_rejected() -> anyhow::Result<()> {
 /// reporting the earlier payment as this one's success.
 #[tokio::test]
 async fn replay_with_a_different_intent_is_refused() -> anyhow::Result<()> {
-    let (_w, c, _owner, delegate, recipient) = setup().await?;
+    let (_w, c, owner, delegate, recipient) = setup().await?;
     let first = propose(&delegate, &c, &recipient, "400000", "r1").await?;
     assert!(first.is_success(), "{:?}", first.failures());
     let cid: u64 = first.json()?;
@@ -382,6 +382,45 @@ async fn replay_with_a_different_intent_is_refused() -> anyhow::Result<()> {
 
     let other = propose(&delegate, &c, &recipient, "300000", "r1").await?;
     assert!(err_string(other).contains(purser_contract::MSG_REQUEST_ID_REUSED));
+    let task = view_json(&c, "get_task", json!({ "task_id": "t1" })).await?;
+    assert_eq!(
+        task["outstanding"], "0",
+        "the refused reuse reserved nothing"
+    );
+
+    // Same request_id, identical intent, but another task: a different request, refused too.
+    owner
+        .batch(c.id())
+        .call(
+            near_workspaces::operations::Function::new("create_task").args_json(
+                json!({ "task_id": "t2", "cap": "1000000", "token": "NearNative", "crew_cap": 3 }),
+            ),
+        )
+        .call(
+            near_workspaces::operations::Function::new("add_delegate").args_json(
+                json!({ "task_id": "t2", "account_id": delegate.id(), "derivation_path": "m/0" }),
+            ),
+        )
+        .call(
+            near_workspaces::operations::Function::new("set_recipient_allowlist")
+                .args_json(json!({ "task_id": "t2", "recipients": [recipient.id()] })),
+        )
+        .transact()
+        .await?
+        .into_result()?;
+    let args = json!({
+        "task": "t2",
+        "request_id": "r1",
+        "intent": { "chain": "NearNative", "recipient": recipient.id(), "amount": "400000",
+                    "token": "NearNative", "memo": null },
+    });
+    let cross_task = delegate
+        .call(c.id(), "propose_payment")
+        .args_json(args)
+        .max_gas()
+        .transact()
+        .await?;
+    assert!(err_string(cross_task).contains(purser_contract::MSG_REQUEST_ID_REUSED));
 
     let same = propose(&delegate, &c, &recipient, "400000", "r1").await?;
     assert!(same.is_success(), "{:?}", same.failures());
@@ -509,6 +548,27 @@ async fn get_config_exposes_the_lock_and_limits() -> anyhow::Result<()> {
     assert_eq!(cfg["max_request_id_len"], 64);
     assert_eq!(cfg["max_memo_len"], 256);
     assert_eq!(cfg["max_task_id_len"], 64);
+    Ok(())
+}
+
+/// The settlement callback is `#[private]`: no outsider (not even a delegate) can forge a
+/// settlement. The refusal text is near-sdk's own, not a Purser `MSG_*`.
+#[tokio::test]
+async fn settlement_callback_cannot_be_forged() -> anyhow::Result<()> {
+    let (_w, c, _owner, delegate, recipient) = setup().await?;
+    assert!(propose(&delegate, &c, &recipient, "400000", "r1")
+        .await?
+        .is_success());
+    let forged = delegate
+        .call(c.id(), "on_near_settled")
+        .args_json(json!({ "cid": 0, "request_id": "r1" }))
+        .max_gas()
+        .transact()
+        .await?;
+    assert!(err_string(forged).contains("is private"));
+    let task = view_json(&c, "get_task", json!({ "task_id": "t1" })).await?;
+    assert_eq!(task["completed"], "400000");
+    assert_eq!(task["outstanding"], "0");
     Ok(())
 }
 

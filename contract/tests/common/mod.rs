@@ -15,6 +15,14 @@ use serde_json::{json, Value};
 use tokio::sync::OnceCell;
 
 pub const TASK: &str = "t1";
+/// Crew cap of every test task (the demo crew: Scout, Forge, Buyer).
+pub const CREW_CAP: u8 = 3;
+/// Gas for a forwarded `propose_payment` (or `reconcile`) leaf: ~8 Tgas of execution + the
+/// 10 Tgas static settlement callback + receipt fees, with headroom (unused gas flows on).
+pub const PROPOSE_TGAS: u64 = 75;
+/// Gas for a driver's own `fire` receipt when a coordinator fans out to it: its one leaf plus a
+/// little for scheduling it. Three of these fit a 300 Tgas transaction.
+pub const FIRE_TGAS: u64 = 90;
 /// One demo "unit" = 0.001 NEAR, so the round on-camera numbers (cap 100, 30 per purchase) are
 /// real token movements that a sandbox dev account can fund.
 pub const UNIT: u128 = 1_000_000_000_000_000_000_000;
@@ -141,7 +149,7 @@ pub async fn setup(
     let mut batch = owner.batch(purser.id()).call(
         Function::new("create_task")
             .args_json(json!({
-                "task_id": TASK, "cap": units(cap_units), "token": "NearNative", "crew_cap": 3,
+                "task_id": TASK, "cap": units(cap_units), "token": "NearNative", "crew_cap": CREW_CAP,
             }))
             .gas(Gas::from_tgas(20)),
     );
@@ -200,16 +208,27 @@ pub fn propose_args(recipient: &AccountId, amount_units: u128, request_id: &str)
     })
 }
 
+/// A delegate's `propose_payment` to the crew's merchant, not yet sent (`transact` or
+/// `transact_async` it).
+pub fn propose_tx(
+    delegate: &Account,
+    crew: &Crew,
+    amount_units: u128,
+    request_id: &str,
+) -> near_workspaces::operations::CallTransaction {
+    delegate
+        .call(crew.purser.id(), "propose_payment")
+        .args_json(propose_args(crew.merchant.id(), amount_units, request_id))
+        .max_gas()
+}
+
 pub async fn propose(
     delegate: &Account,
     crew: &Crew,
     amount_units: u128,
     request_id: &str,
 ) -> anyhow::Result<ExecutionFinalResult> {
-    Ok(delegate
-        .call(crew.purser.id(), "propose_payment")
-        .args_json(propose_args(crew.merchant.id(), amount_units, request_id))
-        .max_gas()
+    Ok(propose_tx(delegate, crew, amount_units, request_id)
         .transact()
         .await?)
 }
@@ -293,7 +312,7 @@ impl RaceProof {
     pub fn refused(&self, msg: &str) -> usize {
         self.admissions
             .iter()
-            .filter(|(_, a)| *a == Admission::Refused(msg_static(msg)))
+            .filter(|(_, a)| matches!(a, Admission::Refused(m) if *m == msg))
             .count()
     }
     /// Every admission ran before the first settlement: inside the async gap. Requires one
@@ -313,26 +332,20 @@ impl RaceProof {
     }
 }
 
-fn msg_static(msg: &str) -> &'static str {
-    EXPECTED_REFUSALS
-        .iter()
-        .copied()
-        .find(|m| *m == msg)
-        .expect("a known refusal message")
-}
-
-/// The only refusals a `propose_payment` leaf may end in. Anything else (out of gas, a driver
-/// error, a missing method) fails the test instead of being counted as a refusal.
+/// The only refusals a raced `propose_payment` leaf may end in (over budget, or the in-flight
+/// retry). Anything else (out of gas, a driver error, another refusal) fails the test instead of
+/// being counted as a refusal.
 pub const EXPECTED_REFUSALS: &[&str] = &[
     purser_contract::MSG_EXCEEDS_BUDGET,
     purser_contract::MSG_IN_FLIGHT,
-    purser_contract::MSG_ALREADY_FAILED,
-    purser_contract::MSG_REQUEST_ID_REUSED,
-    purser_contract::MSG_DELEGATE_NOT_AUTHORIZED,
-    purser_contract::MSG_RECIPIENT_NOT_ALLOWED,
 ];
 
-fn has_event(o: &ExecutionOutcome, event: &str) -> bool {
+/// The block height a receipt executed at.
+pub async fn height(worker: &Worker<Sandbox>, o: &ExecutionOutcome) -> anyhow::Result<u64> {
+    Ok(worker.view_block().block_hash(o.block_hash).await?.height())
+}
+
+pub fn has_event(o: &ExecutionOutcome, event: &str) -> bool {
     let needle = format!("\"event\":\"{event}\"");
     o.logs.iter().any(|l| l.contains(&needle))
 }
@@ -359,7 +372,7 @@ pub async fn race_proof(
             if &o.executor_id != purser {
                 continue;
             }
-            let height = worker.view_block().block_hash(o.block_hash).await?.height();
+            let height = height(worker, o).await?;
             if has_event(o, "payment_confirmed") || has_event(o, "payment_failed") {
                 settlements.push(height);
             } else if has_event(o, "payment_reserved") {

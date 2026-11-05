@@ -69,16 +69,17 @@ const CALLBACK_GAS: Gas = Gas::from_tgas(10);
 pub const RECONCILE_MIN_AGE_NS: u64 = 600 * 1_000_000_000;
 
 /// Marker panicked with by the `fault-injection` build. `scripts/check-wasm-clean.sh` refuses any
-/// wasm containing it, so a fault build can never be shipped.
-#[cfg(feature = "fault-injection")]
-const FAULT_LOST_CALLBACK: &str = "PURSER_FAULT_INJECTION_LOST_CALLBACK";
+/// wasm containing it (it keeps its own copy of the string), so a fault build can never be
+/// shipped. Public so the tests share this single source; unused in production, so it never
+/// reaches the production wasm.
+pub const FAULT_MARKER: &str = "PURSER_FAULT_INJECTION_LOST_CALLBACK";
 
 /// TEST-ONLY (`fault-injection`): kill the settlement callback, exactly like the documented
 /// gas-starved / dead-callback residual. The runtime rolls the callback back, leaving the
 /// commitment `Reserved` + `Pending` after its transfer has executed.
 #[cfg(feature = "fault-injection")]
 fn fault_lost_callback() {
-    env::panic_str(FAULT_LOST_CALLBACK);
+    env::panic_str(FAULT_MARKER);
 }
 
 /// Production build: no fault. An empty fn rather than a bare cfg'd panic at the call site, which
