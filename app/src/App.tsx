@@ -6,7 +6,7 @@ import { useBoard, useNow } from "./data/useBoard.ts";
 import { ago } from "./lib/format.ts";
 import { lineHealth } from "./lib/semantics.ts";
 import { useTheme } from "./theme.ts";
-import { WALLETS, useWalletAccount } from "./wallet/wallet.ts";
+import { useWalletAccount } from "./wallet/wallet.ts";
 import { DemoControls } from "./components/DemoControls.tsx";
 import { Icon } from "./components/Icon.tsx";
 import { ConfirmDialog, OwnerPanel, useOwnerActions } from "./components/owner.tsx";
@@ -164,12 +164,12 @@ export function App() {
             </>
           ) : (
             <span className="connect" role="group" aria-label="Connect the owner's wallet">
-              <span className="label">connect</span>
-              {WALLETS.map((w) => (
-                <button key={w.id} type="button" className="btn btn-small" title={w.hint} onClick={() => void wallet.connect(w.id).catch(() => {})}>
-                  {w.label}
-                </button>
-              ))}
+              <button type="button" className="btn btn-small" title="Choose a wallet (Meteor, NEAR CLI)" onClick={() => void wallet.connect().catch(() => {})}>
+                Connect wallet
+              </button>
+              <button type="button" className="btn btn-small" title="Sign in your terminal with near-cli — the key stays in your OS keychain" onClick={() => void wallet.connect("near-cli").catch(() => {})}>
+                NEAR CLI
+              </button>
             </span>
           )}
         </div>

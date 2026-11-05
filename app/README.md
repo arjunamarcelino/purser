@@ -52,6 +52,9 @@ near-connect deliberately (no duplicate NEAR SDK, no React 18 pin, no polyfills)
   verifies the hash on chain. No key ever enters the browser.
 - **Meteor** (browser extension, testnet supported).
 
+The top bar has two buttons. **Connect wallet** opens near-connect's picker with both wallets.
+**NEAR CLI** skips the picker and goes straight to the CLI flow.
+
 MyNearWallet isn't offered: near-connect doesn't list it for testnet. Intear is omitted because its
 executor can't be pinned. Wallet storage never registers near-connect "debug wallets", and the page
 refuses to be framed.
