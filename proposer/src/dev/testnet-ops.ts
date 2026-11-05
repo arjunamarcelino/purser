@@ -19,6 +19,7 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { JsonRpcProvider, KeyPair, type KeyPairString, nearToYocto } from "near-api-js";
 import { parseU64Safe } from "../purser-client.ts";
 import { toJson } from "../log.ts";
+import { capNearToYocto } from "./demo-lib.ts";
 
 const BASE58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
 function base58(bytes: Uint8Array): string {
@@ -95,8 +96,7 @@ async function run(): Promise<void> {
       const [rpc, account, cap] = need(3);
       const view = await (await testnet(rpc!)).viewAccount({ accountId: account! });
       const spendable = BigInt(view.amount) - BigInt(view.storage_usage) * 10n ** 19n;
-      const [w = "0", f = ""] = cap!.split(".");
-      const capYocto = BigInt(w) * 10n ** 24n + BigInt(f.padEnd(24, "0"));
+      const capYocto = capNearToYocto(cap!);
       const needYocto = (capYocto * 9n) / 10n + 5n * 10n ** 22n; // 90 units paid out, plus task storage and slack
       const fmt = (y: bigint) => (Number(y / 10n ** 21n) / 1000).toFixed(3);
       if (spendable < needYocto) {

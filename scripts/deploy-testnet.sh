@@ -79,10 +79,11 @@ if [ "$("${OPS[@]}" account-exists "$RPC" "$CONTRACT")" != "yes" ]; then
 fi
 
 # near-cli prints a full transcript (to stderr) for every call; keep it, and show it only on failure.
+scrub() { sed -E 's/ed25519:[A-Za-z0-9]{40,}/ed25519:[redacted]/g'; }   # no key material in transcripts
 near_quiet() {
   local out
   if ! out="$(near "$@" 2>&1)"; then
-    printf '%s\n' "$out" >&2
+    printf '%s\n' "$out" | scrub >&2
     die "near $1 $2 failed (transcript above)"
   fi
 }
@@ -108,6 +109,9 @@ step "contract"
 if [ "$("${OPS[@]}" code-matches "$RPC" "$CONTRACT" "$WASM")" = "yes" ]; then
   echo "    code already deployed (sha256 matches)"
 else
+  # Re-run the fault-wasm gate right before the deploy: the file may have changed since the first check.
+  [ -f "$WASM" ] || die "missing $WASM — run: make build"
+  "$ROOT/scripts/check-wasm-clean.sh" "$WASM" >/dev/null || die "wasm failed the fault-injection gate; refusing to deploy"
   if [ "$("${OPS[@]}" has-code "$RPC" "$CONTRACT")" = "yes" ]; then   # an RPC error aborts (set -e); it never reads as "empty"
     near_quiet contract deploy "$CONTRACT" use-file "$WASM" without-init-call "${TX[@]}"
     echo "    upgraded code (state kept)"
@@ -117,6 +121,10 @@ else
       json-args "$init_args" prepaid-gas '30 Tgas' attached-deposit '0 NEAR' "${TX[@]}"
     echo "    deployed and initialized (owner $OP)"
   fi
+  # The on-chain code hash must equal the wasm that just passed the gate.
+  [ "$("${OPS[@]}" code-matches "$RPC" "$CONTRACT" "$WASM")" = "yes" ] \
+    || die "deployed code hash does not match $WASM after deploy"
+  echo "    deployed code hash matches the checked wasm ✓"
 fi
 
 step "tasks (cap $CAP_NEAR NEAR each)"

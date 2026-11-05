@@ -14,13 +14,14 @@
 
 set -euo pipefail
 
+die() { echo "demo: $*" >&2; exit 1; }
+
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ENVFILE="$ROOT/.env.testnet"
+[ -z "${WASM:-}" ] || die "WASM cannot be overridden (the demo only uses the built production wasm)"
 WASM="$ROOT/contract/target/near/purser_contract.wasm"
 OPS=(node "$ROOT/proposer/src/dev/testnet-ops.ts")
 umask 077
-
-die() { echo "demo: $*" >&2; exit 1; }
 
 [ -z "${NEAR_NETWORK:-}" ] || [ "$NEAR_NETWORK" = "testnet" ] || die "NEAR_NETWORK must be testnet (got '$NEAR_NETWORK'); this never touches mainnet"
 [ -z "${NEAR_RPC_URL:-}" ] || [[ "$NEAR_RPC_URL" == https://* ]] || die "NEAR_RPC_URL must be https://"
@@ -32,14 +33,16 @@ command -v pnpm >/dev/null || die "pnpm not found (corepack enable)"
 command -v near >/dev/null || die "near-cli-rs not found: npm i -g near-cli-rs@0.30.1"
 [ -d "$ROOT/node_modules" ] || die "dependencies missing: run 'make ts-install'"
 [ -f "$ENVFILE" ] || die "$ENVFILE missing: run ./scripts/deploy-testnet.sh first"
-perm="$(stat -f %Lp "$ENVFILE" 2>/dev/null || stat -c %a "$ENVFILE")"
+perm="$(stat -c %a "$ENVFILE" 2>/dev/null || stat -f %Lp "$ENVFILE")"   # GNU first: BSD stat rejects -c, GNU stat accepts -f with other meaning
 [ "$perm" = "600" ] || die "$ENVFILE must be mode 0600 (is $perm): chmod 600 .env.testnet"
 
 # Non-secret values only; the key lines in .env.testnet are never read or printed by this script.
-envval() { grep -E "^$1=" "$ENVFILE" | head -1 | cut -d= -f2-; }
+envval() { grep -E "^$1=" "$ENVFILE" | head -1 | cut -d= -f2- || true; }
 OPERATOR_ACCOUNT_ID="$(envval OPERATOR_ACCOUNT_ID)"
 CONTRACT="$(envval PURSER_CONTRACT_ID)"
 RPC="${NEAR_RPC_URL:-$(envval NEAR_RPC_URL)}"
+[[ "$RPC" == https://* ]] || die "NEAR_RPC_URL must be https:// (check NEAR_RPC_URL in .env.testnet)"
+[ -n "$CONTRACT" ] || die "PURSER_CONTRACT_ID missing from .env.testnet: re-run ./scripts/deploy-testnet.sh"
 [ -n "$OPERATOR_ACCOUNT_ID" ] || die "OPERATOR_ACCOUNT_ID missing from .env.testnet: re-run ./scripts/deploy-testnet.sh"
 [[ "$OPERATOR_ACCOUNT_ID" =~ ^([a-z0-9]+[-_])*[a-z0-9]+(\.([a-z0-9]+[-_])*[a-z0-9]+)*\.testnet$ ]] && [ "${#OPERATOR_ACCOUNT_ID}" -le 64 ] \
   || die "OPERATOR_ACCOUNT_ID must be a named .testnet account"
@@ -52,7 +55,8 @@ DEMO_CAP_NEAR="${DEMO_CAP_NEAR:-1}"
 
 "$ROOT/scripts/check-wasm-clean.sh" "$WASM" >/dev/null   # the deployed build must be the production one
 "${OPS[@]}" chain-id "$RPC" >/dev/null                  # the RPC itself must report testnet
-[ "$("${OPS[@]}" code-matches "$RPC" "$CONTRACT" "$WASM")" = "yes" ] \
+matches="$("${OPS[@]}" code-matches "$RPC" "$CONTRACT" "$WASM")" || die "could not check the deployed code on $CONTRACT (RPC error above)"
+[ "$matches" = "yes" ] \
   || die "the deployed code on $CONTRACT does not match the built wasm: re-run ./scripts/deploy-testnet.sh"
 funds="$("${OPS[@]}" can-fund "$RPC" "$CONTRACT" "$DEMO_CAP_NEAR")"
 [ "$funds" = "yes" ] || die "${funds#no: } — its wasm locks ~2.6 NEAR as storage stake. Top it up, e.g.: near tokens $OPERATOR_ACCOUNT_ID send-near $CONTRACT '1 NEAR' network-config testnet sign-with-keychain send"
@@ -67,9 +71,14 @@ echo "The shipped wasm cannot be made to lose a callback, so this replays attack
 echo "local chain with the test-only fault build. No transaction below is on testnet."
 BIN="$("$ROOT/scripts/sandbox-bin.sh")"
 # A scrubbed environment: no testnet key or env file is visible to the cargo process.
-( cd "$ROOT/contract" && env -i PATH="$PATH" HOME="$HOME" TERM="${TERM:-dumb}" NEAR_SANDBOX_BIN_PATH="$BIN" \
-    cargo test --test attacks case_7_timeout_on_issued_payment_reservation_retained -- --nocapture --test-threads=1 ) 2>&1 \
-  | grep -vE 'testnet\.nearblocks|ed25519:' | tail -40
+replay="$( ( cd "$ROOT/contract" && env -i PATH="$PATH" HOME="$HOME" TERM="${TERM:-dumb}" NEAR_SANDBOX_BIN_PATH="$BIN" \
+    cargo test --test attacks case_7_timeout_on_issued_payment_reservation_retained -- --nocapture --test-threads=1 ) 2>&1 )" \
+  || { echo "$replay" | { grep -vE 'testnet\.nearblocks|ed25519:' || true; } | tail -40; die "sandbox replay of outcome 7 FAILED"; }
+echo "$replay" | { grep -vE 'testnet\.nearblocks|ed25519:' || true; } | tail -40
+case "$replay" in
+  *"test result: ok. 1 passed"*) ;;
+  *) die "sandbox replay of outcome 7 did not run exactly one passing test (no 'test result: ok. 1 passed')" ;;
+esac
 
 echo
 echo "Done: 6 live outcomes verified on testnet + 1 sandbox replay. Contract: https://testnet.nearblocks.io/address/$CONTRACT"
