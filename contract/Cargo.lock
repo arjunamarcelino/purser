@@ -451,7 +451,7 @@ version = "3.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "faf9468729b8cbcea668e36183cb69d317348c2e08e994829fb56ebfdfbaac34"
 dependencies = [
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -2071,7 +2071,7 @@ dependencies = [
  "secp256k1",
  "serde",
  "serde_json",
- "sha3 0.10.9",
+ "sha3 0.10.8",
  "subtle",
  "thiserror 2.0.21",
 ]
@@ -2236,7 +2236,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_with",
- "sha3 0.10.9",
+ "sha3 0.10.8",
  "smallvec",
  "smart-default",
  "strum 0.24.1",
@@ -2457,7 +2457,7 @@ dependencies = [
  "rustix",
  "serde",
  "sha2 0.10.9",
- "sha3 0.10.9",
+ "sha3 0.10.8",
  "strum 0.24.1",
  "tempfile",
  "thiserror 2.0.21",
@@ -2873,8 +2873,10 @@ dependencies = [
  "near-sdk",
  "near-workspaces",
  "proptest",
+ "rlp",
  "serde_json",
  "sha2 0.11.1",
+ "sha3 0.10.8",
  "tokio",
 ]
 
@@ -3191,6 +3193,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bd124222d17ad93a644ed9d011a40f4fb64aa54275c08cc216524a9ea82fb09f"
 dependencies = [
  "digest 0.10.7",
+]
+
+[[package]]
+name = "rlp"
+version = "0.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fa24e92bb2a83198bb76d661a71df9f7076b8c420b8696e4d3d97d50d94479e3"
+dependencies = [
+ "bytes",
+ "rustc-hex",
 ]
 
 [[package]]
@@ -3646,9 +3658,9 @@ dependencies = [
 
 [[package]]
 name = "sha3"
-version = "0.10.9"
+version = "0.10.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "77fd7028345d415a4034cf8777cd4f8ab1851274233b45f84e3d955502d93874"
+checksum = "75872d278a8f37ef87fa0ddbda7802605cb18344497949862c0d4dcb291eba60"
 dependencies = [
  "digest 0.10.7",
  "keccak 0.1.6",

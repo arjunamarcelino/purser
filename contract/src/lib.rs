@@ -973,3 +973,9 @@ impl Purser {
             .collect()
     }
 }
+
+// EVM sighash feasibility spike (measurement only; see the module docs). Declared LAST on purpose: a module line
+// anywhere above would shift every later line number, and panic locations embed line numbers in the wasm, so the
+// default build would stop being byte-identical to the pre-spike build.
+#[cfg(feature = "evm-spike")]
+mod evm_spike;
