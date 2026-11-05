@@ -474,6 +474,7 @@ impl Purser {
                 let prior = self
                     .commitments
                     .get(&commitment_id)
+                    // commitments are never removed; if pruning is ever added, this must refuse
                     .expect("a Committed idempotency entry names an existing commitment");
                 require!(
                     prior.task == task && same_request(&prior.intent, &intent),

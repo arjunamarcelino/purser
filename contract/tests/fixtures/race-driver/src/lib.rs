@@ -49,6 +49,9 @@ impl RaceDriver {
                 Promise::new(c.receiver).function_call(c.method, c.args.0, NearToken::ZERO, c.gas)
             })
             .reduce(Promise::and);
+        // The batch is scheduled when `batch` is DROPPED at the end of this call (near-sdk
+        // promises are lazy). Never `mem::forget` it or return before the drop: that would
+        // silently send nothing.
         require!(batch.is_some(), "no calls");
     }
 }

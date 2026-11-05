@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Refuse to ship a fault-injection build: fail if any given wasm contains the test-only marker.
 # Usage: scripts/check-wasm-clean.sh <file.wasm>...
+# The marker must equal contract/src/lib.rs FAULT_MARKER.
 set -euo pipefail
 
 marker='PURSER_FAULT_INJECTION_LOST_CALLBACK'

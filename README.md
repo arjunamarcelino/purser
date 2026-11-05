@@ -38,12 +38,13 @@ new proposals BLOCKED, with a caption noting already-issued signatures cannot be
 | `make hooks` | install the pre-commit secret-scan hook |
 | `make prove` | the security evidence: property tests + the named attack cases |
 
-Never build or test with `--all-features`: it turns on the test-only `fault-injection` feature.
-`scripts/check-wasm-clean.sh <wasm>` refuses a fault build (CI runs it on the shipped artifact).
+The test-only `fault-injection` feature never builds by accident: `build.rs` refuses it unless
+`PURSER_ALLOW_FAULT_INJECTION=1` is set (so `--all-features` fails loudly), and
+`scripts/check-wasm-clean.sh <wasm>` refuses a fault build (CI and `make build-release` run it).
 
 ## Security evidence
 
-`make prove` runs, on every interleaving it can generate and on a real sandbox chain:
+`make prove` runs, over thousands of generated interleavings and on a real sandbox chain:
 
 - **Property tests** (`contract/tests/properties.rs`). Thousands of random operation sequences over
   the pure accounting core and over the real contract entrypoints (callbacks delivered out of
