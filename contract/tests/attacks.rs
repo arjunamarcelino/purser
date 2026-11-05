@@ -30,6 +30,10 @@ use serde_json::{json, Value};
 const FAULT_MARKER: &[u8] = b"PURSER_FAULT_INJECTION_LOST_CALLBACK";
 /// Bounded attempts for the externally-dispatched (non-deterministic) race variants.
 const RACE_ATTEMPTS: usize = 5;
+/// Upper bound on waiting for one async-dispatched transaction (sandbox blocks are ~1 s).
+const SETTLE_TIMEOUT: Duration = Duration::from_secs(60);
+/// Upper bound on fast-forward rounds while waiting out the reconcile time-lock.
+const MAX_FAST_FORWARDS: usize = 10;
 
 async fn commitment(crew: &Crew, id: u64) -> anyhow::Result<Value> {
     view(crew, "get_commitment", json!({ "commitment_id": id })).await
@@ -49,16 +53,20 @@ async fn remaining(crew: &Crew) -> anyhow::Result<u128> {
     Ok(v.as_str().unwrap().parse()?)
 }
 
-/// Wait for an async-dispatched transaction to finish.
+/// Wait for an async-dispatched transaction to finish, failing instead of hanging CI.
 async fn settle(
     tx: near_workspaces::operations::TransactionStatus,
 ) -> anyhow::Result<ExecutionFinalResult> {
-    loop {
-        match tx.status().await? {
-            Poll::Ready(r) => return Ok(r),
-            Poll::Pending => tokio::time::sleep(Duration::from_millis(100)).await,
+    tokio::time::timeout(SETTLE_TIMEOUT, async {
+        loop {
+            match tx.status().await? {
+                Poll::Ready(r) => return Ok(r),
+                Poll::Pending => tokio::time::sleep(Duration::from_millis(100)).await,
+            }
         }
-    }
+    })
+    .await
+    .map_err(|_| anyhow::anyhow!("transaction did not finish within {SETTLE_TIMEOUT:?}"))?
 }
 
 fn propose_tx(
@@ -519,6 +527,18 @@ async fn case_7_timeout_on_issued_payment_reservation_retained() -> anyhow::Resu
     assert_eq!(idempotency(&crew, &buyer, "b1").await?, json!("Pending"));
     assert_eq!(accounting(&crew).await?, (0, 30 * UNIT));
 
+    // Proof, but too early: the callback might still be in flight, so the owner cannot release
+    // or settle it yet.
+    let reconcile = || {
+        crew.owner
+            .call(crew.purser.id(), "reconcile")
+            .args_json(json!({ "commitment_id": 0, "confirmed": true }))
+            .max_gas()
+            .transact()
+    };
+    let early = reconcile().await?;
+    assert!(err_string(early).contains(MSG_RECONCILE_TOO_EARLY));
+
     // Silence: many blocks pass (the sandbox may stop short of an epoch boundary, so assert the
     // state, not the height delta).
     crew.worker.fast_forward(1_000).await?;
@@ -552,22 +572,29 @@ async fn case_7_timeout_on_issued_payment_reservation_retained() -> anyhow::Resu
         "the held 30 still counts"
     );
 
-    // Proof: the owner attests the (observed) landed transfer, once the callback window is over.
-    let reconcile = || {
-        crew.owner
-            .call(crew.purser.id(), "reconcile")
-            .args_json(json!({ "commitment_id": 0, "confirmed": true }))
-            .max_gas()
-            .transact()
-    };
+    // Proof: the owner attests the (observed) landed transfer once the lock has passed. Retry the
+    // reconcile itself (it lands in a later block than any timestamp we could read first), with
+    // a bounded number of fast-forwards, and require that time really advanced past the lock.
     let created_at = snapshot.0["created_at"].as_u64().unwrap();
-    while crew.worker.view_block().await?.timestamp() < created_at + RECONCILE_MIN_AGE_NS {
-        let early = reconcile().await?;
-        assert!(err_string(early).contains(MSG_RECONCILE_TOO_EARLY));
+    let mut rounds = 0;
+    loop {
+        let res = reconcile().await?;
+        if res.is_success() {
+            break;
+        }
+        assert!(err_string(res).contains(MSG_RECONCILE_TOO_EARLY));
+        rounds += 1;
+        assert!(
+            rounds <= MAX_FAST_FORWARDS,
+            "the sandbox clock never passed the reconcile lock"
+        );
         crew.worker.fast_forward(1_000).await?;
     }
-    let ok = reconcile().await?;
-    assert!(ok.is_success(), "{:?}", ok.failures());
+    let now = crew.worker.view_block().await?.timestamp();
+    assert!(
+        now >= created_at + RECONCILE_MIN_AGE_NS,
+        "reconciled before the lock elapsed"
+    );
     assert_eq!(commitment(&crew, 0).await?["state"], "Confirmed");
     assert_eq!(accounting(&crew).await?, (30 * UNIT, 0));
     Ok(())
