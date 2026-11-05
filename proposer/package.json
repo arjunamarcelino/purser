@@ -8,7 +8,7 @@
     "crew": "./src/cli.ts"
   },
   "scripts": {
-    "crew": "node --env-file-if-exists=../.env src/cli.ts",
+    "crew": "node --env-file-if-exists=../.env --env-file-if-exists=../.env.testnet src/cli.ts",
     "typecheck": "tsc -p tsconfig.json",
     "test": "vitest run --project unit",
     "test:sandbox": "vitest run --project sandbox"

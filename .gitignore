@@ -32,3 +32,6 @@ neardev/
 .vscode/*
 !.vscode/extensions.json
 *.swp
+
+# Proposer function-call keys written by scripts/deploy-testnet.sh
+.near-keys/
