@@ -39,7 +39,11 @@ die() { echo "deploy-testnet: $*" >&2; exit 1; }
 step() { echo "==> $*"; }
 
 [ "$NEAR_NETWORK" = "testnet" ] || die "NEAR_NETWORK must be testnet (got '$NEAR_NETWORK'); this script never touches mainnet"
-[[ "$OPERATOR_ACCOUNT_ID" == *.testnet ]] || die "OPERATOR_ACCOUNT_ID must be a .testnet account"
+[[ "$OPERATOR_ACCOUNT_ID" =~ ^([a-z0-9]+[-_])*[a-z0-9]+(\.([a-z0-9]+[-_])*[a-z0-9]+)*\.testnet$ ]] \
+  || die "OPERATOR_ACCOUNT_ID must be a named .testnet account (it is spliced into JSON args)"
+[[ "$TASK_PREFIX" =~ ^[a-z0-9][a-z0-9-]{0,40}$ ]] || die "PROPOSER_TASK_ID must be lowercase letters, digits and dashes"
+[[ "$CAP_NEAR" =~ ^[1-9][0-9]{0,3}$ ]] || die "CAP_NEAR must be a whole number of NEAR (1-9999)"
+[[ "$FC_ALLOWANCE_NEAR" =~ ^[0-9]+(\.[0-9]+)?$ ]] || die "FC_ALLOWANCE_NEAR must be a decimal number"
 command -v near >/dev/null || die "near-cli-rs not found: npm i -g near-cli-rs@0.30.1 (or cargo install near-cli-rs --version 0.30.1 --locked)"
 [ -f "$WASM" ] || die "missing $WASM — run: make build"
 "$ROOT/scripts/check-wasm-clean.sh" "$WASM" >/dev/null   # never deploy a fault-injection build
@@ -121,7 +125,11 @@ for p in scout forge buyer; do
 done
 
 step "writing $OUT_ENV (0600, gitignored)"
+# Write to a fresh 0600 temp file and move it into place: a pre-existing, world-readable
+# .env.testnet must not keep its permissions once it holds keys.
 umask 077
+tmp_env="$(mktemp "$ROOT/.env.testnet.XXXXXX")"
+trap 'rm -f "$tmp_env"' EXIT
 {
   echo "# Written by scripts/deploy-testnet.sh — testnet only. Contains function-call keys; never commit."
   echo "NEAR_NETWORK=testnet"
@@ -137,7 +145,10 @@ umask 077
   echo "PROPOSER_MERCHANT_COMPUTE=compute.$OP"
   echo "PROPOSER_MERCHANT_PROCUREMENT=procure.$OP"
   echo "PROPOSER_MERCHANT_ATTACKER=attacker.$OP"
-} > "$OUT_ENV"
+} > "$tmp_env"
+chmod 600 "$tmp_env"
+mv -f "$tmp_env" "$OUT_ENV"
+trap - EXIT
 
 echo
 echo "Done. Run the crew:  make crew NETWORK=testnet"
