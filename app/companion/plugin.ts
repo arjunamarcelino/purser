@@ -9,7 +9,7 @@
 
 import { type ChildProcess, spawn } from "node:child_process";
 import { randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
-import { closeSync, fstatSync, lstatSync, openSync, readSync } from "node:fs";
+import { closeSync, constants, fstatSync, openSync, readSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { resolve } from "node:path";
 import type { Plugin } from "vite";
@@ -108,16 +108,19 @@ async function readJson(req: IncomingMessage): Promise<Record<string, unknown>> 
 
 /** The last lines of the records file: no symlinks, bounded size, partial trailing line ignored. */
 export function readRecordLines(path: string): string[] {
-  let st;
+  let fd: number;
   try {
-    st = lstatSync(path);
-  } catch {
-    return [];
+    fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW); // a symlink fails to open (ELOOP)
+  } catch (e) {
+    const code = (e as NodeJS.ErrnoException).code;
+    if (code === "ENOENT") return [];
+    if (code === "ELOOP") throw new Error("records file must be a regular file");
+    throw e;
   }
-  if (st.isSymbolicLink() || !st.isFile()) throw new Error("records file must be a regular file");
-  const fd = openSync(path, "r");
   try {
-    const size = fstatSync(fd).size;
+    const st = fstatSync(fd); // checked on the opened descriptor: no check-then-open race
+    if (!st.isFile()) throw new Error("records file must be a regular file");
+    const size = st.size;
     const start = Math.max(0, size - RECORDS_MAX_BYTES);
     const buf = Buffer.alloc(size - start);
     readSync(fd, buf, 0, buf.length, start);
@@ -200,6 +203,25 @@ export function purserCompanion(opts: CompanionOptions): Plugin {
     configureServer(server) {
       const port = () => server.config.server.port ?? 5173;
       server.httpServer?.once("close", () => current && killGroup(current, "dev server stopped"));
+      // Jobs run in their own process group (so they can be killed as one), which also means Ctrl-C
+      // in the terminal never reaches them. Kill the group synchronously on the way out.
+      const reap = () => {
+        const pid = current && !current.done ? current.child.pid : undefined;
+        if (pid !== undefined) {
+          try {
+            process.kill(-pid, "SIGKILL");
+          } catch {
+            /* already gone */
+          }
+        }
+      };
+      process.once("exit", reap);
+      for (const sig of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
+        process.once(sig, () => {
+          reap();
+          process.exit(128 + (sig === "SIGINT" ? 2 : sig === "SIGTERM" ? 15 : 1));
+        });
+      }
 
       server.middlewares.use(async (req, res, next) => {
         const url = req.url ?? "";
@@ -261,6 +283,11 @@ export function purserCompanion(opts: CompanionOptions): Plugin {
           res.setHeader("content-type", "application/x-ndjson");
           res.setHeader("cache-control", "no-store");
           let sent = after;
+          const oldest = job.lines[0]?.seq;
+          if (oldest !== undefined && after < oldest - 1) {
+            res.write(`${JSON.stringify({ seq: oldest - 1, line: `[… ${oldest - 1 - after} earlier line(s) no longer buffered]` })}\n`);
+            sent = oldest - 1;
+          }
           const flush = () => {
             for (const l of job.lines) {
               if (l.seq > sent) {

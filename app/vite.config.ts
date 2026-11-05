@@ -42,15 +42,19 @@ export default defineConfig({
     host: "127.0.0.1",
     port: PORT,
     strictPort: true,
+    cors: false, // Vite's default lets any localhost origin read responses (incl. the page's token)
     headers: {
       "X-Frame-Options": "DENY", // a framing parent could inject a wallet through near-connect's postMessage path
       "Content-Security-Policy": "frame-ancestors 'none'",
       "Referrer-Policy": "no-referrer",
+      // A page that opens the board must not keep a handle to it (near-connect accepts injected
+      // wallets by postMessage); popups the board opens itself (Meteor) still work.
+      "Cross-Origin-Opener-Policy": "same-origin-allow-popups",
     },
     fs: {
       strict: true,
       allow: [import.meta.dirname, resolve(repoRoot, "packages/types/src"), resolve(repoRoot, "node_modules/.pnpm")],
-      deny: [".env", ".env.*", "**/.near-keys/**", "**/*.key", "**/*.pem", "**/out/**", "**/.git/**"],
+      deny: [".env", ".env.*", "**/.near-keys/**", "**/*.key", "**/*.pem", "**/*.crt", "**/out/**", "**/.git/**"],
     },
   },
   // Pre-bundle every React entry the app imports, so the dev server never has to discover one mid-

@@ -14,7 +14,7 @@ const commitment = (id: number, state: Commitment["state"], who = "scout.op.test
   delegate: who,
   intent: { chain: "NearNative", recipient: "data.op.testnet", amount: (30n * N).toString(), token: "NearNative", memo: null },
   reserved_amount: (30n * N).toString(),
-  request_id: `r${id}`,
+  request_id: `00000000-0000-4000-8000-${String(id).padStart(12, "0")}`,
   created_at: ns(NOW - 120_000),
   updated_at: ns(NOW - 120_000),
 });
@@ -32,7 +32,7 @@ describe("Manifest", () => {
       <Manifest
         commitments={[commitment(1, "Confirmed"), commitment(2, "Reserved", "forge.op.testnet")]}
         records={[
-          record({ outcome: "admitted", commitment_id: 1, state: "Confirmed", refusal_code: null, account_id: "scout.op.testnet", persona: "scout", tx_hash: "7LCgg1qhqojfUcqV3mTbagLBs2kLx8oGM2AcFdoidwXD" }),
+          record({ outcome: "admitted", commitment_id: 1, request_id: "00000000-0000-4000-8000-000000000001", state: "Confirmed", refusal_code: null, account_id: "scout.op.testnet", persona: "scout", tx_hash: "7LCgg1qhqojfUcqV3mTbagLBs2kLx8oGM2AcFdoidwXD" }),
           record({}),
         ]}
         personaOf={persona}
@@ -47,6 +47,14 @@ describe("Manifest", () => {
     const refused = screen.getByRole("list", { name: /refused/i });
     expect(within(refused).getByText("REFUSED — exceeds task budget").closest(".badge")?.className).toContain("tone-warn");
     expect(within(refused).getByText(/reported by proposer/)).toBeTruthy();
+  });
+
+  it("never attaches a record's tx link to a commitment it does not exactly match", () => {
+    const spoof = record({ outcome: "admitted", commitment_id: 1, state: "Confirmed", refusal_code: null, account_id: "buyer.op.testnet", tx_hash: "7LCgg1qhqojfUcqV3mTbagLBs2kLx8oGM2AcFdoidwXD" });
+    render(<Manifest commitments={[commitment(1, "Confirmed")]} records={[spoof]} personaOf={persona} delegateIds={new Set(["scout.op.testnet", "buyer.op.testnet"])} now={NOW} />);
+    const payments = screen.getByRole("list", { name: /payments/i });
+    expect(within(payments).queryByRole("link")).toBeNull();
+    expect(within(payments).getByText("no tx record")).toBeTruthy();
   });
 
   it("ignores records from accounts that are not on-chain delegates of the task", () => {

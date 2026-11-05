@@ -134,12 +134,23 @@ interface Row {
 export function Manifest({ commitments, records, personaOf, delegateIds, now }: { commitments: Commitment[]; records: ProposalRecord[]; personaOf: (a: string) => string; delegateIds: ReadonlySet<string>; now: number }) {
   // Records are untrusted: keep only those from accounts that are on-chain delegates of this task.
   const trusted = records.filter((r) => delegateIds.has(r.account_id));
-  const txByCid = new Map(trusted.filter((r) => r.commitment_id !== null && r.tx_hash).map((r) => [r.commitment_id!, r.tx_hash!]));
+  // A tx link attaches to a chain row only from a record that matches that commitment exactly
+  // (same request, delegate, amount, recipient) — a self-asserted record cannot dress up a real row.
+  const txFor = (c: Commitment): string | null =>
+    trusted.find(
+      (r) =>
+        r.commitment_id === c.id &&
+        r.tx_hash !== null &&
+        r.request_id === c.request_id &&
+        r.account_id === c.delegate &&
+        r.amount_yocto === c.reserved_amount &&
+        r.recipient === c.intent.recipient,
+    )?.tx_hash ?? null;
   const fresh = useFreshKeys([...commitments.map((c) => `c${c.id}:${c.state}`), ...trusted.map((r) => `r${r.request_id ?? r.decision_id}`)]);
   const isFresh = (key: string) => fresh.has(key);
 
   const chainRow = (c: Commitment): Row => {
-    const tx = txByCid.get(c.id);
+    const tx = txFor(c);
     const ageMs = now - Number(BigInt(c.updated_at) / 1_000_000n);
     const key = `c${c.id}:${c.state}`;
     return {
@@ -201,8 +212,9 @@ export function Manifest({ commitments, records, personaOf, delegateIds, now }: 
               </span>
               <span className="mtx">
                 {r.tx ? (
-                  <a href={r.tx.href} target="_blank" rel="noopener noreferrer" className="mono">
+                  <a href={r.tx.href} target="_blank" rel="noopener noreferrer" className="mono" title="transaction hash reported by the proposer; open it to verify on the explorer">
                     <Icon name="link" size={14} /> tx {r.tx.label}
+                    {!r.reported && <span className="sr-only"> (hash reported by proposer)</span>}
                   </a>
                 ) : r.linking ? (
                   <span className="dim">linking…</span>
