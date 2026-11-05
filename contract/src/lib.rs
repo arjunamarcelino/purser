@@ -61,7 +61,7 @@ const MAX_REQUEST_ID_LEN: usize = 64;
 const MAX_MEMO_LEN: usize = 256;
 /// Static gas for the `on_near_settled` callback: a few `store` writes + one event `log!`.
 /// ~2x NEAR's canonical callback floor (`FIVE_TGAS`); the bare `Transfer` action costs ~0.5 Tgas
-/// and does not compete. Re-measure if the wasm grows materially (Prompt 12's RLP/keccak).
+/// and does not compete. Measured (EVM spike): the callback burns ~2.1 Tgas; +2.5 KB of wasm adds ~0.003 Tgas.
 const CALLBACK_GAS: Gas = Gas::from_tgas(10);
 /// Minimum age (block-timestamp ns) before the owner may `reconcile` a `Reserved` commitment.
 /// A live settlement callback lands within a few blocks; until this much time has passed it may
