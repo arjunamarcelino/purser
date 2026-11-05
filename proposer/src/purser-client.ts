@@ -22,27 +22,13 @@ import {
   type RefusalCode,
   type ReservationState,
   type RetryClass,
-  U64_BIGINT_FIELDS,
   classifyRefusal,
+  parseU64Safe,
   toCommitmentId,
 } from "@purser/types";
 import type { Secret } from "./config.ts";
 
-const bigintFields = new Set<string>(U64_BIGINT_FIELDS);
-
-/**
- * JSON.parse that keeps u64 precision: block timestamps (~1.7e18 > 2^53) become bigint, read from
- * the exact source text; any other unsafe integer throws rather than silently rounding.
- */
-export function parseU64Safe(text: string): unknown {
-  const reviver = (key: string, value: unknown, ctx?: { source?: string }) => {
-    if (typeof value !== "number" || !Number.isInteger(value)) return value;
-    if (bigintFields.has(key) && ctx?.source !== undefined) return BigInt(ctx.source);
-    if (!Number.isSafeInteger(value)) throw new RangeError(`unsafe integer in field "${key}"`);
-    return value;
-  };
-  return JSON.parse(text, reviver as (k: string, v: unknown) => unknown);
-}
+export { parseU64Safe };
 
 const decoder = new TextDecoder();
 

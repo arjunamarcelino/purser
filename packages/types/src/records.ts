@@ -3,20 +3,23 @@
 // an UNTRUSTED process, so their contents are self-asserted claims, never authority.
 
 import { z } from "zod";
+import { NEAR_ACCOUNT_ID, NEAR_TX_HASH } from "./parse.ts";
 import { REFUSALS, type RefusalCode } from "./refusals.ts";
 
 const refusalCodes = Object.keys(REFUSALS) as [RefusalCode, ...RefusalCode[]];
 const hex32 = z.string().regex(/^[0-9a-f]{64}$/);
 const decimal = z.string().regex(/^[0-9]+$/);
+const accountId = z.string().regex(NEAR_ACCOUNT_ID);
+const txHash = z.string().regex(NEAR_TX_HASH);
 
 /** One line of `crew --json` output: what a persona decided and what the contract did with it. */
 export const ProposalRecord = z.strictObject({
   schema_version: z.literal(1),
   decision_id: z.uuid(),
-  persona: z.string(),
-  account_id: z.string(),
+  persona: z.enum(["scout", "forge", "buyer"]),
+  account_id: accountId,
   network: z.enum(["sandbox", "testnet"]),
-  contract_id: z.string(),
+  contract_id: accountId,
   task: z.string(),
   request_id: z.uuid().nullable(),
   outcome: z.enum([
@@ -30,13 +33,14 @@ export const ProposalRecord = z.strictObject({
     "model_error",
     "blocked_by_open_entry",
   ]),
-  recipient: z.string().nullable(),
+  // Free string: a refused proposal may name an invalid recipient. Render as text only.
+  recipient: z.string().max(128).nullable(),
   amount_yocto: decimal.nullable(),
   commitment_id: z.number().int().nonnegative().nullable(),
   state: z.enum(["Reserved", "Signed", "Confirmed", "Unknown", "Failed", "Cancelled"]).nullable(),
   refusal_code: z.enum(refusalCodes).nullable(),
-  detail: z.string().nullable(),
-  tx_hash: z.string().nullable(),
+  detail: z.string().max(4096).nullable(),
+  tx_hash: txHash.nullable(),
   payload_hash: hex32.nullable(),
   latency_ms: z.number().nonnegative(),
   at: z.iso.datetime(),
