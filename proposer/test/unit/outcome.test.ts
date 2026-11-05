@@ -1,45 +1,60 @@
 import { describe, expect, it } from "vitest";
+import {
+  AccessKeyMethodNameMismatchActionError,
+  ContractExecutionError,
+  HostGuestPanicError,
+  InvalidTransactionError,
+  TransactionTimeoutError,
+} from "near-api-js/rpc-errors";
 import { classifySendError, parseU64Safe } from "../../src/purser-client.ts";
 
-class HostGuestPanicError extends Error {
-  readonly panicMessage: string;
-  constructor(panicMessage: string) {
-    super(`Smart contract panicked: ${panicMessage}`);
-    this.panicMessage = panicMessage;
+// The real near-api-js classes, so the classifier is tested against what the SDK throws.
+const BH = "BlockHash1111";
+const panic = (msg: string) => new HostGuestPanicError(msg, BH, 1);
+const executed = (msg: string) => Object.assign(new ContractExecutionError(msg, BH, 1), { transactionResult: { transaction: { hash: "TxHash111" } } });
+// near-api-js's fetchJsonRpc throws these (not exported) after HTTP 408/5xx or exhausted retries.
+class ProviderError extends Error {}
+class TypedError extends Error {
+  readonly type: string;
+  constructor(message: string, type: string) {
+    super(message);
+    this.type = type;
   }
 }
-class ContractExecutionError extends Error {
-  transactionResult = { transaction: { hash: "TxHash111" } };
-}
-class AccessKeyMethodNameMismatchActionError extends Error {}
-class TransactionTimeoutError extends Error {}
 
 describe("classifySendError", () => {
   it("maps an exact frozen panic to a refusal with its retry class", () => {
-    expect(classifySendError(new HostGuestPanicError("exceeds task budget"))).toMatchObject({ kind: "refused", code: "exceeds_task_budget", retry: "terminal_for_amount" });
-    expect(classifySendError(new ContractExecutionError("Smart contract panicked: recipient not allowlisted"))).toMatchObject({
+    expect(classifySendError(panic("exceeds task budget"))).toMatchObject({ kind: "refused", code: "exceeds_task_budget", retry: "terminal_for_amount" });
+    expect(classifySendError(executed("Smart contract panicked: recipient not allowlisted"))).toMatchObject({
       kind: "refused",
       code: "recipient_not_allowlisted",
       txHash: "TxHash111",
     });
   });
 
-  it("never passes a non-frozen failure off as a refusal", () => {
-    expect(classifySendError(new HostGuestPanicError("exceeds task budget (soon)"))).toMatchObject({ kind: "unclassified" });
-    expect(classifySendError(new ContractExecutionError("Exceeded the prepaid gas."))).toMatchObject({ kind: "unclassified", txHash: "TxHash111" });
+  it("never passes a non-frozen execution failure off as a refusal", () => {
+    expect(classifySendError(panic("exceeds task budget (soon)"))).toMatchObject({ kind: "unclassified" });
+    expect(classifySendError(executed("Exceeded the prepaid gas."))).toMatchObject({ kind: "unclassified", txHash: "TxHash111" });
   });
 
-  it("reports function-call-key violations as protocol rejections", () => {
-    expect(classifySendError(new AccessKeyMethodNameMismatchActionError("method not allowed"))).toMatchObject({
-      kind: "rejected_by_protocol",
-      errorClass: "AccessKeyMethodNameMismatchActionError",
-    });
+  it("reports transactions the node never accepted as protocol rejections", () => {
+    expect(classifySendError(new AccessKeyMethodNameMismatchActionError("reconcile", 0, "Tx", BH))).toMatchObject({ kind: "rejected_by_protocol" });
+    expect(classifySendError(new InvalidTransactionError())).toMatchObject({ kind: "rejected_by_protocol" });
   });
 
-  it("treats lost or timed-out sends as unknown (resolve via get_idempotency, never assume)", () => {
-    expect(classifySendError(new TypeError("fetch failed"))).toMatchObject({ kind: "unknown" });
-    expect(classifySendError(new TransactionTimeoutError("timeout"))).toMatchObject({ kind: "unknown" });
-    expect(classifySendError(Object.assign(new Error("send timed out"), { name: "TimeoutError" }))).toMatchObject({ kind: "unknown" });
+  it("treats every failure without proof of execution as unknown (resolve via get_idempotency, never assume)", () => {
+    for (const err of [
+      new TypeError("fetch failed"),
+      new TransactionTimeoutError(),
+      Object.assign(new Error("send timed out"), { name: "TimeoutError" }),
+      new ProviderError("https://rpc Bad Gateway"),
+      new ProviderError("Timeout error"),
+      new TypedError("Exceeded 12 attempts for https://rpc.", "RetriesExceeded"),
+      new SyntaxError("Unexpected end of JSON input"),
+      "a thrown string",
+    ]) {
+      expect(classifySendError(err)).toMatchObject({ kind: "unknown" });
+    }
   });
 });
 

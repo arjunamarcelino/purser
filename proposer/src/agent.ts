@@ -14,6 +14,7 @@ import {
   toCommitmentId,
   toRequestId,
 } from "@purser/types";
+import type { VerifiedCompletionResult } from "@nearai/inference-sdk/node";
 import { appendEvidence, evaluate, type Pins } from "./attestation.ts";
 import type { Network } from "./config.ts";
 import { toPaymentIntent, yoctoToNear } from "./intent.ts";
@@ -81,35 +82,51 @@ async function readCommitment(ctx: CrewContext, cid: CommitmentId): Promise<{ st
   return { state: c.state, payloadHash: hex(c.payload_hash) };
 }
 
+/** What the chain says about a request whose send outcome we do not know. */
+async function fromChain(ctx: CrewContext, accountId: string, requestId: string): Promise<ChainOutcome | "absent"> {
+  const idem = await pollIdempotency(ctx, accountId, requestId);
+  if (idem.kind === "committed") {
+    const c = await readCommitment(ctx, idem.cid);
+    return { kind: "replayed", cid: idem.cid, state: c.state, txHash: null, payloadHash: c.payloadHash };
+  }
+  if (idem.kind === "failed") return { kind: "refused", code: "already_failed", retry: "terminal", raw: "get_idempotency: Failed", txHash: null };
+  if (idem.kind === "pending") return { kind: "unknown", raw: `still in flight after ${ctx.pollBudgetMs ?? 30_000} ms` };
+  return "absent";
+}
+
 /**
- * Drive one journaled request to an outcome. Sends the journaled bytes; on an uncertain result
- * consults get_idempotency instead of guessing, and resends the SAME bytes at most once when the
- * chain shows no trace of the request.
+ * Drive one journaled request to an outcome, never guessing.
+ *
+ * Once a send's fate is unknown (it may have been broadcast and still land — a NEAR transaction
+ * stays valid for about a day), only the chain can close the request: get_idempotency showing
+ * Committed or Failed. A later send's own failure cannot, because the first may land after it.
+ * A resume therefore reads the chain before sending anything. The same bytes are resent at most
+ * once per run, and only while the chain shows no trace of the request.
  */
-async function settle(ctx: CrewContext, rt: PersonaRuntime, entry: JournalEntry): Promise<ChainOutcome> {
+async function settle(ctx: CrewContext, rt: PersonaRuntime, entry: JournalEntry, resuming: boolean): Promise<ChainOutcome> {
   const accountId = rt.sender.accountId;
-  let sent: SendResult = await rt.sender.proposeRaw(entry.args_json);
-  for (let resends = 0; ; resends++) {
+  let uncertain = resuming; // a previous run sent this request and never learned its outcome
+  if (uncertain) {
+    const known = await fromChain(ctx, accountId, entry.request_id);
+    if (known !== "absent") return known;
+  }
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const sent: SendResult = await rt.sender.proposeRaw(entry.args_json);
     if (sent.kind === "success") {
+      // Admitted exactly once (a Committed replay returns the same cid, so even if an earlier
+      // send landed first there is still one commitment). "replayed" is reserved for requests
+      // the chain showed as Committed before we sent anything.
       const c = await readCommitment(ctx, sent.cid);
       return { kind: "admitted", cid: sent.cid, state: c.state, txHash: sent.txHash, payloadHash: c.payloadHash };
     }
-    const uncertain = sent.kind === "unknown" || sent.kind === "unclassified" || (sent.kind === "refused" && sent.code === "in_flight");
-    if (!uncertain) return sent;
-
-    const idem = await pollIdempotency(ctx, accountId, entry.request_id);
-    if (idem.kind === "committed") {
-      const c = await readCommitment(ctx, idem.cid);
-      return { kind: "replayed", cid: idem.cid, state: c.state, txHash: null, payloadHash: c.payloadHash };
-    }
-    if (idem.kind === "failed") return { kind: "refused", code: "already_failed", retry: "terminal", raw: "get_idempotency: Failed", txHash: null };
-    if (idem.kind === "pending") return { kind: "unknown", raw: `still in flight after ${ctx.pollBudgetMs ?? 30_000} ms` };
-    // No trace on chain. A failure that executed (unclassified) had no effect: terminal. An unknown
-    // send may simply not have landed: resend the same bytes once.
-    if (sent.kind === "unclassified") return sent;
-    if (resends >= 1) return sent;
-    sent = await rt.sender.proposeRaw(entry.args_json);
+    const waitOnChain = sent.kind === "unknown" || (sent.kind === "refused" && sent.code === "in_flight");
+    if (!waitOnChain && !uncertain) return sent; // proof of this send's fate, and no earlier send pending
+    uncertain = true;
+    const known = await fromChain(ctx, accountId, entry.request_id);
+    if (known !== "absent") return known;
+    if (!waitOnChain) break; // this resend failed definitively, but an earlier send may still land
   }
+  return { kind: "unknown", raw: "no trace of the request on chain yet; it stays open and is resumed next run" };
 }
 
 /** Outcomes that end a journal entry. `unknown` stays open and is resumed by the next run. */
@@ -170,14 +187,14 @@ async function finishEntry(ctx: CrewContext, rt: PersonaRuntime, entry: JournalE
   }
 }
 
-async function recordEvidence(ctx: CrewContext, rt: PersonaRuntime, decisionId: string, requestId: string | null, m: ModelResult, outcome: AgentOutcome, verification: Promise<unknown> | undefined) {
+async function recordEvidence(ctx: CrewContext, rt: PersonaRuntime, decisionId: string, requestId: string | null, m: ModelResult, outcome: AgentOutcome, verification: Promise<VerifiedCompletionResult> | undefined) {
   if (m.meta.chatId === null) return; // scripted model: no inference happened
   const chain = "cid" in outcome ? outcome : null;
   let result: Parameters<typeof evaluate>[1];
   if (verification === undefined) result = { unavailable: m.meta.unverifiedReason ?? "verification_unavailable" };
   else {
     try {
-      result = { result: (await verification) as never };
+      result = { result: await verification };
     } catch (error) {
       result = { error };
     }
@@ -199,7 +216,12 @@ export async function runPersona(ctx: CrewContext, rt: PersonaRuntime): Promise<
   if (open) {
     ctx.log({ event: "resume", persona: rt.persona.id, request_id: open.request_id });
     const intent = (JSON.parse(open.args_json) as { intent: PaymentIntent }).intent;
-    const outcome = await settle(ctx, rt, open);
+    let outcome: ChainOutcome;
+    try {
+      outcome = await settle(ctx, rt, open, true);
+    } catch (err) {
+      outcome = { kind: "unknown", raw: err instanceof Error ? `${err.name}: ${err.message}` : String(err) };
+    }
     await finishEntry(ctx, rt, open, outcome);
     const shown: AgentOutcome = outcome.kind === "unknown" ? { kind: "blocked_by_open_entry", requestId: open.request_id } : outcome;
     const record = recordFor(ctx, rt, open.decision_id, open.request_id, intent, shown, startedAt);
@@ -259,7 +281,7 @@ export async function runPersona(ctx: CrewContext, rt: PersonaRuntime): Promise<
 
   let outcome: ChainOutcome;
   try {
-    outcome = await settle(ctx, rt, entry);
+    outcome = await settle(ctx, rt, entry, false);
   } catch (err) {
     // An unexpected failure mid-settlement: leave the entry open so the next run resolves it.
     outcome = { kind: "unknown", raw: err instanceof Error ? `${err.name}: ${err.message}` : String(err) };

@@ -2,7 +2,20 @@
 // delegate's function-call key. Plain JsonRpcProvider on purpose — FailoverRpcProvider catches
 // contract errors, re-broadcasts refusals to the next provider and loses the error type.
 
-import { Account, JsonRpcProvider, KeyPairSigner, type KeyPairString } from "near-api-js";
+import { Account, JsonRpcProvider, KeyPair, KeyPairSigner, type KeyPairString } from "near-api-js";
+import {
+  AccessKeyDepositWithFunctionCallActionError,
+  AccessKeyDoesNotExistError,
+  AccessKeyMethodNameMismatchActionError,
+  AccessKeyNotEnoughAllowanceActionError,
+  AccessKeyNotFoundActionError,
+  AccessKeyReceiverMismatchActionError,
+  AccessKeyRequiresFullAccessActionError,
+  ContractExecutionError,
+  HostGuestPanicError,
+  InvalidTransactionError,
+  TransactionExecutionError,
+} from "near-api-js/rpc-errors";
 import {
   type CommitmentId,
   type PurserViews,
@@ -70,59 +83,43 @@ export type SendResult =
   | { kind: "success"; cid: CommitmentId; txHash: string }
   | Exclude<ChainOutcome, { kind: "admitted" | "replayed" }>;
 
-const ACCESS_KEY_ERRORS = new Set([
-  "AccessKeyNotFoundActionError",
-  "AccessKeyReceiverMismatchActionError",
-  "AccessKeyMethodNameMismatchActionError",
-  "AccessKeyRequiresFullAccessActionError",
-  "AccessKeyNotEnoughAllowanceActionError",
-  "AccessKeyDepositWithFunctionCallActionError",
-  "InvalidAccessKeyError",
-  "InvalidTxError",
-]);
-const TRANSPORT_UNKNOWN = new Set(["TransactionTimeoutError", "TimeoutError", "AbortError"]);
-
-function errorName(err: unknown): string {
-  if (err instanceof Error) {
-    if (ACCESS_KEY_ERRORS.has(err.name) || TRANSPORT_UNKNOWN.has(err.name)) return err.name;
-    // near-api-js error classes keep their class name; walk the prototype chain for a known one.
-    for (let p: object | null = err; p !== null && p !== Error.prototype; p = Object.getPrototypeOf(p)) {
-      const n = (p as { constructor?: { name?: string } }).constructor?.name;
-      if (n && (ACCESS_KEY_ERRORS.has(n) || TRANSPORT_UNKNOWN.has(n))) return n;
-    }
-    return err.constructor.name;
-  }
-  return typeof err;
-}
-
 const txHashOf = (err: unknown): string | null => {
   const r = (err as { transactionResult?: { transaction?: { hash?: string } } }).transactionResult;
   return r?.transaction?.hash ?? null;
 };
 
 /**
- * Classify a failed send. A refusal is reported only on an EXACT frozen-message match; anything
- * else that executed is `unclassified`, never passed off as a refusal. Failures where we cannot
- * know whether the transaction landed are `unknown` and must be resolved via get_idempotency.
+ * Classify a failed send. The rule that keeps retries exactly-once: a failure is FINAL only with
+ * proof of what happened to the transaction —
+ *   - it executed and failed (a contract/action execution error carrying the outcome): a frozen
+ *     refusal on an EXACT message match, anything else `unclassified` (never passed off as a refusal);
+ *   - it was never accepted (the node rejected it at validation, e.g. an access-key violation).
+ * Everything else — timeouts, HTTP 5xx, exhausted retries, cut-off bodies — is `unknown`: the
+ * transaction may have been broadcast, so the caller resolves it via get_idempotency.
  */
 export function classifySendError(err: unknown): SendResult {
-  const name = errorName(err);
   const message = err instanceof Error ? err.message : String(err);
-  const panic = (err as { panicMessage?: unknown }).panicMessage;
-  const raw = typeof panic === "string" ? panic : message;
+  const name = err instanceof Error ? err.constructor.name : typeof err;
 
-  if (ACCESS_KEY_ERRORS.has(name)) return { kind: "rejected_by_protocol", errorClass: name, raw: message };
-  if (TRANSPORT_UNKNOWN.has(name) || (err instanceof TypeError && /fetch failed/i.test(message))) {
-    return { kind: "unknown", raw: `${name}: ${message}` };
+  if (err instanceof InvalidTransactionError || err instanceof AccessKeyDoesNotExistError || isAccessKeyActionError(err)) {
+    return { kind: "rejected_by_protocol", errorClass: name, raw: message };
   }
+  const executed = err instanceof ContractExecutionError || err instanceof TransactionExecutionError;
+  if (!executed) return { kind: "unknown", raw: `${name}: ${message}` };
+
+  const raw = err instanceof HostGuestPanicError ? err.panicMessage : message;
   const refusal = classifyRefusal(raw);
   if (refusal) return { kind: "refused", code: refusal.code, retry: refusal.retry, raw, txHash: txHashOf(err) };
-  // A contract/runtime failure that is not a frozen refusal (gas, serde, a new message...).
-  if ((err as { transactionResult?: unknown }).transactionResult !== undefined || name.endsWith("Error")) {
-    return { kind: "unclassified", raw: `${name}: ${raw}`, txHash: txHashOf(err) };
-  }
-  return { kind: "unknown", raw: `${name}: ${message}` };
+  return { kind: "unclassified", raw: `${name}: ${raw}`, txHash: txHashOf(err) };
 }
+
+const isAccessKeyActionError = (err: unknown) =>
+  err instanceof AccessKeyNotFoundActionError ||
+  err instanceof AccessKeyReceiverMismatchActionError ||
+  err instanceof AccessKeyMethodNameMismatchActionError ||
+  err instanceof AccessKeyRequiresFullAccessActionError ||
+  err instanceof AccessKeyNotEnoughAllowanceActionError ||
+  err instanceof AccessKeyDepositWithFunctionCallActionError;
 
 // Measured on nearcore 2.14 (sandbox): one proposal burns ~6.4 Tgas end to end (transfer + 10 Tgas
 // settlement callback) and uses ~0.0006 NEAR of the function-call allowance. 50 Tgas is ~8x headroom.
@@ -176,6 +173,25 @@ export class DelegateSender implements Sender {
       clearTimeout(timer);
     }
   }
+}
+
+/**
+ * Refuse to sign with anything but a function-call key scoped to exactly `propose_payment` on
+ * this contract with a finite allowance. Checked against the chain at startup, so a hand-edited
+ * env file holding a full-access key cannot widen the proposer's authority.
+ */
+export async function assertProposeOnlyKey(provider: JsonRpcProvider, accountId: string, key: Secret, contractId: string): Promise<void> {
+  const publicKey = KeyPair.fromString(key.reveal() as KeyPairString).getPublicKey().toString();
+  const k = await provider.viewAccessKey({ accountId, publicKey });
+  type FunctionCallPermission = { FunctionCall?: { receiver_id: string; method_names: string[]; allowance?: string | null } };
+  const permission = k.permission as FunctionCallPermission | "FullAccess";
+  const perm = typeof permission === "object" ? permission.FunctionCall : undefined;
+  if (!perm) throw new Error(`${accountId}: the configured key is a FULL-ACCESS key; the proposer may only hold a propose_payment function-call key`);
+  if (perm.receiver_id !== contractId) throw new Error(`${accountId}: key is scoped to ${perm.receiver_id}, not ${contractId}`);
+  if (perm.method_names.length !== 1 || perm.method_names[0] !== "propose_payment") {
+    throw new Error(`${accountId}: key allows [${perm.method_names.join(", ")}] (empty = every method); expected exactly [propose_payment]`);
+  }
+  if (perm.allowance === null || perm.allowance === undefined) throw new Error(`${accountId}: key has an unlimited allowance`);
 }
 
 export const hex = (bytes: readonly number[] | null | undefined): string | null =>
