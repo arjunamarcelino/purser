@@ -3,6 +3,7 @@
 // and is re-attached after a reload by replaying its output from the last seen sequence number.
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { Icon } from "./Icon.tsx";
 import { pushToast } from "./toasts.tsx";
 
@@ -24,7 +25,11 @@ async function call(path: string, body: unknown, signal?: AbortSignal): Promise<
   return fetch(path, { method: "POST", headers: { "content-type": "application/json", "x-purser-token": t }, body: JSON.stringify(body), ...(signal ? { signal } : {}) });
 }
 
-export function DemoControls({ task, onJobFinished }: { task: string | null; onJobFinished: () => void }) {
+/**
+ * The buttons live in the sticky footer next to the invariant line; the output console renders into
+ * `consoleSlot` (in the page flow), so a long run never covers the board.
+ */
+export function DemoControls({ task, onJobFinished, consoleSlot }: { task: string | null; onJobFinished: () => void; consoleSlot: HTMLElement | null }) {
   const available = token() !== null;
   const [job, setJob] = useState<JobView | null>(null);
   const [starting, setStarting] = useState(false);
@@ -130,7 +135,10 @@ export function DemoControls({ task, onJobFinished }: { task: string | null; onJ
         )}
         {!available && <span className="dim small">Demo controls need the local dev server (pnpm --filter @purser/app dev).</span>}
       </div>
-      {job && (
+      {job && !consoleSlot && <span className="dim small">{job.done ? "finished" : "running…"}</span>}
+      {job &&
+        consoleSlot &&
+        createPortal(
         <div className="console" role="log" aria-live="polite" aria-label={`${job.kind === "attack" ? "Attack demo" : "Tests"} output`}>
           <div className="console-head">
             <span>
@@ -141,8 +149,9 @@ export function DemoControls({ task, onJobFinished }: { task: string | null; onJ
             </span>
           </div>
           <pre className="mono">{job.lines.map((l) => l.line).join("\n")}</pre>
-        </div>
-      )}
+        </div>,
+          consoleSlot,
+        )}
     </div>
   );
 }

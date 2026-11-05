@@ -29,7 +29,14 @@ export const connector = new NearConnector({
   autoConnect: true,
 });
 
-export function useWalletAccount(): { accountId: string | null; connect: () => Promise<void>; disconnect: () => Promise<void> } {
+/** The wallets the board offers, in order: NEAR CLI first (no key enters the browser). */
+export const WALLETS = [
+  { id: "near-cli", label: "NEAR CLI", hint: "sign in your terminal — key stays in your keychain" },
+  { id: "meteor-wallet", label: "Meteor", hint: "browser extension" },
+] as const;
+export type WalletId = (typeof WALLETS)[number]["id"];
+
+export function useWalletAccount(): { accountId: string | null; connect: (walletId: WalletId) => Promise<void>; disconnect: () => Promise<void> } {
   const [accountId, setAccountId] = useState<string | null>(null);
   useEffect(() => {
     let live = true;
@@ -49,8 +56,9 @@ export function useWalletAccount(): { accountId: string | null; connect: () => P
   }, []);
   return {
     accountId,
-    connect: async () => {
-      await connector.connect();
+    // An explicit wallet id: the owner always knows which wallet is about to open (no remembered default).
+    connect: async (walletId) => {
+      await connector.connect({ walletId });
     },
     disconnect: async () => {
       await connector.disconnect().catch(() => {});

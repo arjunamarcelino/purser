@@ -53,6 +53,9 @@ export default defineConfig({
       deny: [".env", ".env.*", "**/.near-keys/**", "**/*.key", "**/*.pem", "**/out/**", "**/.git/**"],
     },
   },
+  // Pre-bundle every React entry the app imports, so the dev server never has to discover one mid-
+  // session (a late discovery serves "504 Outdated Optimize Dep" and blanks the page until restart).
+  optimizeDeps: { include: ["react", "react-dom", "react-dom/client", "react/jsx-dev-runtime", "@hot-labs/near-connect", "near-api-js"] },
   preview: { host: "127.0.0.1", port: 4173, strictPort: true },
   build: { sourcemap: false, target: "es2022" },
 });
