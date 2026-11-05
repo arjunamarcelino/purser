@@ -7,9 +7,9 @@
 //!
 //! What it is NOT: it is not wired into `propose_payment`, `open_reservation` or `payload_scheme()`, and
 //! `Chain::Evm` is still rejected. [`sighash`] is `pub(crate)`: nothing outside this crate can ask the
-//! contract for a signable digest over caller-supplied fields. The two raw exports below exist only so a
-//! sandbox test can read gas; they are stateless, take no deposit and make no promise. They are plain
-//! `extern "C"` exports (not `#[near]`), so they never appear in the ABI or in `packages/types`.
+//! contract for a signable digest over caller-supplied fields. The raw export below exists only so a
+//! sandbox test can read gas; it is stateless, take no deposit and make no promise. It is a plain
+//! `extern "C"` export (not `#[near]`), so it never appear in the ABI or in `packages/types`.
 //!
 //! The digest is `keccak256(0x02 || rlp([chain_id, nonce, max_priority_fee_per_gas, max_fee_per_gas,
 //! gas_limit, to, value, data, access_list]))` with `data` and `access_list` always empty: exactly the
@@ -27,8 +27,9 @@ use near_sdk::env;
 pub const EVM_SPIKE_MARKER: &str = "PURSER_EVM_SPIKE_MEASUREMENT_ONLY";
 
 /// Upper bound on the amortization loop: the exports are public in a sandbox wasm, so cap the work.
+/// The host test pins the clamp and the sandbox test runs exactly this many rounds unclamped.
 const MAX_REPEAT: u32 = 1000;
-/// Fixed binary input: chain_id u64 | nonce u64 | max_priority_fee u128 | max_fee u128 | gas_limit u64 |
+/// Fixed binary input (binary, not JSON, so parsing adds no wasm size to the delta under test): chain_id u64 | nonce u64 | max_priority_fee u128 | max_fee u128 | gas_limit u64 |
 /// to [u8;20] | value u128 | repeat u32, all big-endian. No JSON, so parsing adds no size to the delta.
 const INPUT_LEN: usize = 8 + 8 + 16 + 16 + 8 + 20 + 16 + 4;
 
@@ -108,7 +109,9 @@ fn be<const N: usize>(input: &[u8], at: usize) -> [u8; N] {
 
 fn parse(input: &[u8]) -> (Eip1559Unsigned, u32) {
     if input.len() != INPUT_LEN {
-        env::panic_str("evm spike: input must be exactly 96 bytes");
+        env::panic_str(&format!(
+            "evm spike: input must be exactly {INPUT_LEN} bytes"
+        ));
     }
     let tx = Eip1559Unsigned {
         chain_id: u64::from_be_bytes(be(input, 0)),
@@ -135,7 +138,7 @@ fn run(mut tx: Eip1559Unsigned, repeat: u32) -> [u8; 32] {
     digest
 }
 
-/// Spike export: the sighash of the 96-byte input (see `INPUT_LEN`), looped `repeat` times; returns 32 bytes.
+/// Spike export: the sighash of the `INPUT_LEN`-byte input, looped `repeat` times; returns 32 bytes.
 #[cfg(target_arch = "wasm32")]
 #[no_mangle]
 pub extern "C" fn evm_spike_sighash() {
@@ -143,16 +146,6 @@ pub extern "C" fn evm_spike_sighash() {
     let input = env::input().unwrap_or_else(|| env::panic_str("evm spike: no input"));
     let (tx, repeat) = parse(&input);
     env::value_return(&run(tx, repeat));
-}
-
-/// Spike export: parses the same input and does nothing else; the fixed-cost baseline for gas.
-#[cfg(target_arch = "wasm32")]
-#[no_mangle]
-pub extern "C" fn evm_spike_noop() {
-    env::log_str(EVM_SPIKE_MARKER);
-    let input = env::input().unwrap_or_else(|| env::panic_str("evm spike: no input"));
-    let _ = parse(&input);
-    env::value_return(&[0u8; 32]);
 }
 
 #[cfg(test)]
@@ -207,7 +200,7 @@ mod tests {
         ))
         .unwrap();
         let vectors = file["vectors"].as_array().unwrap();
-        assert!(vectors.len() >= 30, "fixture is too small to mean anything");
+        assert_eq!(vectors.len(), 36, "the fixture generator emits 36 vectors");
         let (mut short, mut long) = (0, 0);
         for v in vectors {
             let tx = tx_from(v);
@@ -268,8 +261,11 @@ mod tests {
         }
     }
 
+    /// The fold rule itself is checked against an independent reference in the sandbox test
+    /// (`reference_digest`, repeat 2/3/10/100/1000); here: round 1 is the plain sighash, later rounds differ,
+    /// and the clamp holds.
     #[test]
-    fn the_looped_export_path_matches_an_independent_reference() {
+    fn the_loop_starts_at_the_plain_sighash_differs_per_round_and_clamps() {
         let start = Eip1559Unsigned {
             chain_id: 11155111,
             nonce: 7,
@@ -279,55 +275,26 @@ mod tests {
             to: [0x11; 20],
             value: 10u128.pow(16),
         };
-        let mut reference = start;
-        for n in 1..=7u32 {
-            let want = oracle(&reference).1;
-            reference.nonce += 1;
-            reference.value ^= u128::from_be_bytes(want[..16].try_into().unwrap());
-            assert_eq!(run(start, n), want, "repeat = {n}");
-        }
+        assert_eq!(
+            run(start, 1),
+            oracle(&start).1,
+            "repeat = 1 is the plain sighash"
+        );
         assert_ne!(
             run(start, 1),
             run(start, 2),
-            "later rounds must differ, or the loop could be folded"
+            "round 2 must differ from round 1"
         );
-        assert_eq!(
-            run(start, 0),
-            run(start, 1),
-            "repeat is clamped to at least 1"
-        );
+        assert_eq!(run(start, 0), run(start, 1), "repeat 0 is clamped up to 1");
         assert_eq!(
             run(start, u32::MAX),
             run(start, MAX_REPEAT),
-            "repeat is clamped to the cap"
+            "repeat above MAX_REPEAT is clamped to MAX_REPEAT"
         );
-    }
-
-    #[test]
-    fn input_layout_round_trips() {
-        let mut input = Vec::new();
-        input.extend_from_slice(&11155111u64.to_be_bytes());
-        input.extend_from_slice(&7u64.to_be_bytes());
-        input.extend_from_slice(&5u128.to_be_bytes());
-        input.extend_from_slice(&9u128.to_be_bytes());
-        input.extend_from_slice(&21000u64.to_be_bytes());
-        input.extend_from_slice(&[0xab; 20]);
-        input.extend_from_slice(&1000u128.to_be_bytes());
-        input.extend_from_slice(&3u32.to_be_bytes());
-        assert_eq!(input.len(), INPUT_LEN);
-        let (tx, repeat) = parse(&input);
-        assert_eq!(
-            (
-                tx.chain_id,
-                tx.nonce,
-                tx.max_priority_fee_per_gas,
-                tx.max_fee_per_gas
-            ),
-            (11155111, 7, 5, 9)
-        );
-        assert_eq!(
-            (tx.gas_limit, tx.to, tx.value, repeat),
-            (21000, [0xab; 20], 1000, 3)
+        assert_ne!(
+            run(start, MAX_REPEAT),
+            run(start, MAX_REPEAT - 1),
+            "MAX_REPEAT itself is not clamped further"
         );
     }
 

@@ -36,7 +36,7 @@ sha2 = "0.11"
 # TEST-ONLY independent oracles for the EVM spike (hand-rolled RLP vs the parity `rlp` crate, host keccak vs
 # `sha3`). Exact pins; never normal dependencies, so they cannot reach the wasm.
 rlp = "=0.6.1"
-sha3 = "=0.10.8"
+sha3 = "=0.10.9"
 
 # REQUIRED: near-sdk 5.27+ expands cfg(near)-gated code into this crate. Plain
 # `cargo clippy`/`cargo test` (no --cfg near) would otherwise raise unexpected_cfgs,

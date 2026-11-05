@@ -13,10 +13,17 @@ use near_workspaces::result::ExecutionFinalResult;
 use serde_json::Value;
 use sha3::{Digest, Keccak256};
 
-/// The 96-byte input of the spike exports (see `contract/src/evm_spike.rs`).
+/// Logged by the spike export; `contract/src/evm_spike.rs` keeps the canonical copy.
+const EVM_SPIKE_MARKER: &str = "PURSER_EVM_SPIKE_MEASUREMENT_ONLY";
+
+/// Length of the spike export input (mirrors `INPUT_LEN` in `contract/src/evm_spike.rs`, which is
+/// `pub(crate)`; a wrong length makes the export panic, so a mismatch fails every call below).
+const INPUT_LEN: usize = 96;
+
+/// The binary input of the spike exports (see `contract/src/evm_spike.rs`).
 fn input(tx: &Value, repeat: u32) -> Vec<u8> {
     let n = |k: &str| tx[k].as_str().unwrap().to_string();
-    let mut b = Vec::with_capacity(96);
+    let mut b = Vec::with_capacity(INPUT_LEN);
     b.extend_from_slice(&n("chain_id").parse::<u64>().unwrap().to_be_bytes());
     b.extend_from_slice(&n("nonce").parse::<u64>().unwrap().to_be_bytes());
     b.extend_from_slice(
@@ -30,8 +37,18 @@ fn input(tx: &Value, repeat: u32) -> Vec<u8> {
     b.extend_from_slice(&unhex(&n("to")));
     b.extend_from_slice(&n("value").parse::<u128>().unwrap().to_be_bytes());
     b.extend_from_slice(&repeat.to_be_bytes());
-    assert_eq!(b.len(), 96);
+    assert_eq!(b.len(), INPUT_LEN, "test input layout");
     b
+}
+
+#[test]
+fn the_marker_is_the_contracts_marker() {
+    assert!(
+        include_str!("../src/evm_spike.rs").contains(&format!(
+            "pub const EVM_SPIKE_MARKER: &str = \"{EVM_SPIKE_MARKER}\";"
+        )),
+        "tests/evm_spike.rs marker differs from src/evm_spike.rs"
+    );
 }
 
 fn unhex(s: &str) -> Vec<u8> {
@@ -48,7 +65,8 @@ fn vectors() -> Vec<Value> {
     file["vectors"].as_array().unwrap().clone()
 }
 
-/// The reference loop, independent of the contract: parity `rlp` + `sha3`.
+/// The reference loop, independent of the contract: parity `rlp` + `sha3`. This is the only copy of the
+/// amortization fold rule (nonce + 1, value ^= digest[..16]) outside the contract's own `run`.
 fn reference_digest(v: &Value, repeat: u32) -> Vec<u8> {
     let n = |k: &str| v[k].as_str().unwrap().to_string();
     let (chain_id, mut nonce) = (
@@ -84,7 +102,7 @@ fn reference_digest(v: &Value, repeat: u32) -> Vec<u8> {
 
 struct Measured {
     digest: Vec<u8>,
-    /// gas burnt by the function-call receipt that ran the export (the metric the criteria use)
+    /// gas burnt by the receipt that ran the export (identified by the spike marker log)
     receipt_gas: u64,
     /// the whole transaction, shown for comparison only (includes tx->receipt conversion and refunds)
     total_gas: u64,
@@ -97,13 +115,19 @@ async fn call_export(
 ) -> anyhow::Result<Measured> {
     let res = c.call(method).args(input).max_gas().transact().await?;
     assert!(res.is_success(), "{method} failed: {:?}", res.failures());
-    let receipt_gas = res
+    // The signer is the contract itself, so the refund receipt also executes on `c`. Identify the export's
+    // receipt by the marker the export logs, and require exactly one.
+    let marked: Vec<_> = res
         .receipt_outcomes()
         .iter()
-        .find(|o| o.executor_id == *c.id())
-        .expect("the export's own receipt")
-        .gas_burnt
-        .as_gas();
+        .filter(|o| o.executor_id == *c.id() && o.logs.iter().any(|l| l == EVM_SPIKE_MARKER))
+        .collect();
+    assert_eq!(
+        marked.len(),
+        1,
+        "exactly one receipt must carry the spike marker for {method}"
+    );
+    let receipt_gas = marked[0].gas_burnt.as_gas();
     let total_gas = res.total_gas_burnt.as_gas();
     Ok(Measured {
         digest: res.raw_bytes()?,
@@ -130,12 +154,12 @@ async fn spike_exports_return_the_reference_digest_and_gas_is_linear_in_the_loop
             v["name"]
         );
     }
-    for n in [2u32, 3, 10] {
+    for n in [2u32, 3, 10, 100, 1000] {
         let m = call_export(&c, "evm_spike_sighash", input(typical, n)).await?;
         assert_eq!(
             m.digest,
             reference_digest(typical, n),
-            "looped digest, repeat {n}"
+            "wasm digest != reference loop at repeat {n}"
         );
     }
 
@@ -145,7 +169,6 @@ async fn spike_exports_return_the_reference_digest_and_gas_is_linear_in_the_loop
         let m = call_export(&c, "evm_spike_sighash", input(typical, n)).await?;
         points.push((n as u64, m.receipt_gas, m.total_gas));
     }
-    let noop = call_export(&c, "evm_spike_noop", input(typical, 1)).await?;
     let slope = |a: usize, b: usize| {
         (points[b].1 as f64 - points[a].1 as f64) / (points[b].0 - points[a].0) as f64
     };
@@ -159,10 +182,6 @@ async fn spike_exports_return_the_reference_digest_and_gas_is_linear_in_the_loop
         println!("{n:<6} {:>18.6} {:>20.6}", tgas(*r as f64), tgas(*t as f64));
     }
     println!(
-        "noop(1) receipt gas      {:.6} Tgas (parse + log + return, no hashing)",
-        tgas(noop.receipt_gas as f64)
-    );
-    println!(
         "per-sighash (slope 1..1000)   {:.9} Tgas = {:.0} gas",
         tgas(s_1_1000),
         s_1_1000
@@ -174,16 +193,12 @@ async fn spike_exports_return_the_reference_digest_and_gas_is_linear_in_the_loop
     // Measurement validity: the loop was not folded (gas grows with N) and is linear (slopes agree).
     assert!(
         points[3].1 > points[2].1 && points[2].1 > points[1].1 && points[1].1 > points[0].1,
-        "gas must grow with N, or the loop was folded: {points:?}"
+        "receipt gas is not strictly increasing in N: {points:?}"
     );
     let rel = |a: f64, b: f64| ((a - b) / b).abs();
     assert!(
         rel(s_10_100, s_100_1000) < 0.05,
-        "gas is not linear in N: {s_10_100} vs {s_100_1000}"
-    );
-    assert!(
-        points[3].2 < 300_000_000_000_000,
-        "N = 1000 must fit a 300 Tgas transaction"
+        "slopes 10..100 and 100..1000 differ by more than 5%: {s_10_100} vs {s_100_1000}"
     );
     Ok(())
 }
@@ -201,21 +216,38 @@ fn split_propose(res: &ExecutionFinalResult, purser: &near_workspaces::AccountId
         "propose_payment failed: {:?}",
         res.failures()
     );
-    // The contract's own receipts, in execution order: propose_payment, then the settlement callback.
-    let own: Vec<u64> = res
+    // Identify the contract's two receipts by the event each emits, not by order: propose_payment emits
+    // payment_reserved, the settlement callback emits payment_confirmed.
+    let has_event = |o: &near_workspaces::result::ExecutionOutcome, event: &str| {
+        o.logs
+            .iter()
+            .any(|l| l.starts_with("EVENT_JSON:") && l.contains(&format!("\"event\":\"{event}\"")))
+    };
+    let own: Vec<_> = res
         .receipt_outcomes()
         .iter()
         .filter(|o| o.executor_id == *purser && o.gas_burnt.as_gas() > 0)
-        .map(|o| o.gas_burnt.as_gas())
         .collect();
-    assert!(
-        own.len() >= 2,
-        "expected propose_payment and its callback receipts, got {own:?}"
+    assert_eq!(
+        own.len(),
+        2,
+        "expected exactly the propose_payment and on_near_settled receipts on the contract, got {} with logs {:?}",
+        own.len(),
+        own.iter().map(|o| &o.logs).collect::<Vec<_>>()
     );
+    let pick = |event: &str| {
+        let hits: Vec<_> = own.iter().filter(|o| has_event(o, event)).collect();
+        assert_eq!(
+            hits.len(),
+            1,
+            "exactly one contract receipt must emit {event}"
+        );
+        hits[0].gas_burnt.as_gas()
+    };
     ProposeGas {
         total: res.total_gas_burnt.as_gas(),
-        propose_receipt: own[0],
-        callback_receipt: own[1],
+        propose_receipt: pick("payment_reserved"),
+        callback_receipt: pick("payment_confirmed"),
     }
 }
 
