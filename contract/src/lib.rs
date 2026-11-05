@@ -7,6 +7,7 @@
 //! registry; APP-FLOW §3/§4/§9, BACKEND-SCHEMA §1.4/§1.5). The `propose_payment`
 //! reserve-before-sign path lands in Prompt 4. See the per-module banners for details.
 
+use near_sdk::json_types::U64;
 use near_sdk::store::{IterableMap, LookupMap};
 use near_sdk::{
     env, near, require, AccountId, BorshStorageKey, Gas, NearToken, PanicOnDefault, Promise,
@@ -23,22 +24,23 @@ mod reservation;
 mod types;
 
 pub use budget::{
-    assert_invariant, authorize, cancel, mark_unknown, release_failed, remaining, settle_confirmed,
-    try_reserve,
+    assert_invariant, authorize, cancel, mark_unknown, record_contradicted_spend, release_failed,
+    remaining, settle_confirmed, try_reserve,
 };
 pub use error::{
     PurserError, MSG_ALREADY_FAILED, MSG_CAP_POSITIVE, MSG_CREW_CAP_MIN, MSG_CREW_CAP_REACHED,
-    MSG_DELEGATE_EXISTS, MSG_DELEGATE_NOT_AUTHORIZED, MSG_EXCEEDS_BUDGET, MSG_INVALID_PATH,
-    MSG_INVALID_RECIPIENT, MSG_INVALID_REQUEST_ID, MSG_INVALID_TASK_ID, MSG_IN_FLIGHT,
-    MSG_MEMO_TOO_LONG, MSG_NOT_RECONCILABLE, MSG_NO_SUCH_COMMITMENT, MSG_NO_SUCH_DELEGATE,
-    MSG_NO_SUCH_TASK, MSG_ONLY_OWNER, MSG_RECIPIENT_NOT_ALLOWED, MSG_TASK_EXISTS,
-    MSG_UNSUPPORTED_CHAIN, MSG_UNSUPPORTED_TOKEN, MSG_ZERO_AMOUNT,
+    MSG_DELEGATE_EXISTS, MSG_DELEGATE_NOT_AUTHORIZED, MSG_EXCEEDS_BUDGET, MSG_ILLEGAL,
+    MSG_INVALID_PATH, MSG_INVALID_RECIPIENT, MSG_INVALID_REQUEST_ID, MSG_INVALID_TASK_ID,
+    MSG_IN_FLIGHT, MSG_MEMO_TOO_LONG, MSG_NOT_RECONCILABLE, MSG_NO_SUCH_COMMITMENT,
+    MSG_NO_SUCH_DELEGATE, MSG_NO_SUCH_TASK, MSG_ONLY_OWNER, MSG_OVERFLOW,
+    MSG_RECIPIENT_NOT_ALLOWED, MSG_RECONCILE_TOO_EARLY, MSG_REQUEST_ID_REUSED, MSG_TASK_EXISTS,
+    MSG_TASK_FROZEN, MSG_UNSUPPORTED_CHAIN, MSG_UNSUPPORTED_TOKEN, MSG_ZERO_AMOUNT,
 };
 pub use events::PurserEvent;
 pub use idempotency::{classify, IdemDecision};
 pub use payload::{
-    build_near_payload, canonical_payload_bytes, NearPayload, PAYLOAD_CHAIN_TAG, PAYLOAD_DOMAIN,
-    PAYLOAD_ENCODING, PAYLOAD_HASH_ALG, PAYLOAD_PREIMAGE_SPEC, PAYLOAD_VERSION,
+    build_near_payload, canonical_payload_bytes, same_request, NearPayload, PAYLOAD_CHAIN_TAG,
+    PAYLOAD_DOMAIN, PAYLOAD_ENCODING, PAYLOAD_HASH_ALG, PAYLOAD_PREIMAGE_SPEC, PAYLOAD_VERSION,
 };
 pub use reservation::{transition, Event};
 pub use types::{
@@ -61,6 +63,43 @@ const MAX_MEMO_LEN: usize = 256;
 /// ~2x NEAR's canonical callback floor (`FIVE_TGAS`); the bare `Transfer` action costs ~0.5 Tgas
 /// and does not compete. Re-measure if the wasm grows materially (Prompt 12's RLP/keccak).
 const CALLBACK_GAS: Gas = Gas::from_tgas(10);
+/// Minimum age (block-timestamp ns) before the owner may `reconcile` a `Reserved` commitment.
+/// A live settlement callback lands within a few blocks; until this much time has passed it may
+/// still be in flight, and an early release would race it. 10 minutes ≫ the callback window.
+pub const RECONCILE_MIN_AGE_NS: u64 = 600 * 1_000_000_000;
+
+/// Marker panicked with by the `fault-injection` build. `scripts/check-wasm-clean.sh` refuses any
+/// wasm containing it (it keeps its own copy of the string), so a fault build can never be
+/// shipped. Public so the tests share this single source; unused in production, so it never
+/// reaches the production wasm.
+pub const FAULT_MARKER: &str = "PURSER_FAULT_INJECTION_LOST_CALLBACK";
+
+/// TEST-ONLY (`fault-injection`): kill the settlement callback, exactly like the documented
+/// gas-starved / dead-callback residual. The runtime rolls the callback back, leaving the
+/// commitment `Reserved` + `Pending` after its transfer has executed.
+#[cfg(feature = "fault-injection")]
+fn fault_lost_callback() {
+    env::panic_str(FAULT_MARKER);
+}
+
+/// Production build: no fault. An empty fn rather than a bare cfg'd panic at the call site, which
+/// would make the rest of `on_near_settled` unreachable code in the feature build.
+#[cfg(not(feature = "fault-injection"))]
+fn fault_lost_callback() {}
+
+/// Abort the call (rolling it back) with a core error's canonical message.
+fn core_panic<T>(e: PurserError) -> T {
+    env::panic_str(&e.to_string())
+}
+
+/// Invariant (I) backstop for paths that may run on a frozen task. A frozen task is the one
+/// state where (I) may not hold (a contradicted owner attestation recorded a landed spend), and
+/// it can authorize nothing; every other task must satisfy (I).
+fn assert_invariant_unless_frozen(b: &TaskBudget) {
+    if !b.frozen {
+        assert_invariant(b);
+    }
+}
 
 /// Unique storage prefixes for on-chain collections.
 ///
@@ -138,6 +177,21 @@ pub struct PayloadScheme {
     pub preimage: String,
 }
 
+/// Contract limits and timings, surfaced by [`Purser::get_config`] so agents, the dashboard and
+/// ops tooling read them from the chain instead of hard-coding them. JSON-only (view DTO).
+#[near(serializers = [json])]
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct Config {
+    /// How old a `Reserved` commitment must be (block-timestamp ns) before `reconcile` accepts it.
+    pub reconcile_min_age_ns: U64,
+    /// Max byte length of a `request_id`.
+    pub max_request_id_len: u32,
+    /// Max byte length of an `intent.memo`.
+    pub max_memo_len: u32,
+    /// Max byte length of a `task_id`.
+    pub max_task_id_len: u32,
+}
+
 #[near]
 impl Purser {
     /// Initialize the contract.
@@ -162,6 +216,16 @@ impl Purser {
     /// Crate version — a trivial view to confirm the contract is live.
     pub fn version(&self) -> String {
         env!("CARGO_PKG_VERSION").to_string()
+    }
+
+    /// The contract's limits and the reconcile time-lock (see [`Config`]).
+    pub fn get_config(&self) -> Config {
+        Config {
+            reconcile_min_age_ns: U64(RECONCILE_MIN_AGE_NS),
+            max_request_id_len: MAX_REQUEST_ID_LEN as u32,
+            max_memo_len: MAX_MEMO_LEN as u32,
+            max_task_id_len: MAX_TASK_ID_LEN as u32,
+        }
     }
 
     /// The NEAR-native `payload_hash` scheme (chain, version, algorithm, encoding, domain, and the
@@ -205,6 +269,7 @@ impl Purser {
             crew_cap,
             created_at: env::block_timestamp(),
             active_crew: 0,
+            frozen: false,
         };
         assert_invariant(&budget); // defense-in-depth; trivially holds at 0 + 0 <= cap
         self.tasks.insert(task_id.clone(), budget);
@@ -403,7 +468,20 @@ impl Purser {
         // (b) IDEMPOTENCY (tri-state, synchronous), namespaced by (predecessor, request_id).
         let idem_key = (caller.clone(), request_id.clone());
         match classify(self.idempotency.get(&idem_key)) {
-            IdemDecision::Replay { commitment_id } => return PromiseOrValue::Value(commitment_id),
+            IdemDecision::Replay { commitment_id } => {
+                // A replay must be the SAME request. Returning the prior cid for a different task
+                // or intent would report success for a payment that never happened.
+                let prior = self
+                    .commitments
+                    .get(&commitment_id)
+                    // commitments are never removed; if pruning is ever added, this must refuse
+                    .expect("a Committed idempotency entry names an existing commitment");
+                require!(
+                    prior.task == task && same_request(&prior.intent, &intent),
+                    MSG_REQUEST_ID_REUSED
+                );
+                return PromiseOrValue::Value(commitment_id);
+            }
             IdemDecision::InFlight => env::panic_str(MSG_IN_FLIGHT),
             IdemDecision::AlreadyFailed => env::panic_str(MSG_ALREADY_FAILED),
             IdemDecision::Fresh => {}
@@ -412,12 +490,14 @@ impl Purser {
         // (c) VALIDATE + CONSTRUCT PAYLOAD + DENY-BY-DEFAULT ALLOWLIST. The constructed-payload
         // audit hash is built from these same validated fields inside `open_reservation` (it needs
         // the about-to-be-assigned `commitment_id`), so "hashed == executed".
-        let task_token = self
-            .tasks
-            .get(&task)
-            .unwrap_or_else(|| env::panic_str(MSG_NO_SUCH_TASK))
-            .token
-            .clone();
+        let (task_token, frozen) = {
+            let t = self
+                .tasks
+                .get(&task)
+                .unwrap_or_else(|| env::panic_str(MSG_NO_SUCH_TASK));
+            (t.token.clone(), t.frozen)
+        };
+        require!(!frozen, MSG_TASK_FROZEN);
         let payload = build_near_payload(&task_token, &intent, MAX_MEMO_LEN)
             .unwrap_or_else(|e| env::panic_str(&e.to_string())); // recipient parsed here, reused in (d)+(e)
         self.assert_allowlisted(&task, &payload.recipient); // fail-closed: deny-by-default
@@ -473,14 +553,22 @@ impl Purser {
     /// (Prompt 12). Uses `#[callback_result]` (the deprecated `env::promise_result` would fail
     /// the repo's `-D warnings` lint).
     ///
-    /// Returns the `CommitmentId` on both branches so the fresh-path `PromiseOrValue` arm resolves
-    /// to the same type as the `Committed` replay. The expected-failure path does NOT panic (it
-    /// settles gracefully); a panic here can only come from a core `Err` (a broken invariant),
-    /// which correctly rolls the callback back, leaving `Reserved`+`Pending` (no release on silence).
+    /// TOTAL over every state an owner `reconcile` can leave behind, because NEAR does not bound
+    /// receipt latency: a callback may land after the owner already reconciled.
+    /// - `Reserved`: settle (`Ok` -> `Confirmed`) or safely release (`Err` -> `Failed`).
+    /// - Agreement (`Confirmed` + `Ok`, `Failed` + `Err`): nothing to do.
+    /// - `Failed` + `Ok`: the owner released a payment that landed. The proof wins: record the
+    ///   spend (`Failed -> Confirmed`) and emit `reconcile_contradicted`; if that pushes the task
+    ///   over cap, freeze it so nothing more can be authorized.
+    /// - `Confirmed` + `Err`: the owner confirmed a payment that failed (refunded). Over-counting
+    ///   is the safe direction, so the books stay and the event flags it.
     ///
-    /// RESIDUAL (documented): if this callback is gas-starved or panics AFTER a successful transfer,
-    /// funds are gone but the commitment is stuck `Reserved` and the budget is locked until a future
-    /// owner reconcile entrypoint. Mitigated by bounded inputs (deterministic cost) + `CALLBACK_GAS`.
+    /// Returns the `CommitmentId` so the fresh-path `PromiseOrValue` arm resolves to the same type
+    /// as the `Committed` replay. A panic here can only come from a broken core invariant, which
+    /// rolls the callback back.
+    ///
+    /// RESIDUAL (documented): if this callback is gas-starved or panics AFTER a successful
+    /// transfer, the commitment stays `Reserved` until the owner reconciles it.
     #[private]
     pub fn on_near_settled(
         &mut self,
@@ -488,6 +576,7 @@ impl Purser {
         request_id: RequestId,
         #[callback_result] res: Result<(), PromiseError>,
     ) -> CommitmentId {
+        fault_lost_callback();
         let now = env::block_timestamp();
         // Read task id + delegate (immutable borrows dropped), then two disjoint &mut borrows of
         // DIFFERENT maps (self.tasks, self.commitments). DO NOT hoist this body into a
@@ -506,13 +595,12 @@ impl Purser {
             .commitments
             .get_mut(&cid)
             .expect("callback cid always exists");
-        match res {
-            Ok(()) => {
+        match (c.state, res) {
+            (ReservationState::Reserved, Ok(())) => {
                 // native transfer succeeded → Reserved → Signed → Confirmed (actual == reserved).
                 let reserved = c.reserved_amount;
-                authorize(c, now).unwrap_or_else(|e| env::panic_str(&e.to_string()));
-                settle_confirmed(b, c, reserved, now)
-                    .unwrap_or_else(|e| env::panic_str(&e.to_string()));
+                authorize(c, now).unwrap_or_else(core_panic);
+                settle_confirmed(b, c, reserved, now).unwrap_or_else(core_panic);
                 self.idempotency.insert(
                     (caller, request_id.clone()),
                     IdemState::Committed { commitment_id: cid },
@@ -525,9 +613,9 @@ impl Purser {
                 }
                 .emit();
             }
-            Err(_) => {
+            (ReservationState::Reserved, Err(_)) => {
                 // transfer failed → value refunded to the contract → safe to release.
-                release_failed(b, c, now).unwrap_or_else(|e| env::panic_str(&e.to_string()));
+                release_failed(b, c, now).unwrap_or_else(core_panic);
                 self.idempotency
                     .insert((caller, request_id.clone()), IdemState::Failed);
                 PurserEvent::PaymentFailed {
@@ -538,8 +626,50 @@ impl Purser {
                 }
                 .emit();
             }
+            (ReservationState::Confirmed, Ok(())) | (ReservationState::Failed, Err(_)) => {
+                // a late callback agreeing with the owner's reconcile: nothing to change.
+            }
+            (ReservationState::Failed, Ok(())) => {
+                // the owner released a payment that landed: record the proven spend.
+                let reserved = c.reserved_amount;
+                let over_cap =
+                    record_contradicted_spend(b, c, reserved, now).unwrap_or_else(core_panic);
+                b.frozen |= over_cap;
+                self.idempotency.insert(
+                    (caller, request_id.clone()),
+                    IdemState::Committed { commitment_id: cid },
+                );
+                PurserEvent::ReconcileContradicted {
+                    task_id,
+                    commitment_id: cid,
+                    request_id,
+                    attested: false,
+                    transfer_succeeded: true,
+                    frozen: b.frozen,
+                }
+                .emit();
+            }
+            (ReservationState::Confirmed, Err(_)) => {
+                // the owner confirmed a payment that was refunded: keep the (over-)count, flag it.
+                PurserEvent::ReconcileContradicted {
+                    task_id,
+                    commitment_id: cid,
+                    request_id,
+                    attested: true,
+                    transfer_succeeded: false,
+                    frozen: b.frozen,
+                }
+                .emit();
+            }
+            (state, _) => env::panic_str(
+                &PurserError::IllegalTransition {
+                    from: state,
+                    event: "Settle",
+                }
+                .to_string(),
+            ),
         }
-        assert_invariant(b); // defense-in-depth backstop after the settle/release mutation
+        assert_invariant_unless_frozen(b); // defense-in-depth backstop after the mutation
         cid
     }
 
@@ -554,13 +684,16 @@ impl Purser {
     /// transfer landed → force `Reserved → Signed → Confirmed` and settle. `confirmed = false` →
     /// the owner proved it did not land (funds refunded) → safe-release `Reserved → Failed`.
     ///
-    /// Only a `Reserved` commitment is reconcilable: in the happy path a commitment settles within
-    /// the same transaction as its callback, so a `Reserved` that persists into a later owner
-    /// transaction is, by construction, a lost-callback case. Any other state rejects.
+    /// Only a `Reserved` commitment is reconcilable, and only once it is at least
+    /// [`RECONCILE_MIN_AGE_NS`] old. A `Reserved` commitment is NOT necessarily a lost callback:
+    /// for a few blocks after `propose_payment` its transfer and `on_near_settled` are still in
+    /// flight. Releasing it then (`confirmed = false`) while the transfer goes on to land would
+    /// spend the same headroom twice, so an early call refuses with "reconcile too early". Any
+    /// non-`Reserved` state rejects.
     pub fn reconcile(&mut self, commitment_id: CommitmentId, confirmed: bool) {
         require!(env::predecessor_account_id() == self.owner, MSG_ONLY_OWNER);
         let now = env::block_timestamp();
-        let (task_id, delegate, request_id, reserved, state) = {
+        let (task_id, delegate, request_id, reserved, state, created_at) = {
             let c = self
                 .commitments
                 .get(&commitment_id)
@@ -571,9 +704,14 @@ impl Purser {
                 c.request_id.clone(),
                 c.reserved_amount,
                 c.state,
+                c.created_at,
             )
         };
         require!(state == ReservationState::Reserved, MSG_NOT_RECONCILABLE);
+        require!(
+            now >= created_at.saturating_add(RECONCILE_MIN_AGE_NS),
+            MSG_RECONCILE_TOO_EARLY
+        );
 
         let b = self
             .tasks
@@ -596,7 +734,7 @@ impl Purser {
             self.idempotency
                 .insert((delegate, request_id.clone()), IdemState::Failed);
         }
-        assert_invariant(b);
+        assert_invariant_unless_frozen(b);
         PurserEvent::PaymentReconciled {
             task_id,
             commitment_id,

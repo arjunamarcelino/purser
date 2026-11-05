@@ -10,6 +10,11 @@ publish = false
 [lib]
 crate-type = ["cdylib", "rlib"]   # cdylib -> wasm; rlib -> in-crate integration tests
 
+[features]
+# TEST-ONLY lost-callback fault for the attack suite; build.rs refuses it without
+# PURSER_ALLOW_FAULT_INJECTION=1 (see README "Develop").
+fault-injection = []
+
 [dependencies]
 near-sdk = "=5.30.0"
 
@@ -32,10 +37,16 @@ sha2 = "0.11"
 level = "warn"
 check-cfg = ['cfg(near)']
 
+# Optimized deps for host test builds (~6x faster mocked-VM property tests); our crate keeps dev
+# settings, and the wasm uses [profile.release].
+[profile.dev.package."*"]
+opt-level = 2
+
 # ⚠️ WORKSPACE-PROMOTION HAZARD: Cargo honors [profile.*] ONLY in the workspace-root manifest.
 # If this crate ever joins a Cargo workspace, this block is silently ignored and the wasm rebuilds
 # WITHOUT overflow-checks (a money-safety setting). On promotion, move [profile.release] (and
 # rust-toolchain.toml) to the root manifest. See docs/plans promotion checklist.
+# Also add `exclude = ["contract/tests/fixtures/*"]`: the race-driver fixture is a standalone crate.
 [profile.release]          # matches the canonical cargo-near template (cargo-near strips the wasm, so no `strip`)
 codegen-units = 1
 opt-level = "z"            # size-optimize wasm

@@ -14,22 +14,16 @@
 //! The genuinely-concurrent / in-flight-retry / replay / revoke / timeout attack suite is Prompt 6.
 //! Refusals are asserted by substring against the canonical `purser_contract::MSG_*` constants.
 
+mod common;
+
 use near_workspaces::network::Sandbox;
 use near_workspaces::{Account, Contract, Worker};
 use serde_json::json;
 use sha2::{Digest, Sha256};
-use tokio::sync::OnceCell;
 
-// Compile the contract to wasm exactly once, shared across all tests in this binary.
-static WASM: OnceCell<Vec<u8>> = OnceCell::const_new();
-
-async fn wasm() -> &'static Vec<u8> {
-    WASM.get_or_init(|| async {
-        near_workspaces::compile_project(".")
-            .await
-            .expect("compile contract to wasm")
-    })
-    .await
+/// The production wasm, shared with the attack suite (built once, or read from `PURSER_WASM_PROD`).
+async fn wasm() -> &'static [u8] {
+    common::prod_wasm().await
 }
 
 /// Fresh sandbox with: a deployed+initialized contract, an `owner`, a registered+active
@@ -375,6 +369,69 @@ async fn wrong_token_intent_rejected() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// A retry must replay the SAME request: an identical retry returns the prior cid with no second
+/// transfer, but reusing a settled `request_id` for a different intent is refused instead of
+/// reporting the earlier payment as this one's success.
+#[tokio::test]
+async fn replay_with_a_different_intent_is_refused() -> anyhow::Result<()> {
+    let (_w, c, owner, delegate, recipient) = setup().await?;
+    let first = propose(&delegate, &c, &recipient, "400000", "r1").await?;
+    assert!(first.is_success(), "{:?}", first.failures());
+    let cid: u64 = first.json()?;
+    let before = recipient.view_account().await?.balance;
+
+    let other = propose(&delegate, &c, &recipient, "300000", "r1").await?;
+    assert!(err_string(other).contains(purser_contract::MSG_REQUEST_ID_REUSED));
+    let task = view_json(&c, "get_task", json!({ "task_id": "t1" })).await?;
+    assert_eq!(
+        task["outstanding"], "0",
+        "the refused reuse reserved nothing"
+    );
+
+    // Same request_id, identical intent, but another task: a different request, refused too.
+    owner
+        .batch(c.id())
+        .call(
+            near_workspaces::operations::Function::new("create_task").args_json(
+                json!({ "task_id": "t2", "cap": "1000000", "token": "NearNative", "crew_cap": 3 }),
+            ),
+        )
+        .call(
+            near_workspaces::operations::Function::new("add_delegate").args_json(
+                json!({ "task_id": "t2", "account_id": delegate.id(), "derivation_path": "m/0" }),
+            ),
+        )
+        .call(
+            near_workspaces::operations::Function::new("set_recipient_allowlist")
+                .args_json(json!({ "task_id": "t2", "recipients": [recipient.id()] })),
+        )
+        .transact()
+        .await?
+        .into_result()?;
+    let args = json!({
+        "task": "t2",
+        "request_id": "r1",
+        "intent": { "chain": "NearNative", "recipient": recipient.id(), "amount": "400000",
+                    "token": "NearNative", "memo": null },
+    });
+    let cross_task = delegate
+        .call(c.id(), "propose_payment")
+        .args_json(args)
+        .max_gas()
+        .transact()
+        .await?;
+    assert!(err_string(cross_task).contains(purser_contract::MSG_REQUEST_ID_REUSED));
+
+    let same = propose(&delegate, &c, &recipient, "400000", "r1").await?;
+    assert!(same.is_success(), "{:?}", same.failures());
+    assert_eq!(same.json::<u64>()?, cid);
+    assert_eq!(recipient.view_account().await?.balance, before);
+    let task = view_json(&c, "get_task", json!({ "task_id": "t1" })).await?;
+    assert_eq!(task["completed"], "400000");
+    assert_eq!(task["outstanding"], "0");
+    Ok(())
+}
+
 /// Honest revocation of a payee: after the owner removes a previously-allowlisted recipient, a
 /// payment to it is refused deny-by-default, the budget is untouched, and no commitment is burned.
 #[tokio::test]
@@ -477,6 +534,42 @@ async fn reconcile(
         .max_gas()
         .transact()
         .await?)
+}
+
+/// `get_config` surfaces the reconcile time-lock and input limits so clients never hard-code them.
+#[tokio::test]
+async fn get_config_exposes_the_lock_and_limits() -> anyhow::Result<()> {
+    let (_w, c, _owner, _delegate, _recipient) = setup().await?;
+    let cfg = view_json(&c, "get_config", json!({})).await?;
+    assert_eq!(
+        cfg["reconcile_min_age_ns"],
+        purser_contract::RECONCILE_MIN_AGE_NS.to_string()
+    );
+    assert_eq!(cfg["max_request_id_len"], 64);
+    assert_eq!(cfg["max_memo_len"], 256);
+    assert_eq!(cfg["max_task_id_len"], 64);
+    Ok(())
+}
+
+/// The settlement callback is `#[private]`: no outsider (not even a delegate) can forge a
+/// settlement. The refusal text is near-sdk's own, not a Purser `MSG_*`.
+#[tokio::test]
+async fn settlement_callback_cannot_be_forged() -> anyhow::Result<()> {
+    let (_w, c, _owner, delegate, recipient) = setup().await?;
+    assert!(propose(&delegate, &c, &recipient, "400000", "r1")
+        .await?
+        .is_success());
+    let forged = delegate
+        .call(c.id(), "on_near_settled")
+        .args_json(json!({ "cid": 0, "request_id": "r1" }))
+        .max_gas()
+        .transact()
+        .await?;
+    assert!(err_string(forged).contains("is private"));
+    let task = view_json(&c, "get_task", json!({ "task_id": "t1" })).await?;
+    assert_eq!(task["completed"], "400000");
+    assert_eq!(task["outstanding"], "0");
+    Ok(())
 }
 
 /// Only the owner may reconcile (the owner gate fires before any lookup).

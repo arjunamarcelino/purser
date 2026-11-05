@@ -139,6 +139,39 @@ pub fn canonical_payload_bytes(
     bytes
 }
 
+/// Is `intent` the SAME request as a previously committed `prior` intent? The replay check in
+/// `propose_payment` must not depend on how a client happened to serialize a retry, so both sides
+/// are compared in canonical form:
+/// - NEAR-native recipients are compared as parsed `AccountId`s (parsing accepts only canonical
+///   ids, so this is equality on what the transfer targets);
+/// - an empty memo is the same as no memo;
+/// - chain, token and amount must match exactly.
+///
+/// EVM (Prompt 12) plugs its own recipient normalizer into the `Chain::Evm` arm (checksum
+/// casing: `0xAbC…` and `0xabc…` are one payee); until then it compares the raw string.
+pub fn same_request(prior: &PaymentIntent, intent: &PaymentIntent) -> bool {
+    fn memo(i: &PaymentIntent) -> &str {
+        i.memo.as_deref().unwrap_or("")
+    }
+    let same_recipient = match intent.chain {
+        Chain::NearNative => {
+            match (
+                prior.recipient.parse::<AccountId>(),
+                intent.recipient.parse::<AccountId>(),
+            ) {
+                (Ok(a), Ok(b)) => a == b,
+                _ => prior.recipient == intent.recipient,
+            }
+        }
+        Chain::Evm { .. } => prior.recipient == intent.recipient,
+    };
+    prior.chain == intent.chain
+        && prior.token == intent.token
+        && prior.amount == intent.amount
+        && same_recipient
+        && memo(prior) == memo(intent)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -349,5 +382,49 @@ mod tests {
             canonical_payload_bytes(&tid("t1"), 7, &acct("alice.near"), 43),
             "amount"
         );
+    }
+
+    #[test]
+    fn same_request_is_canonical_but_strict_on_what_moves_money() {
+        let base = intent(Chain::NearNative, TokenSpec::NearNative, "bob.near", None);
+        assert!(same_request(&base, &base.clone()));
+        // an empty memo is no memo
+        let empty = intent(
+            Chain::NearNative,
+            TokenSpec::NearNative,
+            "bob.near",
+            Some(String::new()),
+        );
+        assert!(same_request(&base, &empty));
+        // everything that changes the request is a different request
+        let memo = intent(
+            Chain::NearNative,
+            TokenSpec::NearNative,
+            "bob.near",
+            Some("x".into()),
+        );
+        let payee = intent(Chain::NearNative, TokenSpec::NearNative, "eve.near", None);
+        let mut more = base.clone();
+        more.amount = NearToken::from_yoctonear(101);
+        let token = intent(
+            Chain::NearNative,
+            TokenSpec::Nep141 {
+                contract: acct("usdc.near"),
+            },
+            "bob.near",
+            None,
+        );
+        let chain = intent(
+            Chain::Evm { chain_id: 1 },
+            TokenSpec::NearNative,
+            "bob.near",
+            None,
+        );
+        for other in [memo, payee, more, token, chain] {
+            assert!(
+                !same_request(&base, &other),
+                "{other:?} is a different request"
+            );
+        }
     }
 }

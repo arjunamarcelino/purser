@@ -101,4 +101,16 @@ pub enum PurserEvent {
         request_id: RequestId,
         confirmed: bool,
     },
+    /// A settlement callback contradicted an owner `reconcile`: `attested` is what the owner
+    /// claimed (`confirmed`), `transfer_succeeded` is what the chain proved. `frozen` reports
+    /// whether recording the proven spend froze the task.
+    #[event_version("1.0.0")]
+    ReconcileContradicted {
+        task_id: TaskId,
+        commitment_id: CommitmentId,
+        request_id: RequestId,
+        attested: bool,
+        transfer_succeeded: bool,
+        frozen: bool,
+    },
 }

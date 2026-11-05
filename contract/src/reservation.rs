@@ -37,6 +37,9 @@ pub enum Event {
     Timeout,
     /// `Unknown -> Cancelled`: attested nonce-burn cancel (stretch).
     Cancel,
+    /// `Failed -> Confirmed`: the settlement callback proves a transfer the owner attested as
+    /// failed actually landed. The only edge out of a terminal state: proof beats attestation.
+    Contradict,
 }
 
 /// Human-readable event name for [`PurserError::IllegalTransition`].
@@ -47,15 +50,17 @@ const fn event_name(e: Event) -> &'static str {
         Event::Confirm => "Confirm",
         Event::Timeout => "Timeout",
         Event::Cancel => "Cancel",
+        Event::Contradict => "Contradict",
     }
 }
 
 /// Return the target state for a legal `(from, event)` edge, else
 /// [`PurserError::IllegalTransition`]. Pure and total.
 ///
-/// The legal edge set is EXACTLY these six — see the §4 diagram. Any other pair
-/// (including every event from a terminal state, re-`Signed`, `Signed -> Failed`,
-/// `Unknown -> Failed`, and `Unknown -> Unknown`) is rejected.
+/// The legal edge set is EXACTLY these seven: the six of the §4 diagram plus
+/// `Failed -> Confirmed` on [`Event::Contradict`]. Any other pair (including every other event
+/// from a terminal state, re-`Signed`, `Signed -> Failed`, `Unknown -> Failed`, and
+/// `Unknown -> Unknown`) is rejected.
 pub fn transition(from: ReservationState, event: Event) -> Result<ReservationState, PurserError> {
     use Event::*;
     use ReservationState::*;
@@ -66,6 +71,7 @@ pub fn transition(from: ReservationState, event: Event) -> Result<ReservationSta
         (Signed, Timeout) => Unknown,
         (Unknown, Confirm) => Confirmed,
         (Unknown, Cancel) => Cancelled,
+        (Failed, Contradict) => Confirmed,
         // NOTE: there is intentionally no (Unknown, Timeout) => Unknown row. The §4
         // "stays reserved" self-loop is INACTION, not an Ok-returning edge; adding
         // it would make `mark_unknown(Unknown)` wrongly succeed.
@@ -85,26 +91,28 @@ mod tests {
     use crate::types::ReservationState::*;
 
     const STATES: [ReservationState; 6] = [Reserved, Signed, Confirmed, Unknown, Failed, Cancelled];
-    const EVENTS: [Event; 5] = [
+    const EVENTS: [Event; 6] = [
         Event::Authorize,
         Event::Fail,
         Event::Confirm,
         Event::Timeout,
         Event::Cancel,
+        Event::Contradict,
     ];
 
-    /// The six legal edges, as (from, event, to). Any change to `transition` that
+    /// The seven legal edges, as (from, event, to). Any change to `transition` that
     /// widens or narrows the edge set breaks `transition_table_is_exactly_the_legal_set`.
-    const LEGAL: [(ReservationState, Event, ReservationState); 6] = [
+    const LEGAL: [(ReservationState, Event, ReservationState); 7] = [
         (Reserved, Event::Authorize, Signed),
         (Reserved, Event::Fail, Failed),
         (Signed, Event::Confirm, Confirmed),
         (Signed, Event::Timeout, Unknown),
         (Unknown, Event::Confirm, Confirmed),
         (Unknown, Event::Cancel, Cancelled),
+        (Failed, Event::Contradict, Confirmed),
     ];
 
-    /// Exhaustive 6x5 = 30-pair check: exactly the six legal edges are `Ok` (with
+    /// Exhaustive 6x6 = 36-pair check: exactly the seven legal edges are `Ok` (with
     /// the correct target), every other pair is `Err(IllegalTransition)`.
     #[test]
     fn transition_table_is_exactly_the_legal_set() {
@@ -129,7 +137,7 @@ mod tests {
                 }
             }
         }
-        assert_eq!(legal_count, 6, "expected exactly 6 legal edges");
+        assert_eq!(legal_count, 7, "expected exactly 7 legal edges");
     }
 
     /// The safety-critical rejections, asserted by name so a regression is obvious.
@@ -159,9 +167,12 @@ mod tests {
             transition(Reserved, Event::Confirm),
             Err(PurserError::IllegalTransition { .. })
         ));
-        // Terminal states accept no event.
+        // Terminal states accept no event, except the proof-beats-attestation edge.
         for from in [Confirmed, Failed, Cancelled] {
             for event in EVENTS {
+                if (from, event) == (Failed, Event::Contradict) {
+                    continue;
+                }
                 assert!(
                     matches!(
                         transition(from, event),
