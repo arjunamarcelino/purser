@@ -199,6 +199,8 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - name: Proposer crew + model-independence property on a local chain
         run: NEAR_SANDBOX_BIN_PATH="$(scripts/sandbox-bin.sh)" pnpm --filter @purser/proposer run test:sandbox
+      - name: Indexer cache proofs (kill the poller, rebuild from empty) on a local chain
+        run: NEAR_SANDBOX_BIN_PATH="$(scripts/sandbox-bin.sh)" pnpm --filter @purser/indexer run test:sandbox
 
   secrets:
     runs-on: ubuntu-latest

@@ -1,6 +1,7 @@
 .PHONY: build build-release test fmt lint \
         contract-build contract-build-release contract-test contract-fmt contract-lint prove \
         ts-install ts-lint ts-test ts-test-sandbox types-gen crew board \
+        indexer-poll indexer-serve indexer-counts \
         deploy-testnet demo metrics hooks
 
 # Aggregate targets: the contract plus the TS workspace (packages/*, proposer).
@@ -31,9 +32,16 @@ types-gen: contract-build ts-install ; pnpm --filter @purser/types run gen
 # The sandbox binary is nearcore 2.14.0, sha256-pinned (scripts/sandbox-bin.sh).
 ts-test-sandbox: contract-build ts-install
 	NEAR_SANDBOX_BIN_PATH="$$(scripts/sandbox-bin.sh)" pnpm --filter @purser/proposer run test:sandbox
+	NEAR_SANDBOX_BIN_PATH="$$(scripts/sandbox-bin.sh)" pnpm --filter @purser/indexer run test:sandbox
 
 # The operator board (http://127.0.0.1:5173), with the localhost companion for the demo buttons.
 board: ts-install ; pnpm --filter @purser/app dev
+
+# The off-chain cache (derived, non-authoritative; reads PURSER_CONTRACT_ID/NEAR_NETWORK from .env.testnet).
+# Poller and API are separate processes: the poller is the only DB writer, the API opens it read-only.
+indexer-poll: ts-install ; pnpm --filter @purser/indexer run poll
+indexer-serve: ts-install ; pnpm --filter @purser/indexer run serve
+indexer-counts: ts-install ; pnpm --filter @purser/indexer run counts
 
 # Run the proposer crew: make crew [NETWORK=sandbox|testnet] [SCENARIO=demo|legit|race|rogue] [MODEL=near-ai|scripted]
 NETWORK ?= sandbox

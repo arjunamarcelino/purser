@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { Commitment, Delegate, ProposalRecord } from "@purser/types";
 import { explorer } from "../config.ts";
+import type { CachedCommitment } from "../data/cache.ts";
 import { formatNear, formatTime, safeText, shortHash } from "../lib/format.ts";
 import { type LineHealth, groupOf, refusalBadge, stateBadge } from "../lib/semantics.ts";
 import { useReducedMotion } from "../theme.ts";
@@ -283,4 +284,77 @@ function useFreshKeys(keys: string[]): ReadonlySet<string> {
     return () => clearTimeout(t);
   }, [signature]);
   return fresh;
+}
+
+/**
+ * "On-chain history (cached)": rows from the indexer. Every API string is a React text node; the only
+ * href is built from a validated tx hash and the app's own explorer. A row from a block the board has
+ * not reached yet is labelled as ahead of the board, never as settled.
+ */
+export function CachedHistory({
+  rows,
+  dropped,
+  boardBlock,
+  personaOf,
+  recordTx,
+  contractId,
+  offline = false,
+}: {
+  rows: CachedCommitment[];
+  dropped: number;
+  boardBlock: number | null;
+  personaOf: (a: string) => string;
+  recordTx: (r: CachedCommitment) => string | null;
+  contractId: string;
+  offline?: boolean;
+}) {
+  return (
+    <section className="panel cached-history" aria-labelledby="cache-h">
+      <h2 id="cache-h" className="label">
+        On-chain history <span className="dim">(cached)</span>
+      </h2>
+      {offline && rows.length > 0 && <p className="tone-warn small">offline — showing last known</p>}
+      {rows.length === 0 ? (
+        <p className="dim small">No cached history for this task yet.</p>
+      ) : (
+        <ul aria-labelledby="cache-h" style={offline ? { opacity: 0.6 } : undefined}>
+          {[...rows]
+            .sort((a, b) => Number(b.commitmentId) - Number(a.commitmentId))
+            .map((r) => {
+              const ahead = boardBlock !== null && r.asOfHeight > boardBlock;
+              const fallbackTx = r.txStatus === "resolved" && r.nearTx ? null : recordTx(r);
+              const hash = r.txStatus === "resolved" ? r.nearTx : fallbackTx;
+              return (
+                <li key={`${r.commitmentId}:${r.state}`} className="mrow">
+                  <span className="mono amt">{formatNear(r.actualSpent ?? r.reservedAmount)}</span>
+                  <span className="who">
+                    {personaOf(r.delegate)} <span aria-hidden="true">→</span>
+                    <span className="sr-only">to</span> <span className="mono">{r.recipient}</span>
+                  </span>
+                  <span className="mbadge">
+                    <span className="dim small">{ahead ? `${r.state} (ahead of board)` : r.state}</span>
+                  </span>
+                  <span className="mtx">
+                    {hash ? (
+                      <>
+                        <a href={explorer.tx(hash)} target="_blank" rel="noopener noreferrer" className="mono">
+                          <Icon name="link" size={14} /> tx {shortHash(hash)}
+                        </a>
+                        {r.txStatus !== "resolved" && <span className="dim small"> proposer-reported, unverified</span>}
+                      </>
+                    ) : (
+                      <a href={explorer.account(contractId)} target="_blank" rel="noopener noreferrer" className="dim small">
+                        {r.txStatus === "unavailable" ? "tx unavailable" : r.txStatus === "pending" ? "tx pending" : "tx not indexed"}
+                      </a>
+                    )}
+                  </span>
+                  <span className="mono dim mtime">cached @ block {r.asOfHeight}</span>
+                </li>
+              );
+            })}
+        </ul>
+      )}
+      {dropped > 0 && <p className="dim small">{dropped} invalid cache row{dropped === 1 ? "" : "s"} ignored.</p>}
+    </section>
+  );
 }

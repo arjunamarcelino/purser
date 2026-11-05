@@ -8,7 +8,7 @@ const repoRoot = resolve(import.meta.dirname, "..");
 
 // Exactly these keys may reach the browser. The repo's env files also hold function-call keys and the
 // NEAR AI API key, so they are parsed here by hand — never passed through loadEnv/define wholesale.
-const EXPOSED = ["PURSER_CONTRACT_ID", "NEAR_NETWORK", "NEAR_RPC_URL"] as const;
+const EXPOSED = ["PURSER_CONTRACT_ID", "NEAR_NETWORK", "NEAR_RPC_URL", "INDEXER_ENABLED"] as const;
 function readExposedEnv(): Record<(typeof EXPOSED)[number], string> {
   const out: Record<string, string> = {};
   for (const file of [".env", ".env.testnet"]) {
@@ -26,22 +26,31 @@ function readExposedEnv(): Record<(typeof EXPOSED)[number], string> {
     PURSER_CONTRACT_ID: out.PURSER_CONTRACT_ID ?? "",
     NEAR_NETWORK: out.NEAR_NETWORK ?? "testnet",
     NEAR_RPC_URL: out.NEAR_RPC_URL ?? "https://test.rpc.fastnear.com",
+    INDEXER_ENABLED: out.INDEXER_ENABLED ?? "",
   };
 }
 
 const env = readExposedEnv();
 const PORT = 5173;
+// Same-origin proxy to the local read API (never a host URL in the bundle). Only the port is configurable.
+const indexerPort = /^\d{2,5}$/.test(process.env.INDEXER_PORT ?? "") ? process.env.INDEXER_PORT : "8787";
+// changeOrigin rewrites Host to the target so the API's DNS-rebinding allowlist (Host must be its own
+// 127.0.0.1:<port>) passes; Vite has already vetted the browser's Host (allowedHosts) before proxying.
+const indexerProxy = {
+  "/__indexer": { target: `http://127.0.0.1:${indexerPort}`, changeOrigin: true, rewrite: (p: string) => p.replace(/^\/__indexer/, "") },
+};
 
 export default defineConfig({
   plugins: [react(), purserCompanion({ repoRoot, contractId: env.PURSER_CONTRACT_ID })],
   envDir: import.meta.dirname, // app/ only: no VITE_* from the repo root can leak in
   define: {
-    __PURSER_CONFIG__: JSON.stringify({ contractId: env.PURSER_CONTRACT_ID, network: env.NEAR_NETWORK, rpcUrl: env.NEAR_RPC_URL }),
+    __PURSER_CONFIG__: JSON.stringify({ contractId: env.PURSER_CONTRACT_ID, network: env.NEAR_NETWORK, rpcUrl: env.NEAR_RPC_URL, indexerEnabled: /^(1|true)$/i.test(env.INDEXER_ENABLED) }),
   },
   server: {
     host: "127.0.0.1",
     port: PORT,
     strictPort: true,
+    proxy: indexerProxy,
     cors: false, // Vite's default lets any localhost origin read responses (incl. the page's token)
     headers: {
       "X-Frame-Options": "DENY", // a framing parent could inject a wallet through near-connect's postMessage path
@@ -60,6 +69,6 @@ export default defineConfig({
   // Pre-bundle every React entry the app imports, so the dev server never has to discover one mid-
   // session (a late discovery serves "504 Outdated Optimize Dep" and blanks the page until restart).
   optimizeDeps: { include: ["react", "react-dom", "react-dom/client", "react/jsx-dev-runtime", "@hot-labs/near-connect", "near-api-js"] },
-  preview: { host: "127.0.0.1", port: 4173, strictPort: true },
+  preview: { host: "127.0.0.1", port: 4173, strictPort: true, proxy: indexerProxy },
   build: { sourcemap: false, target: "es2022" },
 });

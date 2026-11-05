@@ -1,8 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { Delegate } from "@purser/types";
+import type { CachedCommitment } from "./data/cache.ts";
 import { config, explorer } from "./config.ts";
 import { ChainBoardSource, CompanionHistorySource } from "./data/sources.ts";
+import { IndexerClient, cacheAgeMs } from "./data/cache.ts";
 import { useBoard, useNow } from "./data/useBoard.ts";
+import { useCache } from "./data/useCache.ts";
 import { ago } from "./lib/format.ts";
 import { lineHealth } from "./lib/semantics.ts";
 import { useTheme } from "./theme.ts";
@@ -10,12 +13,13 @@ import { useWalletAccount } from "./wallet/wallet.ts";
 import { DemoControls } from "./components/DemoControls.tsx";
 import { Icon } from "./components/Icon.tsx";
 import { ConfirmDialog, OwnerPanel, useOwnerActions } from "./components/owner.tsx";
-import { BudgetPanel, CrewPanel, InvariantLine, Manifest } from "./components/panels.tsx";
+import { BudgetPanel, CachedHistory, CrewPanel, InvariantLine, Manifest } from "./components/panels.tsx";
 import { Toasts } from "./components/toasts.tsx";
 
 // Module singletons: StrictMode double-mounts effects, never these.
 const board = new ChainBoardSource(config.rpcUrl, config.contractId);
 const recordsSource = new CompanionHistorySource();
+const indexer = new IndexerClient({ network: config.network, contractId: config.contractId });
 
 const PERSONAS = new Set(["scout", "forge", "buyer"]);
 const personaOf = (accountId: string) => {
@@ -83,6 +87,7 @@ export function App() {
 
   const state = useBoard(chainOk ? task : null, board, recordsSource, refreshKey);
   const snap = state.snapshot;
+  const cache = useCache(task, config.indexerEnabled && chainOk === true, indexer);
   const isOwner = wallet.accountId !== null && snap !== null && wallet.accountId === snap.budget.owner;
   const owner = useOwnerActions(wallet.accountId, isOwner);
 
@@ -102,6 +107,15 @@ export function App() {
     snap ? { cap: BigInt(snap.invariant.cap), completed: BigInt(snap.invariant.completed), outstanding: BigInt(snap.invariant.outstanding), holds: snap.invariant.holds, frozen: snap.invariant.frozen } : null,
     { hasUnknown: snap?.commitments.some((c) => c.state === "Unknown") ?? false, syncedAt: state.syncedAt, now },
   );
+
+  // Display-only: a tx hash for a cached row may come from a proposer record, but only one that matches the
+  // cached commitment exactly and comes from an on-chain delegate (same rule as the Manifest).
+  const recordTx = (r: CachedCommitment): string | null =>
+    state.records.find(
+      (x) => delegateIds.has(x.account_id) && x.tx_hash !== null && x.commitment_id !== null && String(x.commitment_id) === r.commitmentId && x.request_id === r.requestId && x.account_id === r.delegate && x.recipient === r.recipient,
+    )?.tx_hash ?? null;
+  const cacheAge = cache.status && cache.receivedAt !== null ? cacheAgeMs(cache.status, cache.receivedAt, now) : null;
+  const cacheLag = snap && cache.status?.asOfHeight != null ? snap.blockHeight - cache.status.asOfHeight : null;
 
   const revoke = (d: Delegate) => {
     if (!task) return;
@@ -188,6 +202,9 @@ export function App() {
               <CrewPanel delegates={snap.delegates} personaOf={personaOf} isOwner={isOwner} busy={owner.busy} revoking={new Set(revoking.keys())} onRevoke={revoke} />
             </div>
             <Manifest commitments={snap.commitments} records={state.records} personaOf={personaOf} delegateIds={delegateIds} now={now} />
+            {config.indexerEnabled && !cache.wrongIndexer && (
+              <CachedHistory rows={cache.rows} dropped={cache.dropped} boardBlock={snap.blockHeight} personaOf={personaOf} recordTx={recordTx} contractId={config.contractId} offline={cache.offline} />
+            )}
             {isOwner && <OwnerPanel task={task} request={(r) => owner.request({ ...r, onSuccess: refresh })} busy={owner.busy} />}
           </>
         )}
@@ -209,6 +226,22 @@ export function App() {
             <a href={explorer.account(config.contractId)} target="_blank" rel="noopener noreferrer" className="mono">
               {config.contractId} ↗
             </a>
+            {config.indexerEnabled && (
+              <>
+                {" · "}
+                {cache.wrongIndexer ? (
+                  <span className="tone-warn">history: wrong indexer</span>
+                ) : cache.status === null ? (
+                  <span className={cache.offline ? "tone-warn" : ""}>{cache.offline ? "history offline" : "history cache …"}</span>
+                ) : (
+                  <span className={cache.offline || (cacheAge ?? Infinity) > 60_000 ? "tone-warn" : ""}>
+                    history cache {cacheAge === null ? "never" : `${Math.round(cacheAge / 1000)}s`} · cache block {cache.status.asOfHeight ?? "—"}
+                    {cache.offline && " · history offline"}
+                    {cacheLag !== null && cacheLag > 100 && ` · Δ ${cacheLag} blocks`}
+                  </span>
+                )}
+              </>
+            )}
           </span>
         </div>
       </footer>
