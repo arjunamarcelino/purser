@@ -34,8 +34,10 @@ const env = readExposedEnv();
 const PORT = 5173;
 // Same-origin proxy to the local read API (never a host URL in the bundle). Only the port is configurable.
 const indexerPort = /^\d{2,5}$/.test(process.env.INDEXER_PORT ?? "") ? process.env.INDEXER_PORT : "8787";
+// changeOrigin rewrites Host to the target so the API's DNS-rebinding allowlist (Host must be its own
+// 127.0.0.1:<port>) passes; Vite has already vetted the browser's Host (allowedHosts) before proxying.
 const indexerProxy = {
-  "/__indexer": { target: `http://127.0.0.1:${indexerPort}`, changeOrigin: false, rewrite: (p: string) => p.replace(/^\/__indexer/, "") },
+  "/__indexer": { target: `http://127.0.0.1:${indexerPort}`, changeOrigin: true, rewrite: (p: string) => p.replace(/^\/__indexer/, "") },
 };
 
 export default defineConfig({
