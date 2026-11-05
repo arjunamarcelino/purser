@@ -261,13 +261,14 @@ impl RaceProof {
             .filter(|(_, a)| *a == Admission::Refused(msg_static(msg)))
             .count()
     }
-    /// Every admission ran before the first settlement: inside the async gap.
+    /// Every admission ran before the first settlement: inside the async gap. Requires one
+    /// observed settlement per reservation, so a drifted event name or a misclassified receipt
+    /// cannot make the proof pass vacuously.
     pub fn raced(&self) -> bool {
         let last_admission = self.admissions.iter().map(|(h, _)| *h).max();
         let first_settlement = self.settlements.iter().copied().min();
         match (last_admission, first_settlement) {
-            (Some(a), Some(s)) => a < s,
-            (Some(_), None) => true, // nothing settled: every admission saw only reservations
+            (Some(a), Some(s)) => self.settlements.len() == self.reserved() && a < s,
             _ => false,
         }
     }

@@ -499,6 +499,8 @@ fn check_core(
     prop_assert_eq!(sut.budget.completed, yocto(model.completed()));
     prop_assert_eq!(sut.commitments.len(), model.commits.len());
     for (c, mc) in sut.commitments.iter().zip(&model.commits) {
+        prop_assert_eq!(&c.delegate, &delegate_id(mc.key.0));
+        prop_assert_eq!(&c.request_id, &request_id(mc.key.1));
         prop_assert_eq!(c.state, mc.state);
         prop_assert_eq!(c.reserved_amount, yocto(mc.reserved));
         prop_assert_eq!(c.actual_spent, mc.spent.map(yocto));
@@ -515,24 +517,30 @@ fn check_core(
         b.now = sut.now;
         prop_assert_eq!(&b, sut, "a rejected op mutated state");
     }
-    // Exactly-once: a key maps to at most one commitment, and a replay names that commitment.
+    // Exactly-once, on the SUT: a (delegate, request_id) key owns at most one commitment, and a
+    // replay names a settled commitment of that very key.
     let mut seen = BTreeMap::new();
-    for (i, mc) in model.commits.iter().enumerate() {
+    for c in &sut.commitments {
         prop_assert!(
-            seen.insert(mc.key, i).is_none(),
+            seen.insert((&c.delegate, &c.request_id), c.id).is_none(),
             "two authorizations for one key"
         );
     }
     if let Outcome::Replay(cid) = s {
-        prop_assert_eq!(
-            model.commits[cid as usize].state,
-            ReservationState::Confirmed
-        );
+        let c = &sut.commitments[cid as usize];
+        prop_assert_eq!(c.state, ReservationState::Confirmed);
+        prop_assert_eq!(seen.get(&(&c.delegate, &c.request_id)), Some(&cid));
     }
 
-    // (2) Invariant (I).
+    // (2) Invariant (I), on the SUT's own aggregates.
     assert_invariant(&sut.budget);
-    prop_assert!(model.used() <= model.cap);
+    prop_assert!(
+        sut.budget
+            .completed
+            .checked_add(sut.budget.outstanding)
+            .unwrap()
+            <= sut.budget.cap
+    );
 
     // (3) No release on silence.
     if !op.carries_proof() {

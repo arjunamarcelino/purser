@@ -97,7 +97,7 @@ async fn case_1_three_delegates_legit_purchases_succeed() -> anyhow::Result<()> 
     let crew = setup(w, &wasms().await.prod, owner, 100, &ids).await?;
     let before = balance(&crew.merchant).await?;
 
-    let mut hashes = Vec::new();
+    let mut hashes = std::collections::HashSet::new();
     for (i, who) in crew_accts.iter().enumerate() {
         let res = propose(who, &crew, 30, &format!("buy-{i}")).await?;
         assert!(
@@ -113,13 +113,12 @@ async fn case_1_three_delegates_legit_purchases_succeed() -> anyhow::Result<()> 
         assert_eq!(confirmed, 1, "one payment_confirmed per purchase");
         let c = commitment(&crew, i as u64).await?;
         assert_eq!(c["state"], "Confirmed");
-        hashes.push(c["payload_hash"].clone());
+        hashes.insert(c["payload_hash"].to_string());
         accounting(&crew).await?;
     }
     assert_eq!(accounting(&crew).await?, (90 * UNIT, 0));
     assert_eq!(remaining(&crew).await?, 10 * UNIT);
     assert_eq!(balance(&crew.merchant).await? - before, 90 * UNIT);
-    hashes.dedup();
     assert_eq!(hashes.len(), 3, "each spend has its own payload_hash");
     Ok(())
 }
