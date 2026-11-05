@@ -71,3 +71,26 @@ describe("parseU64Safe", () => {
     expect(() => parseU64Safe('{"commitment_id":9007199254740993}')).toThrow(RangeError);
   });
 });
+
+describe("retryRateLimited", () => {
+  it("retries a read that was rate-limited, then succeeds", async () => {
+    const { retryRateLimited } = await import("../../src/purser-client.ts");
+    let calls = 0;
+    const v = await retryRateLimited(async () => {
+      if (++calls < 3) throw new Error('{"code": -429, "message": "Rate limits exceeded."}');
+      return "ok";
+    }, 5, 1);
+    expect(v).toBe("ok");
+    expect(calls).toBe(3);
+  });
+
+  it("does not retry other failures, and gives up after the attempt budget", async () => {
+    const { retryRateLimited } = await import("../../src/purser-client.ts");
+    let calls = 0;
+    await expect(retryRateLimited(async () => { calls++; throw new Error("no such task"); }, 5, 1)).rejects.toThrow("no such task");
+    expect(calls).toBe(1);
+    calls = 0;
+    await expect(retryRateLimited(async () => { calls++; throw new Error("429 Too Many Requests"); }, 3, 1)).rejects.toThrow(/429/);
+    expect(calls).toBe(3);
+  });
+});

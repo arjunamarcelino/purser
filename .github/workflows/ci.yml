@@ -149,6 +149,7 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm -r --workspace-concurrency=1 run typecheck
+      - run: pnpm --filter @purser/app build   # before tests: the app's test scans dist/ for secrets
       - run: pnpm -r run test
 
   # The committed generated types must match the ABI of the wasm this run built.

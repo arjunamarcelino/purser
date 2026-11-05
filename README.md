@@ -8,8 +8,9 @@ timeouts, and revocation. The AI only proposes; the contract enforces.
 
 **Tracks:** security (primary) · swarms · agents
 
-**Status:** contract (NEAR-native core, property + attack suites) and the untrusted AI proposer
-crew (`proposer/`) are built; dashboard, indexer and testnet demo are next. Specs live in `docs/`.
+**Status:** contract (NEAR-native core, property + attack suites), the untrusted AI proposer crew
+(`proposer/`) and the operator board (`app/`) are built and running on testnet; the indexer and the
+recorded demo are next. Specs live in `docs/`.
 
 ## Authorization & honest revocation
 
@@ -40,6 +41,7 @@ new proposals BLOCKED, with a caption noting already-issued signatures cannot be
 | `make prove` | the security evidence: property tests + the named attack cases |
 | `make ts-test-sandbox` | the AI proposer on a local chain: attack case 2 through the AI path, rogue proposals, key scope, exactly-once retries, model-independence property |
 | `make crew` | run Scout, Forge and Buyer against Purser (`NETWORK=sandbox\|testnet`, `SCENARIO=demo\|legit\|race\|rogue`) |
+| `make board` | the operator board at http://127.0.0.1:5173: live invariant, manifest, Revoke, demo buttons (see [`app/README.md`](app/README.md)) |
 | `make types-gen` | regenerate `@purser/types` from the contract ABI |
 | `make deploy-testnet` | deploy to testnet and provision the crew (`OPERATOR_ACCOUNT_ID=<you>.testnet`) |
 

@@ -1,6 +1,6 @@
 .PHONY: build build-release test fmt lint \
         contract-build contract-build-release contract-test contract-fmt contract-lint prove \
-        ts-install ts-lint ts-test ts-test-sandbox types-gen crew \
+        ts-install ts-lint ts-test ts-test-sandbox types-gen crew board \
         deploy-testnet demo metrics hooks
 
 # Aggregate targets: the contract plus the TS workspace (packages/*, proposer).
@@ -24,13 +24,16 @@ prove: ; cd contract && cargo test --test properties --test attacks -- --nocaptu
 # TypeScript workspace (pnpm). Node runs .ts directly; `tsc` is the only type check.
 ts-install: ; pnpm install --frozen-lockfile
 ts-lint: ts-install ; pnpm -r --workspace-concurrency=1 run typecheck
-ts-test: ts-install ; pnpm -r run test
+ts-test: ts-install ; pnpm --filter @purser/app build && pnpm -r run test   # app build first: its test scans dist/ for secrets
 # Regenerate packages/types/src/generated.ts from a fresh ABI (CI fails on any drift).
 types-gen: contract-build ts-install ; pnpm --filter @purser/types run gen
 # The proposer on a local chain: crew integration tests + the model-independence property test.
 # The sandbox binary is nearcore 2.14.0, sha256-pinned (scripts/sandbox-bin.sh).
 ts-test-sandbox: contract-build ts-install
 	NEAR_SANDBOX_BIN_PATH="$$(scripts/sandbox-bin.sh)" pnpm --filter @purser/proposer run test:sandbox
+
+# The operator board (http://127.0.0.1:5173), with the localhost companion for the demo buttons.
+board: ts-install ; pnpm --filter @purser/app dev
 
 # Run the proposer crew: make crew [NETWORK=sandbox|testnet] [SCENARIO=demo|legit|race|rogue] [MODEL=near-ai|scripted]
 NETWORK ?= sandbox

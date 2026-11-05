@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 1685ae9a4fe4c46700ab4b1d6bae9cbca52e54e53fedb37ac6a2ada6a351a662 # shrinks to caps = (100, 100), ops = [Propose { task: 0, who: 1, r: 0, amount: Normal(580), recipient: 0, memo: 0, transfer_ok: true }, Tick { secs: 600 }, Propose { task: 0, who: 0, r: 2, amount: Normal(960), recipient: 0, memo: 0, transfer_ok: false }, Reconcile { pick: Index(0), honest: false, guess: false }, Propose { task: 0, who: 0, r: 0, amount: Normal(480), recipient: 0, memo: 0, transfer_ok: false }, Deliver { pick: Index(0) }, Propose { task: 0, who: 0, r: 0, amount: ExactFit, recipient: 0, memo: 0, transfer_ok: false }]

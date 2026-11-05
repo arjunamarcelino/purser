@@ -22,29 +22,34 @@ import {
   type RefusalCode,
   type ReservationState,
   type RetryClass,
-  U64_BIGINT_FIELDS,
   classifyRefusal,
+  parseU64Safe,
   toCommitmentId,
 } from "@purser/types";
 import type { Secret } from "./config.ts";
 
-const bigintFields = new Set<string>(U64_BIGINT_FIELDS);
-
-/**
- * JSON.parse that keeps u64 precision: block timestamps (~1.7e18 > 2^53) become bigint, read from
- * the exact source text; any other unsafe integer throws rather than silently rounding.
- */
-export function parseU64Safe(text: string): unknown {
-  const reviver = (key: string, value: unknown, ctx?: { source?: string }) => {
-    if (typeof value !== "number" || !Number.isInteger(value)) return value;
-    if (bigintFields.has(key) && ctx?.source !== undefined) return BigInt(ctx.source);
-    if (!Number.isSafeInteger(value)) throw new RangeError(`unsafe integer in field "${key}"`);
-    return value;
-  };
-  return JSON.parse(text, reviver as (k: string, v: unknown) => unknown);
-}
+export { parseU64Safe };
 
 const decoder = new TextDecoder();
+
+const RATE_LIMITED = /\b429\b|rate limit/i;
+
+/**
+ * Retry a READ when the RPC rate-limits it (public endpoints answer 429; near-api-js only retries
+ * 500/503/408). Reads are idempotent, so retrying is always safe; sends are never retried here —
+ * an uncertain send is resolved through the journal and get_idempotency.
+ */
+export async function retryRateLimited<T>(read: () => Promise<T>, attempts = 6, baseMs = 1000): Promise<T> {
+  for (let i = 0; ; i++) {
+    try {
+      return await read();
+    } catch (err) {
+      const msg = err instanceof Error ? `${err.message} ${String((err as { cause?: unknown }).cause ?? "")}` : String(err);
+      if (i >= attempts - 1 || !RATE_LIMITED.test(msg)) throw err;
+      await new Promise((r) => setTimeout(r, baseMs * 2 ** i));
+    }
+  }
+}
 
 export class PurserViewer {
   readonly provider: JsonRpcProvider;
@@ -56,17 +61,19 @@ export class PurserViewer {
   }
 
   async view<M extends keyof PurserViews>(method: M, args: PurserViews[M]["args"]): Promise<PurserViews[M]["result"]> {
-    const raw = await this.provider.callFunctionRaw({
-      contractId: this.contractId,
-      method,
-      args: new TextEncoder().encode(JSON.stringify(args)),
-      blockQuery: { finality: "optimistic" },
-    });
+    const raw = await retryRateLimited(() =>
+      this.provider.callFunctionRaw({
+        contractId: this.contractId,
+        method,
+        args: new TextEncoder().encode(JSON.stringify(args)),
+        blockQuery: { finality: "optimistic" },
+      }),
+    );
     return parseU64Safe(decoder.decode(Uint8Array.from(raw.result))) as PurserViews[M]["result"];
   }
 
   async chainId(): Promise<string> {
-    return (await this.provider.viewNodeStatus()).chain_id;
+    return (await retryRateLimited(() => this.provider.viewNodeStatus())).chain_id;
   }
 }
 
@@ -182,7 +189,7 @@ export class DelegateSender implements Sender {
  */
 export async function assertProposeOnlyKey(provider: JsonRpcProvider, accountId: string, key: Secret, contractId: string): Promise<void> {
   const publicKey = KeyPair.fromString(key.reveal() as KeyPairString).getPublicKey().toString();
-  const k = await provider.viewAccessKey({ accountId, publicKey });
+  const k = await retryRateLimited(() => provider.viewAccessKey({ accountId, publicKey }));
   type FunctionCallPermission = { FunctionCall?: { receiver_id: string; method_names: string[]; allowance?: string | null } };
   const permission = k.permission as FunctionCallPermission | "FullAccess";
   const perm = typeof permission === "object" ? permission.FunctionCall : undefined;
