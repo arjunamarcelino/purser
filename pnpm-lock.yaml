@@ -88,6 +88,9 @@ importers:
       '@types/pg':
         specifier: 8.15.5
         version: 8.15.5
+      near-api-js:
+        specifier: 7.4.0
+        version: 7.4.0
       near-sandbox:
         specifier: 0.3.4
         version: 0.3.4
