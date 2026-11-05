@@ -16,7 +16,9 @@ import {
 } from "@purser/types";
 import { appendEvidence, evaluate, type Pins } from "./attestation.ts";
 import type { Network } from "./config.ts";
-import { toPaymentIntent } from "./intent.ts";
+import { toPaymentIntent, yoctoToNear } from "./intent.ts";
+
+export { yoctoToNear };
 import type { Journal, JournalEntry } from "./journal.ts";
 import type { Logger } from "./log.ts";
 import type { ModelResult, ProposeFn } from "./model.ts";
@@ -56,13 +58,6 @@ export interface PersonaResult {
   record: ProposalRecord;
   resumed: boolean;
 }
-
-const YOCTO = 10n ** 24n;
-export const yoctoToNear = (y: string | bigint): string => {
-  const v = BigInt(y);
-  const frac = (v % YOCTO).toString().padStart(24, "0").replace(/0+$/, "");
-  return `${v / YOCTO}${frac ? `.${frac}` : ""}`;
-};
 
 type IdemPoll = { kind: "committed"; cid: CommitmentId } | { kind: "failed" } | { kind: "pending" } | { kind: "none" };
 

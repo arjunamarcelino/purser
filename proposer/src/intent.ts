@@ -40,6 +40,13 @@ export function nearToYocto(amount: string): ShapeResult<YoctoString> {
   return { ok: true, value: yoctoFromBigint(yocto) };
 }
 
+/** yoctoNEAR → exact decimal NEAR ("1.5", "30"). */
+export function yoctoToNear(y: string | bigint): string {
+  const v = BigInt(y);
+  const frac = (v % YOCTO_PER_NEAR).toString().padStart(24, "0").replace(/0+$/, "");
+  return `${v / YOCTO_PER_NEAR}${frac ? `.${frac}` : ""}`;
+}
+
 /** Validate the model's raw output into a decision. Accepts the parsed JSON object. */
 export function parseDecision(raw: unknown): ShapeResult<ProposedDecision> {
   const wire = ProposedIntentWire.safeParse(raw);
