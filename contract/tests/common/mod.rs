@@ -68,6 +68,10 @@ fn build_wasm(manifest: &str, features: Option<&str>, target_subdir: Option<&str
     let opts = BuildOpts {
         manifest_path: Some(manifest),
         features: features.map(str::to_string),
+        // build.rs refuses the test-only fault feature without this explicit opt-in
+        env: features
+            .map(|_| vec![("PURSER_ALLOW_FAULT_INJECTION".to_string(), "1".to_string())])
+            .unwrap_or_default(),
         override_cargo_target_dir: target_dir,
         no_abi: true,
         skip_rust_version_check: true,
