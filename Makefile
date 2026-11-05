@@ -50,9 +50,9 @@ crew: contract-build ts-install
 	NEAR_SANDBOX_BIN_PATH="$$(scripts/sandbox-bin.sh)" pnpm --filter @purser/proposer run crew \
 	  --network $(NETWORK) --scenario $(SCENARIO) $(if $(MODEL),--model $(MODEL))
 
-# Ops (stubs until their prompts)
-# Deploy to testnet and provision the crew (needs OPERATOR_ACCOUNT_ID and near-cli-rs). Prompt 10 extends it.
+# Ops. Testnet only. `make deploy-testnet demo` is the one-command path (see README "Try it").
+# deploy-testnet needs OPERATOR_ACCOUNT_ID=<you>.testnet and near-cli-rs; demo replays outcomes 1-6 live + 7 in the sandbox.
 deploy-testnet: contract-build ts-install ; scripts/deploy-testnet.sh
-demo: ; @echo "TODO (Prompt 10): run the 7-case demo"
+demo: ; scripts/demo.sh
 metrics: ; @echo "TODO (Prompt 13): measure + write docs/METRICS.md"
 hooks: ; cp scripts/pre-commit .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit && echo "pre-commit hook installed"

@@ -11,7 +11,8 @@
     "crew": "node --env-file-if-exists=../.env --env-file-if-exists=../.env.testnet src/cli.ts",
     "typecheck": "tsc -p tsconfig.json",
     "test": "vitest run --project unit",
-    "test:sandbox": "vitest run --project sandbox"
+    "test:sandbox": "vitest run --project sandbox",
+    "demo": "node --env-file-if-exists=../.env.testnet src/dev/demo.ts"
   },
   "dependencies": {
     "@nearai/inference-sdk": "0.2.0",

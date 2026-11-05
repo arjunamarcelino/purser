@@ -10,7 +10,7 @@ timeouts, and revocation. The AI only proposes; the contract enforces.
 
 **Status:** contract (NEAR-native core, property + attack suites), the untrusted AI proposer crew
 (`proposer/`) and the operator board (`app/`) are built and running on testnet; the indexer and the
-recorded demo are next. Specs live in `docs/`.
+recorded demo are next. `./scripts/deploy-testnet.sh && ./scripts/demo.sh` reproduces the demo on testnet (see **Try it**). Specs live in `docs/`.
 
 ## Authorization & honest revocation
 
@@ -44,6 +44,42 @@ new proposals BLOCKED, with a caption noting already-issued signatures cannot be
 | `make board` | the operator board at http://127.0.0.1:5173: live invariant, manifest, Revoke, demo buttons (see [`app/README.md`](app/README.md)) |
 | `make types-gen` | regenerate `@purser/types` from the contract ABI |
 | `make deploy-testnet` | deploy to testnet and provision the crew (`OPERATOR_ACCOUNT_ID=<you>.testnet`) |
+| `make demo` | replay the 7 enforcement outcomes: 1-6 live on testnet with tx refs, 7 as a labeled sandbox replay |
+
+## Try it
+
+```sh
+OPERATOR_ACCOUNT_ID=<you>.testnet ./scripts/deploy-testnet.sh && ./scripts/demo.sh
+```
+
+Testnet only: both scripts refuse any other network and check that the RPC itself reports `testnet`.
+
+| Do | See |
+|---|---|
+| Install Node 26, pnpm 10, `near-cli-rs` 0.30.1, `cargo-near`, then `make ts-install build` | the toolchain check passes (a missing tool prints its install command) |
+| Have a funded testnet account in the near-cli keychain. In this session: `! near account import-account ...` | `deploy-testnet.sh` finds the operator and its balance |
+| `OPERATOR_ACCOUNT_ID=<you>.testnet ./scripts/deploy-testnet.sh` (safe to re-run) | accounts `purser/scout/forge/buyer/...<you>.testnet`, then `PURSER_CONTRACT_ID=purser.<you>.testnet`, written to `.env.testnet` |
+| `./scripts/demo.sh` | a fresh task `demo-<RUN_ID>` with 100 units, then **1.** Remaining 100→70→40; **2.** three agents fire 30 each at 40 left: one admitted (40→10), two refused `exceeds_task_budget`, with the block heights; **3.** the same `request_id` again returns the original result, no new spend; **4.** a non-allowlisted recipient and a reused `request_id` with another recipient are refused; **5.** after Revoke, Buyer is `delegate_not_authorized`; **6.** `completed + outstanding ≤ cap ✓` from the contract's own verdict |
+| open any printed `https://testnet.nearblocks.io/txns/<hash>` | the same transaction; the script already re-read each one from the chain and checked its signer, receiver and method |
+
+Every run uses a new task (revocation is permanent), so `demo.sh` can be repeated; a failed run is just
+re-run. `RUN_ID` and `DEMO_CAP_NEAR` (default `1`; `0.5` suits a thin wallet) are the only knobs.
+A run pays out 90 of the cap's 100 units to the operator's own merchant sub-accounts, so it needs about
+`0.9 × DEMO_CAP_NEAR + 0.05` NEAR **spendable** on the contract; its wasm locks ~2.6 NEAR as storage stake,
+and `demo.sh` stops early with the exact top-up command if it is short.
+
+**Outcome 7 is a replay, not a testnet transaction.** The shipped wasm cannot be made to lose a settlement
+callback, and the test-only fault build is refused by `build.rs` and `scripts/check-wasm-clean.sh`.
+`demo.sh` therefore runs attack-suite case 7 on a local sandbox under a `SANDBOX (not testnet)` banner
+(reservation retained through silence, retry and revoke; an early `reconcile` refused). The summary
+reads **6 live on testnet + 1 sandbox replay**.
+
+**Fresh account.** A brand-new operator needs testnet NEAR first (about `3 × CAP_NEAR + 6`, default 12).
+near-cli-rs 0.30.1 offers `near account create-account sponsor-by-faucet-service <you>.testnet
+autogenerate-new-keypair save-to-keychain network-config testnet create` (helper
+`https://helper.nearprotocol.com/account`); its limits and granted amount are not published and the
+route has not been exercised here, so if it fails, fund the account from another testnet account with
+`near tokens <funded>.testnet send-near <you>.testnet '12 NEAR' network-config testnet sign-with-keychain send`.
 
 The AI proposer is untrusted by design: it holds one function-call key per persona that can call
 only `propose_payment`, and does no client-side policy — every limit is the contract's. See

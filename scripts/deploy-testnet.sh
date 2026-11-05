@@ -44,8 +44,22 @@ step() { echo "==> $*"; }
 [[ "$TASK_PREFIX" =~ ^[a-z0-9][a-z0-9-]{0,40}$ ]] || die "PROPOSER_TASK_ID must be lowercase letters, digits and dashes"
 [[ "$CAP_NEAR" =~ ^[1-9][0-9]{0,3}$ ]] || die "CAP_NEAR must be a whole number of NEAR (1-9999)"
 [[ "$FC_ALLOWANCE_NEAR" =~ ^[0-9]+(\.[0-9]+)?$ ]] || die "FC_ALLOWANCE_NEAR must be a decimal number"
-command -v near >/dev/null || die "near-cli-rs not found: npm i -g near-cli-rs@0.30.1 (or cargo install near-cli-rs --version 0.30.1 --locked)"
-[ -f "$WASM" ] || die "missing $WASM — run: make build"
+# Toolchain: report what is missing with the fix; install nothing that needs a login.
+hint_node="Node 26 (https://nodejs.org), then: corepack enable"
+hint_pnpm="corepack enable   (pnpm 10 ships with Node's corepack)"
+hint_near="npm i -g near-cli-rs@0.30.1   (or: cargo install near-cli-rs --version 0.30.1 --locked)"
+hint_cargo_near="curl --proto '=https' --tlsv1.2 -LsSf https://github.com/near/cargo-near/releases/latest/download/cargo-near-installer.sh | sh"
+missing=0
+for tool in node pnpm near cargo-near; do
+  if ! command -v "$tool" >/dev/null 2>&1 && ! [ -x "$HOME/.cargo/bin/$tool" ]; then
+    hint="hint_${tool//-/_}"
+    echo "deploy-testnet: missing $tool — ${!hint}" >&2
+    missing=1
+  fi
+done
+[ "$missing" = 0 ] || die "install the tools above, then re-run"
+case "$(node -v)" in v26.*) ;; *) die "Node 26.x required (found $(node -v)); the .ts helpers run on Node's type stripping" ;; esac
+[ -f "$WASM" ] || die "missing $WASM — run: make build   (never bare cargo build: near-sdk blocks it)"
 "$ROOT/scripts/check-wasm-clean.sh" "$WASM" >/dev/null   # never deploy a fault-injection build
 "${OPS[@]}" chain-id "$RPC" >/dev/null                  # the RPC itself must report testnet
 
@@ -53,11 +67,23 @@ OP="$OPERATOR_ACCOUNT_ID"
 CONTRACT="purser.$OP"
 TX=(network-config testnet sign-with-keychain send)
 
+# Funding preflight. A brand-new account has no testnet NEAR; the sponsor route is
+# `near account create-account sponsor-by-faucet-service <you>.testnet autogenerate-new-keypair
+# save-to-keychain network-config testnet create` (faucet limits are not published: see README).
+"${OPS[@]}" account-exists "$RPC" "$OP" | grep -qx yes \
+  || die "$OP does not exist on testnet — create and fund it first (README, 'Fresh account')"
+if [ "$("${OPS[@]}" account-exists "$RPC" "$CONTRACT")" != "yes" ]; then
+  need=$((CAP_NEAR * 3 + 6))   # contract float + 7 sub-accounts + gas headroom
+  have="$("${OPS[@]}" balance "$RPC" "$OP")"
+  [ "$have" -ge "$need" ] || die "$OP has ~$have NEAR, a first deploy needs ~$need (CAP_NEAR=$CAP_NEAR); fund it, then re-run"
+fi
+
 # near-cli prints a full transcript (to stderr) for every call; keep it, and show it only on failure.
+scrub() { sed -E 's/ed25519:[A-Za-z0-9]{40,}/ed25519:[redacted]/g'; }   # no key material in transcripts
 near_quiet() {
   local out
   if ! out="$(near "$@" 2>&1)"; then
-    printf '%s\n' "$out" >&2
+    printf '%s\n' "$out" | scrub >&2
     die "near $1 $2 failed (transcript above)"
   fi
 }
@@ -83,7 +109,10 @@ step "contract"
 if [ "$("${OPS[@]}" code-matches "$RPC" "$CONTRACT" "$WASM")" = "yes" ]; then
   echo "    code already deployed (sha256 matches)"
 else
-  if [ "$(view version '{}' 2>/dev/null || true)" != "" ]; then
+  # Re-run the fault-wasm gate right before the deploy: the file may have changed since the first check.
+  [ -f "$WASM" ] || die "missing $WASM — run: make build"
+  "$ROOT/scripts/check-wasm-clean.sh" "$WASM" >/dev/null || die "wasm failed the fault-injection gate; refusing to deploy"
+  if [ "$("${OPS[@]}" has-code "$RPC" "$CONTRACT")" = "yes" ]; then   # an RPC error aborts (set -e); it never reads as "empty"
     near_quiet contract deploy "$CONTRACT" use-file "$WASM" without-init-call "${TX[@]}"
     echo "    upgraded code (state kept)"
   else
@@ -92,6 +121,10 @@ else
       json-args "$init_args" prepaid-gas '30 Tgas' attached-deposit '0 NEAR' "${TX[@]}"
     echo "    deployed and initialized (owner $OP)"
   fi
+  # The on-chain code hash must equal the wasm that just passed the gate.
+  [ "$("${OPS[@]}" code-matches "$RPC" "$CONTRACT" "$WASM")" = "yes" ] \
+    || die "deployed code hash does not match $WASM after deploy"
+  echo "    deployed code hash matches the checked wasm ✓"
 fi
 
 step "tasks (cap $CAP_NEAR NEAR each)"
@@ -147,6 +180,7 @@ trap 'rm -f "$tmp_env"' EXIT
   echo "NEAR_NETWORK=testnet"
   echo "NEAR_RPC_URL=$RPC"
   echo "PURSER_CONTRACT_ID=$CONTRACT"
+  echo "OPERATOR_ACCOUNT_ID=$OP"
   echo "PROPOSER_TASK_ID=$TASK_PREFIX"
   for p in scout forge buyer; do
     P="$(echo "$p" | tr '[:lower:]' '[:upper:]')"
@@ -163,5 +197,6 @@ mv -f "$tmp_env" "$OUT_ENV"
 trap - EXIT
 
 echo
-echo "Done. Run the crew:  make crew NETWORK=testnet"
+echo "PURSER_CONTRACT_ID=$CONTRACT   (written to .env.testnet)"
+echo "Done. Replay the demo:  ./scripts/demo.sh      Run the crew:  make crew NETWORK=testnet"
 echo "Explorer: https://testnet.nearblocks.io/address/$CONTRACT"

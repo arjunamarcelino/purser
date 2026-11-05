@@ -85,6 +85,7 @@ make crew SCENARIO=race MODEL=scripted     # one scenario, no model calls
 make ts-test-sandbox                       # the chain tests
 OPERATOR_ACCOUNT_ID=<you>.testnet make deploy-testnet   # testnet: contract, tasks, crew, keys → .env.testnet
 make crew NETWORK=testnet                  # the crew against testnet
+make demo                                  # the 7 enforcement outcomes: 1-6 live on testnet, 7 as a sandbox replay (root README, "Try it")
 ```
 
 `--json` (via `pnpm --filter @purser/proposer crew -- --json …`) prints one `ProposalRecord` per
