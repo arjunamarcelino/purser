@@ -78,6 +78,12 @@ pub struct TaskBudget {
     /// crew-cap admission check is O(1) — never an O(n) scan over the registry.
     /// APPENDED last (Prompt 3) to keep the Borsh layout append-only.
     pub active_crew: u8,
+    /// Set when a settlement callback contradicts an owner `reconcile(false)` and the spend it
+    /// proves pushes `completed + outstanding` over `cap`. A frozen task refuses every new
+    /// proposal; it is the only state in which invariant (I) may not hold, and it can only be
+    /// reached through a wrong owner attestation. APPENDED last to keep the Borsh layout
+    /// append-only.
+    pub frozen: bool,
 }
 
 /// Reservation lifecycle state (TECHNICAL §4). Variant order is the borsh wire

@@ -57,8 +57,12 @@ Never build or test with `--all-features`: it turns on the test-only `fault-inje
   heights that each admission ran before the first settlement, so the race was actually exercised.
 
 **Operational notes.** A commitment whose settlement callback was lost stays reserved until the
-owner reconciles it with the observed outcome, and `reconcile` refuses until the commitment is
-10 minutes old so it can never race a callback that is still in flight. Never deploy Purser on
+owner reconciles it with the transfer's **observed final outcome** (never on silence), and
+`reconcile` refuses until the commitment is 10 minutes old. NEAR does not bound receipt latency,
+so the settlement callback stays authoritative even after a reconcile: if it proves a released
+payment actually landed, the contract records the spend, emits `reconcile_contradicted`, and, if
+that puts the task over its cap, **freezes** the task so it authorizes nothing more. The cap
+invariant holds for every task that is not frozen, and only a wrong owner attestation can freeze one. Never deploy Purser on
 the owner's own account: `#[private]` callbacks would then accept the owner as the caller.
 
 ### Toolchain

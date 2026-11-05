@@ -221,6 +221,7 @@ impl CoreSut {
                 crew_cap: DELEGATES as u8,
                 created_at: 0,
                 active_crew: DELEGATES as u8,
+                frozen: false,
             },
             commitments: Vec::new(),
             idem: BTreeMap::new(),
@@ -584,7 +585,7 @@ mod contract_layer {
         Purser, MSG_ALREADY_FAILED, MSG_CREW_CAP_REACHED, MSG_DELEGATE_EXISTS,
         MSG_DELEGATE_NOT_AUTHORIZED, MSG_EXCEEDS_BUDGET, MSG_IN_FLIGHT, MSG_NOT_RECONCILABLE,
         MSG_NO_SUCH_DELEGATE, MSG_OVERFLOW, MSG_RECIPIENT_NOT_ALLOWED, MSG_RECONCILE_TOO_EARLY,
-        MSG_REQUEST_ID_REUSED, MSG_ZERO_AMOUNT, RECONCILE_MIN_AGE_NS,
+        MSG_REQUEST_ID_REUSED, MSG_TASK_FROZEN, MSG_ZERO_AMOUNT, RECONCILE_MIN_AGE_NS,
     };
     use std::cell::Cell;
     use std::panic::{self, AssertUnwindSafe};
@@ -601,9 +602,9 @@ mod contract_layer {
         "removable.test.near",
         "stranger.test.near",
     ];
-    /// A settlement callback lands within a few blocks or never. Pending callbacks older than
-    /// this are treated as lost when time advances.
-    const CALLBACK_WINDOW_NS: u64 = 5_000_000_000;
+    /// The reconcile time-lock as SPECIFIED (10 minutes), stated independently of the contract's
+    /// constant so the model does not borrow the logic under test; `run` asserts they agree.
+    const SPEC_RECONCILE_MIN_AGE_NS: u64 = 600 * 1_000_000_000;
 
     fn contract_id() -> AccountId {
         "purser.test.near".parse().unwrap()
@@ -669,18 +670,17 @@ mod contract_layer {
             /// Hidden real-world outcome of the transfer this proposal would issue.
             transfer_ok: bool,
         },
-        /// Deliver a pending callback (any order) with its real outcome.
+        /// Deliver any undelivered callback (any order, any delay: NEAR bounds neither) with its
+        /// real outcome. A callback that is never delivered is the lost-callback residual.
         Deliver {
             pick: Index,
         },
-        /// The callback never arrives (the lost-callback residual / a timeout).
-        Lose {
-            pick: Index,
-        },
-        /// Owner reconcile. On a LOST callback the owner attests the truth; on a still-PENDING
-        /// one it attests `guess`: the early-release attack that races a live callback.
+        /// Owner reconcile of any undelivered callback. An `honest` owner attests the transfer's
+        /// observed final outcome; otherwise it attests `guess`, i.e. on silence. A wrong guess
+        /// is what a later delivery must contradict.
         Reconcile {
             pick: Index,
+            honest: bool,
             guess: bool,
         },
         Revoke {
@@ -711,8 +711,8 @@ mod contract_layer {
                     task, who, r, amount, recipient, transfer_ok,
                 }),
             4 => any::<Index>().prop_map(|pick| Op::Deliver { pick }),
-            1 => any::<Index>().prop_map(|pick| Op::Lose { pick }),
-            2 => (any::<Index>(), any::<bool>()).prop_map(|(pick, guess)| Op::Reconcile { pick, guess }),
+            2 => (any::<Index>(), prop::bool::weighted(0.6), any::<bool>())
+                .prop_map(|(pick, honest, guess)| Op::Reconcile { pick, honest, guess }),
             1 => (0..2usize, 0..ACTORS).prop_map(|(task, who)| Op::Revoke { task, who }),
             1 => (0..2usize, 0..ACTORS).prop_map(|(task, who)| Op::AddDelegate { task, who }),
             1 => Just(Op::RemoveAllowlist),
@@ -725,8 +725,7 @@ mod contract_layer {
 
     #[derive(Clone, Copy, PartialEq, Eq, Debug)]
     enum Callback {
-        Pending,
-        Lost,
+        Undelivered,
         Delivered,
     }
 
@@ -765,6 +764,8 @@ mod contract_layer {
         /// Value whose transfer actually executes (scheduled with `transfer_ok`), per task. The
         /// money-flow oracle: it must never exceed `completed + outstanding`.
         outflow: [u128; 2],
+        /// Tasks frozen by a contradicted reconcile.
+        frozen: [bool; 2],
     }
 
     impl Model {
@@ -780,6 +781,7 @@ mod contract_layer {
                 removable_allowed: true,
                 now: 1_000_000_000,
                 outflow: [0; 2],
+                frozen: [false; 2],
             }
         }
         fn outstanding(&self, t: usize) -> u128 {
@@ -805,6 +807,20 @@ mod contract_layer {
                 (0, 1) => self.removable_allowed,
                 _ => false,
             }
+        }
+        /// Value a wrong `reconcile(false)` released although its transfer executed, and whose
+        /// callback has not yet arrived to contradict it: the only money the books can miss.
+        fn unproven_release(&self, t: usize) -> u128 {
+            self.commits
+                .iter()
+                .filter(|c| {
+                    c.task == t
+                        && c.state == ReservationState::Failed
+                        && c.transfer_ok
+                        && c.callback == Callback::Undelivered
+                })
+                .map(|c| c.amount)
+                .sum()
         }
         fn active_crew(&self, t: usize) -> usize {
             self.registered[t]
@@ -913,6 +929,8 @@ mod contract_layer {
     }
 
     const ALL_MSGS: &[&str] = &[
+        MSG_TASK_FROZEN,
+        purser_contract::MSG_ILLEGAL,
         MSG_REQUEST_ID_REUSED,
         MSG_RECONCILE_TOO_EARLY,
         MSG_DELEGATE_NOT_AUTHORIZED,
@@ -946,7 +964,7 @@ mod contract_layer {
     ) -> Result<(Out, Out), TestCaseError> {
         use ReservationState::*;
         let pending: Vec<usize> = (0..m.commits.len())
-            .filter(|&i| m.commits[i].callback == Callback::Pending)
+            .filter(|&i| m.commits[i].callback == Callback::Undelivered)
             .collect();
         let owner = actor(OWNER);
         let now = m.now;
@@ -994,34 +1012,37 @@ mod contract_layer {
                 let actual = to_out(actual, |_| Out::Done);
                 let c = &mut m.commits[i];
                 c.callback = Callback::Delivered;
-                let predicted = if c.state != Reserved {
-                    // A callback for an already-settled commitment cannot settle it again.
-                    Out::Panic(purser_contract::MSG_ILLEGAL)
-                } else if ok {
-                    c.state = Confirmed;
-                    c.spent = Some(c.amount);
-                    m.idem.insert(
-                        c.key,
-                        IdemState::Committed {
-                            commitment_id: i as u64,
-                        },
-                    );
-                    Out::Done
-                } else {
-                    c.state = Failed;
-                    m.idem.insert(c.key, IdemState::Failed);
-                    Out::Done
+                let committed = IdemState::Committed {
+                    commitment_id: i as u64,
                 };
-                (actual, predicted)
-            }
-            Op::Lose { pick } => {
-                if pending.is_empty() {
-                    return Ok((Out::NoOp, Out::NoOp));
+                match (c.state, ok) {
+                    (Reserved, true) => {
+                        c.state = Confirmed;
+                        c.spent = Some(c.amount);
+                        m.idem.insert(c.key, committed);
+                    }
+                    (Reserved, false) => {
+                        c.state = Failed;
+                        m.idem.insert(c.key, IdemState::Failed);
+                    }
+                    // the proof contradicts a wrong release: record the spend, freeze if over cap
+                    (Failed, true) => {
+                        c.state = Confirmed;
+                        c.spent = Some(c.amount);
+                        let (t, key) = (c.task, c.key);
+                        m.idem.insert(key, committed);
+                        m.frozen[t] |= m.used(t) > m.caps[t];
+                    }
+                    // agreement, or an over-count the contract only flags
+                    _ => {}
                 }
-                m.commits[pending[pick.index(pending.len())]].callback = Callback::Lost;
-                (Out::NoOp, Out::NoOp)
+                (actual, Out::Done)
             }
-            Op::Reconcile { pick, guess } => {
+            Op::Reconcile {
+                pick,
+                honest,
+                guess,
+            } => {
                 let candidates: Vec<usize> = (0..m.commits.len())
                     .filter(|&i| m.commits[i].callback != Callback::Delivered)
                     .collect();
@@ -1029,10 +1050,8 @@ mod contract_layer {
                     return Ok((Out::NoOp, Out::NoOp));
                 }
                 let i = candidates[pick.index(candidates.len())];
-                let c = &m.commits[i];
-                // Honest owner on a lost callback; a guess on a still-live one.
-                let confirmed = if c.callback == Callback::Lost {
-                    c.transfer_ok
+                let confirmed = if *honest {
+                    m.commits[i].transfer_ok
                 } else {
                     *guess
                 };
@@ -1043,7 +1062,7 @@ mod contract_layer {
                 let c = &mut m.commits[i];
                 let predicted = if c.state != Reserved {
                     Out::Panic(MSG_NOT_RECONCILABLE)
-                } else if now < c.created_at + RECONCILE_MIN_AGE_NS {
+                } else if now < c.created_at + SPEC_RECONCILE_MIN_AGE_NS {
                     Out::Panic(MSG_RECONCILE_TOO_EARLY)
                 } else if confirmed {
                     c.state = Confirmed;
@@ -1108,12 +1127,6 @@ mod contract_layer {
             }
             Op::Tick { secs } => {
                 m.now += secs * 1_000_000_000;
-                let now = m.now;
-                for c in &mut m.commits {
-                    if c.callback == Callback::Pending && now > c.created_at + CALLBACK_WINDOW_NS {
-                        c.callback = Callback::Lost;
-                    }
-                }
                 (Out::NoOp, Out::NoOp)
             }
         })
@@ -1145,6 +1158,9 @@ mod contract_layer {
             }
             None => {}
         }
+        if m.frozen[t] {
+            return Out::Panic(MSG_TASK_FROZEN);
+        }
         if !m.allowlisted(t, rcp) {
             return Out::Panic(MSG_RECIPIENT_NOT_ALLOWED);
         }
@@ -1166,7 +1182,7 @@ mod contract_layer {
             spent: None,
             created_at: m.now,
             transfer_ok,
-            callback: Callback::Pending,
+            callback: Callback::Undelivered,
         });
         m.idem.insert(key, IdemState::Pending);
         if transfer_ok {
@@ -1190,11 +1206,15 @@ mod contract_layer {
             prop_assert_eq!(b.outstanding, yocto(m.outstanding(t)));
             prop_assert_eq!(b.completed, yocto(m.completed(t)));
             prop_assert_eq!(b.active_crew as usize, m.active_crew(t));
-            // (2) invariant (I) and the money-flow bound: every executed transfer is accounted
-            // for as completed or still held. A release that races a live transfer breaks this.
-            prop_assert!(b.completed.checked_add(b.outstanding).unwrap() <= b.cap);
+            prop_assert_eq!(b.frozen, m.frozen[t]);
+            // (2) invariant (I) on every task a contradicted reconcile has not frozen, and the
+            // money-flow bound: every executed transfer is accounted for as completed or still
+            // held, except value a wrong release freed whose contradicting callback is pending.
+            if !b.frozen {
+                prop_assert!(b.completed.checked_add(b.outstanding).unwrap() <= b.cap);
+            }
             prop_assert!(
-                m.outflow[t] <= m.used(t),
+                m.outflow[t] <= m.used(t) + m.unproven_release(t),
                 "task {}: {} left the contract but only {} is accounted",
                 t,
                 m.outflow[t],
@@ -1243,6 +1263,11 @@ mod contract_layer {
     }
 
     pub fn run(caps: [u128; 2], ops: &[Op]) -> Result<(), TestCaseError> {
+        prop_assert_eq!(
+            RECONCILE_MIN_AGE_NS,
+            SPEC_RECONCILE_MIN_AGE_NS,
+            "time-lock drifted from the spec"
+        );
         let sut = Sut::setup(caps);
         let mut model = Model::new(caps);
         for op in ops {

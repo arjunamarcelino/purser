@@ -210,6 +210,38 @@ pub fn mark_unknown(c: &mut Commitment, now: u64) -> Result<(), PurserError> {
     Ok(())
 }
 
+/// `Failed -> Confirmed` when the settlement callback proves a transfer the owner had attested
+/// as failed (`reconcile(cid, false)`) actually landed: `completed += spent`. `outstanding` is
+/// untouched (the reservation was already released). The money has left, so this records it
+/// even if it pushes `completed + outstanding` over `cap`; the caller freezes the task then.
+/// Returns whether the task is now over cap.
+pub fn record_contradicted_spend(
+    b: &mut TaskBudget,
+    c: &mut Commitment,
+    spent: NearToken,
+    now: u64,
+) -> Result<bool, PurserError> {
+    let next = transition(c.state, Event::Contradict)?; // only Failed -> Confirmed
+    if spent > c.reserved_amount {
+        return Err(PurserError::SpentExceedsReserved {
+            spent,
+            reserved: c.reserved_amount,
+        });
+    }
+    let completed = b
+        .completed
+        .checked_add(spent)
+        .ok_or(PurserError::ArithmeticOverflow)?;
+    let used = completed
+        .checked_add(b.outstanding)
+        .ok_or(PurserError::ArithmeticOverflow)?;
+    b.completed = completed;
+    c.actual_spent = Some(spent);
+    c.state = next;
+    c.updated_at = now;
+    Ok(used > b.cap)
+}
+
 /// §1.3 `cancel` (stretch nonce-burn). Pre: `state == Unknown` (cancel attested).
 /// Effect: `outstanding -= reserved`; `state = Cancelled`. Not idempotent — a second
 /// call sees `Cancelled` and rejects via the state gate (no double-release).
@@ -249,6 +281,7 @@ mod tests {
             crew_cap: 3,
             created_at: 0,
             active_crew: 0,
+            frozen: false,
         }
     }
 
@@ -769,5 +802,32 @@ mod tests {
             let _ = cancel(&mut l.budget, &mut l.commitments[i], 9);
             assert_eq!((l.budget.clone(), l.commitments[i].clone()), (bb, cc));
         }
+    }
+
+    /// A wrong `reconcile(false)` contradicted by the callback: the spend is recorded, never
+    /// lost, and the op reports when that pushes the task over cap. Only `Failed` qualifies.
+    #[test]
+    fn contradicted_spend_records_the_landed_transfer() {
+        let mut l = TestLedger::new(100);
+        let a = l.reserve(60).unwrap();
+        l.fail(a).unwrap(); // the owner's wrong release
+        let b = l.reserve(60).unwrap(); // headroom re-spent
+        let i = l.index_of(a);
+        let over = record_contradicted_spend(&mut l.budget, &mut l.commitments[i], yocto(60), 9);
+        assert_eq!(over, Ok(true), "60 landed + 60 held > 100");
+        assert_eq!(l.state(a), ReservationState::Confirmed);
+        assert_eq!(l.budget.completed, yocto(60));
+        assert_eq!(l.budget.outstanding, yocto(60));
+        // ledger recompute still agrees, even though (I) no longer holds
+        assert_eq!(l.budget.outstanding, l.recompute_outstanding());
+        assert_eq!(l.budget.completed, l.recompute_completed());
+        // only Failed can be contradicted
+        let j = l.index_of(b);
+        let (bb, cc) = (l.budget.clone(), l.commitments[j].clone());
+        assert!(matches!(
+            record_contradicted_spend(&mut l.budget, &mut l.commitments[j], yocto(60), 9),
+            Err(PurserError::IllegalTransition { .. })
+        ));
+        assert_eq!((l.budget.clone(), l.commitments[j].clone()), (bb, cc));
     }
 }

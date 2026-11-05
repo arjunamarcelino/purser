@@ -63,6 +63,8 @@ pub const MSG_NOT_RECONCILABLE: &str = "not reconcilable";
 pub const MSG_RECONCILE_TOO_EARLY: &str = "reconcile too early";
 // A retry must replay the SAME request (task + intent); a settled request_id is never reused.
 pub const MSG_REQUEST_ID_REUSED: &str = "request_id reused with a different request";
+// A task frozen by a contradicted reconcile accepts no new proposal.
+pub const MSG_TASK_FROZEN: &str = "task frozen";
 
 /// Why an accounting, state-machine, or payload-validation operation refused.
 ///
@@ -161,5 +163,6 @@ mod tests {
             MSG_REQUEST_ID_REUSED,
             "request_id reused with a different request"
         );
+        assert_eq!(MSG_TASK_FROZEN, "task frozen");
     }
 }
