@@ -2,7 +2,7 @@
         contract-build contract-build-release contract-test contract-fmt contract-lint prove \
         ts-install ts-lint ts-test ts-test-sandbox types-gen crew board \
         indexer-poll indexer-serve indexer-counts \
-        deploy-testnet demo metrics hooks
+        deploy-testnet demo metrics hooks evm-spike
 
 # Aggregate targets: the contract plus the TS workspace (packages/*, proposer).
 build: contract-build
@@ -54,5 +54,7 @@ crew: contract-build ts-install
 # Deploy to testnet and provision the crew (needs OPERATOR_ACCOUNT_ID and near-cli-rs). Prompt 10 extends it.
 deploy-testnet: contract-build ts-install ; scripts/deploy-testnet.sh
 demo: ; @echo "TODO (Prompt 10): run the 7-case demo"
+# STRETCH spike (docs/EVM-SPIKE.md): size + gas of building and hashing an EIP-1559 tx in-contract. Local/sandbox only.
+evm-spike: ; scripts/evm-spike.sh
 metrics: ; @echo "TODO (Prompt 13): measure + write docs/METRICS.md"
 hooks: ; cp scripts/pre-commit .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit && echo "pre-commit hook installed"
