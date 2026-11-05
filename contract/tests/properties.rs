@@ -94,8 +94,10 @@ fn resolve_amount(a: Amount, cap: u128, used: u128) -> u128 {
             v.max(1)
         }
         Amount::Zero => 0,
-        Amount::ExactFit => cap - used,
-        Amount::OneOver => (cap - used).saturating_add(1),
+        // A frozen task (a contradicted reconcile pushed it over cap) has used > cap: saturate, so the
+        // proposal becomes 0 / 1 and the contract's refusal is what gets exercised, not a harness panic.
+        Amount::ExactFit => cap.saturating_sub(used),
+        Amount::OneOver => cap.saturating_sub(used).saturating_add(1),
         Amount::Cap => cap,
         Amount::Max => u128::MAX,
     }
