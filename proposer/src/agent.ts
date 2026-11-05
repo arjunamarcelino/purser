@@ -21,7 +21,7 @@ import type { Journal, JournalEntry } from "./journal.ts";
 import type { Logger } from "./log.ts";
 import type { ModelResult, ProposeFn } from "./model.ts";
 import type { Offer, Persona } from "./personas.ts";
-import { type ChainOutcome, type DelegateSender, type PurserViewer, type SendResult, hex } from "./purser-client.ts";
+import { type ChainOutcome, type PurserViewer, type SendResult, type Sender, hex } from "./purser-client.ts";
 
 export interface CrewContext {
   network: Network;
@@ -38,7 +38,7 @@ export interface CrewContext {
 
 export interface PersonaRuntime {
   persona: Persona;
-  sender: DelegateSender;
+  sender: Sender;
   journal: Journal;
   model: ProposeFn;
   offers: Offer[];

@@ -124,10 +124,18 @@ export function classifySendError(err: unknown): SendResult {
   return { kind: "unknown", raw: `${name}: ${message}` };
 }
 
-export const PROPOSE_GAS = 50_000_000_000_000n; // 50 Tgas; measured burn is recorded in BUILD-START-VERIFICATION
+// Measured on nearcore 2.14 (sandbox): one proposal burns ~6.4 Tgas end to end (transfer + 10 Tgas
+// settlement callback) and uses ~0.0006 NEAR of the function-call allowance. 50 Tgas is ~8x headroom.
+export const PROPOSE_GAS = 50_000_000_000_000n;
+
+/** What the agent needs from a delegate: its account id and one exact-bytes send. */
+export interface Sender {
+  readonly accountId: string;
+  proposeRaw(argsJson: string): Promise<SendResult>;
+}
 
 /** A delegate's signing handle. The function-call key can call `propose_payment` and nothing else. */
-export class DelegateSender {
+export class DelegateSender implements Sender {
   readonly accountId: string;
   readonly #account: Account;
   readonly #contractId: string;
