@@ -77,6 +77,7 @@ const EnvSchema = z.object({
   PROPOSER_MERCHANT_ATTACKER: optionalString,
   PROPOSER_JOURNAL_PATH: optionalString,
   PROPOSER_EVIDENCE_PATH: optionalString,
+  PROPOSER_RECORDS_PATH: optionalString,
   PROPOSER_LOG_CONTENT: optionalString.transform((v) => v === "1"),
 });
 
@@ -97,6 +98,8 @@ export interface Config {
   merchants: { data: string; compute: string; procurement: string; attacker: string } | undefined;
   journalDir: string;
   evidencePath: string;
+  /** Every ProposalRecord is appended here (0600): the dashboard's source for refusals and tx links. */
+  recordsPath: string;
   logContent: boolean;
 }
 
@@ -149,6 +152,7 @@ export function loadConfig(env: NodeJS.ProcessEnv, outDir = resolve(import.meta.
     merchants: data && compute && procurement && attacker ? { data, compute, procurement, attacker } : undefined,
     journalDir: e.PROPOSER_JOURNAL_PATH ?? resolve(outDir, "journal"),
     evidencePath: e.PROPOSER_EVIDENCE_PATH ?? resolve(outDir, "evidence.jsonl"),
+    recordsPath: e.PROPOSER_RECORDS_PATH ?? resolve(outDir, "records.jsonl"),
     logContent: e.PROPOSER_LOG_CONTENT,
   };
 }

@@ -22,8 +22,10 @@ import { type Logger, sanitizeForTerminal, silentLogger, stderrLogger } from "./
 import { type ProposeFn, nearAiModel, scriptedModel } from "./model.ts";
 import { type Merchants, PERSONAS, catalogFor } from "./personas.ts";
 import { DelegateSender, PurserViewer, assertProposeOnlyKey } from "./purser-client.ts";
+import { appendRecord } from "./records.ts";
+import { SAFE_TASK_ID } from "@purser/types";
 
-const SCENARIOS = ["legit", "race", "rogue", "demo"] as const;
+const SCENARIOS = ["legit", "race", "rogue", "attack", "demo"] as const;
 type Scenario = (typeof SCENARIOS)[number];
 
 interface Crew {
@@ -39,9 +41,9 @@ interface Crew {
   close(): Promise<void>;
 }
 
-const usage = `usage: crew --network sandbox|testnet [--scenario legit|race|rogue|demo] [--model near-ai|scripted] [--json] [--verbose]`;
+const usage = `usage: crew --network sandbox|testnet [--scenario legit|race|rogue|attack|demo] [--task=<id>] [--model near-ai|scripted] [--json] [--verbose]`;
 
-async function sandboxCrew(cfg: Config): Promise<Crew> {
+async function sandboxCrew(cfg: Config, taskOverride?: string): Promise<Crew> {
   // Dev tooling, loaded only for --network sandbox.
   const { Sandbox, DEFAULT_ACCOUNT_ID, DEFAULT_PRIVATE_KEY } = await import("near-sandbox");
   const { deployPurser, requireVerifiedSandboxBinary } = await import("./dev/purser-sandbox.ts");
@@ -58,19 +60,21 @@ async function sandboxCrew(cfg: Config): Promise<Crew> {
     merchants: d.merchants,
     journalDir: mkdtempSync(join(tmpdir(), "purser-crew-")),
     async task(name) {
-      const id = `${name}-${n++}`;
-      await d.createTask({ taskId: id, capNear: 100n });
+      const id = taskOverride ?? `${name}-${n++}`;
+      if ((await d.provider.callFunction({ contractId: d.contractId, method: "get_task", args: { task_id: id } })) == null) {
+        await d.createTask({ taskId: id, capNear: 100n });
+      }
       return id;
     },
     close: () => sandbox.tearDown(),
   };
 }
 
-async function testnetCrew(cfg: Config): Promise<Crew> {
+async function testnetCrew(cfg: Config, taskOverride?: string): Promise<Crew> {
   const missing = [
     !cfg.rpcUrl && "NEAR_RPC_URL",
     !cfg.contractId && "PURSER_CONTRACT_ID",
-    !cfg.taskId && "PROPOSER_TASK_ID",
+    !cfg.taskId && !taskOverride && "PROPOSER_TASK_ID",
     !cfg.merchants && "PROPOSER_MERCHANT_*",
     ...PERSONA_IDS.filter((p) => !cfg.delegates[p]).map((p) => `PROPOSER_${p.toUpperCase()}_ACCOUNT_ID / _FC_PRIVATE_KEY`),
   ].filter(Boolean);
@@ -86,7 +90,7 @@ async function testnetCrew(cfg: Config): Promise<Crew> {
     merchants: cfg.merchants!,
     journalDir: cfg.journalDir,
     // deploy-testnet.sh creates one task per scenario: <PROPOSER_TASK_ID>-legit|race|rogue.
-    task: async (name) => `${cfg.taskId!}-${name}`,
+    task: async (name) => taskOverride ?? `${cfg.taskId!}-${name}`,
     close: async () => {},
   };
 }
@@ -107,6 +111,7 @@ async function main(): Promise<number> {
       network: { type: "string" },
       scenario: { type: "string", default: "demo" },
       model: { type: "string" },
+      task: { type: "string" },
       json: { type: "boolean", default: false },
       verbose: { type: "boolean", default: false },
       help: { type: "boolean", default: false },
@@ -118,6 +123,9 @@ async function main(): Promise<number> {
   }
   const scenario = values.scenario as Scenario;
   if (!SCENARIOS.includes(scenario)) throw new Error(`unknown scenario "${scenario}"\n${usage}`);
+  // One task for every scenario in this run (the dashboard's "Run attack demo" targets its task).
+  const taskOverride = values.task;
+  if (taskOverride !== undefined && !SAFE_TASK_ID.test(taskOverride)) throw new Error(`--task must match ${SAFE_TASK_ID}`);
 
   const cfg = loadConfig({ ...process.env, NEAR_NETWORK: values.network ?? process.env.NEAR_NETWORK });
   const useRealModel = values.model ? values.model === "near-ai" : cfg.nearAi.apiKey !== undefined;
@@ -125,7 +133,7 @@ async function main(): Promise<number> {
   const log: Logger = values.verbose ? stderrLogger : silentLogger;
   const out = (line: string) => process.stdout.write(`${values.json ? line : sanitizeForTerminal(line)}\n`);
 
-  const crew = cfg.network === "sandbox" ? await sandboxCrew(cfg) : await testnetCrew(cfg);
+  const crew = cfg.network === "sandbox" ? await sandboxCrew(cfg, taskOverride) : await testnetCrew(cfg, taskOverride);
   const journals = new Map<PersonaId, Journal>();
   let failures = 0;
   try {
@@ -167,6 +175,7 @@ async function main(): Promise<number> {
       offers: catalogFor(p, crew.merchants, { inject, unitYocto: unit }),
     });
     const show = (label: string, r: PersonaResult) => {
+      appendRecord(cfg.recordsPath, r.record);
       if (values.json) return out(JSON.stringify(r.record));
       const rec = r.record;
       const amount = rec.amount_yocto ? `${yoctoToNear(rec.amount_yocto)} NEAR → ${rec.recipient}` : "";
@@ -193,7 +202,7 @@ async function main(): Promise<number> {
       await checkInvariant(task);
     }
 
-    if (scenario === "race" || scenario === "demo") {
+    if (scenario === "race" || scenario === "attack" || scenario === "demo") {
       const task = await crew.task("race");
       const unit = await unitOf(task);
       heading("race — attack case 2: three personas propose at once against too little headroom");
@@ -212,7 +221,7 @@ async function main(): Promise<number> {
       await checkInvariant(task);
     }
 
-    if (scenario === "rogue" || scenario === "demo") {
+    if (scenario === "rogue" || scenario === "attack" || scenario === "demo") {
       const task = await crew.task("rogue");
       const unit = await unitOf(task);
       heading("rogue — a compromised model proposes what the contract must refuse");
