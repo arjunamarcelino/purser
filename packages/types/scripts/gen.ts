@@ -22,6 +22,10 @@ type AbiFunction = {
 };
 type Abi = { body: { functions: AbiFunction[]; root_schema: { definitions: Record<string, Schema> } } };
 
+// Byte-order comparison: locale-aware sorting depends on ICU data and could make CI drift flap.
+const byCodeUnit = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
+const sortKeys = <T>(rec: Record<string, T>) => Object.fromEntries(Object.entries(rec).sort(([a], [b]) => byCodeUnit(a, b)));
+
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, "../../..");
 const abiPath = process.env.PURSER_ABI ?? resolve(repoRoot, "contract/target/near/purser_contract_abi.json");
@@ -63,13 +67,12 @@ function stripDescriptions(node: unknown, all = false): unknown {
   );
 }
 
-const sortKeys = <T>(rec: Record<string, T>) =>
-  Object.fromEntries(Object.entries(rec).sort(([a], [b]) => a.localeCompare(b)));
+
 
 // Private callbacks are contract-internal; clients can never call them.
 const functions = abi.body.functions
   .filter((f) => !(f.modifiers ?? []).includes("private"))
-  .sort((a, b) => a.name.localeCompare(b.name));
+  .sort((a, b) => byCodeUnit(a.name, b.name));
 
 // A result that is a bare `$ref` names its type directly (the generator would fold an alias away).
 const refName = (schema: Schema) => {
