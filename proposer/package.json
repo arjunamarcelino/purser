@@ -1,0 +1,28 @@
+{
+  "name": "@purser/proposer",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "UNTRUSTED AI proposer crew: turns goals into PaymentIntents via NEAR AI Cloud and submits them with propose_payment. All limits are the contract's.",
+  "bin": {
+    "crew": "./src/cli.ts"
+  },
+  "scripts": {
+    "crew": "node --env-file-if-exists=../.env src/cli.ts",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run --project unit",
+    "test:sandbox": "vitest run --project sandbox"
+  },
+  "dependencies": {
+    "@nearai/inference-sdk": "0.2.0",
+    "@purser/types": "workspace:*",
+    "near-api-js": "7.4.0",
+    "openai": "7.45.1",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "fast-check": "4.10.2",
+    "near-sandbox": "0.3.4",
+    "vitest": "5.0.5"
+  }
+}
