@@ -670,6 +670,12 @@ mod contract_layer {
             /// Hidden real-world outcome of the transfer this proposal would issue.
             transfer_ok: bool,
         },
+        /// Re-send a prior commitment's EXACT request (task, delegate, request_id, amount,
+        /// recipient): the honest retry, which must replay, report in-flight, or report failed,
+        /// and never open a second reservation.
+        Retry {
+            pick: Index,
+        },
         /// Deliver any undelivered callback (any order, any delay: NEAR bounds neither) with its
         /// real outcome. A callback that is never delivered is the lost-callback residual.
         Deliver {
@@ -710,6 +716,7 @@ mod contract_layer {
                 .prop_map(|(task, who, r, amount, recipient, transfer_ok)| Op::Propose {
                     task, who, r, amount, recipient, transfer_ok,
                 }),
+            3 => any::<Index>().prop_map(|pick| Op::Retry { pick }),
             4 => any::<Index>().prop_map(|pick| Op::Deliver { pick }),
             2 => (any::<Index>(), prop::bool::weighted(0.6), any::<bool>())
                 .prop_map(|(pick, honest, guess)| Op::Reconcile { pick, honest, guess }),
@@ -993,6 +1000,22 @@ mod contract_layer {
                     (other, _) => other,
                 };
                 (actual, predicted)
+            }
+            Op::Retry { pick } => {
+                if m.commits.is_empty() {
+                    return Ok((Out::NoOp, Out::NoOp));
+                }
+                let c = &m.commits[pick.index(m.commits.len())];
+                let (t, key, a, rcp) = (c.task, c.key, c.amount, c.recipient);
+                let actual = sut.call(before, actor(key.0), now, |k| {
+                    k.propose_payment(TASKS[t].into(), intent(a, rcp), request_id(key.1))
+                })?;
+                let actual = to_out(actual, |v| match v {
+                    PromiseOrValue::Promise(_) => Out::Promise(u64::MAX),
+                    PromiseOrValue::Value(cid) => Out::Value(cid),
+                });
+                // a key that has a commitment always has an idempotency entry, so this never admits
+                (actual, predict_propose(m, t, key, a, rcp, false))
             }
             Op::Deliver { pick } => {
                 if pending.is_empty() {
