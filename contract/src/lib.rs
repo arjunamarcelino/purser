@@ -7,6 +7,7 @@
 //! registry; APP-FLOW §3/§4/§9, BACKEND-SCHEMA §1.4/§1.5). The `propose_payment`
 //! reserve-before-sign path lands in Prompt 4. See the per-module banners for details.
 
+use near_sdk::json_types::U64;
 use near_sdk::store::{IterableMap, LookupMap};
 use near_sdk::{
     env, near, require, AccountId, BorshStorageKey, Gas, NearToken, PanicOnDefault, Promise,
@@ -175,6 +176,21 @@ pub struct PayloadScheme {
     pub preimage: String,
 }
 
+/// Contract limits and timings, surfaced by [`Purser::get_config`] so agents, the dashboard and
+/// ops tooling read them from the chain instead of hard-coding them. JSON-only (view DTO).
+#[near(serializers = [json])]
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct Config {
+    /// How old a `Reserved` commitment must be (block-timestamp ns) before `reconcile` accepts it.
+    pub reconcile_min_age_ns: U64,
+    /// Max byte length of a `request_id`.
+    pub max_request_id_len: u32,
+    /// Max byte length of an `intent.memo`.
+    pub max_memo_len: u32,
+    /// Max byte length of a `task_id`.
+    pub max_task_id_len: u32,
+}
+
 #[near]
 impl Purser {
     /// Initialize the contract.
@@ -199,6 +215,16 @@ impl Purser {
     /// Crate version — a trivial view to confirm the contract is live.
     pub fn version(&self) -> String {
         env!("CARGO_PKG_VERSION").to_string()
+    }
+
+    /// The contract's limits and the reconcile time-lock (see [`Config`]).
+    pub fn get_config(&self) -> Config {
+        Config {
+            reconcile_min_age_ns: U64(RECONCILE_MIN_AGE_NS),
+            max_request_id_len: MAX_REQUEST_ID_LEN as u32,
+            max_memo_len: MAX_MEMO_LEN as u32,
+            max_task_id_len: MAX_TASK_ID_LEN as u32,
+        }
     }
 
     /// The NEAR-native `payload_hash` scheme (chain, version, algorithm, encoding, domain, and the

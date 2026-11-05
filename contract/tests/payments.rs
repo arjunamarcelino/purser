@@ -503,6 +503,21 @@ async fn reconcile(
         .await?)
 }
 
+/// `get_config` surfaces the reconcile time-lock and input limits so clients never hard-code them.
+#[tokio::test]
+async fn get_config_exposes_the_lock_and_limits() -> anyhow::Result<()> {
+    let (_w, c, _owner, _delegate, _recipient) = setup().await?;
+    let cfg = view_json(&c, "get_config", json!({})).await?;
+    assert_eq!(
+        cfg["reconcile_min_age_ns"],
+        purser_contract::RECONCILE_MIN_AGE_NS.to_string()
+    );
+    assert_eq!(cfg["max_request_id_len"], 64);
+    assert_eq!(cfg["max_memo_len"], 256);
+    assert_eq!(cfg["max_task_id_len"], 64);
+    Ok(())
+}
+
 /// Only the owner may reconcile (the owner gate fires before any lookup).
 #[tokio::test]
 async fn reconcile_rejects_non_owner() -> anyhow::Result<()> {
