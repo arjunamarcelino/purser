@@ -42,9 +42,11 @@ its id later could be admitted once budget frees up.
 
 ## Attestation (evidence, not authority)
 
-Status (2026-11-05): **available.** NEAR AI Cloud returns an Intel TDX quote plus NVIDIA GPU
-evidence for `z-ai/glm-5.3-flash`, bound to the request nonce. The live end-to-end check of a
-completion's signature is pending account credits (`402 no_limit_configured`).
+Status (2026-11-05): **available and verified live.** For `z-ai/glm-5.3-flash`, NEAR AI Cloud
+returns an Intel TDX quote plus NVIDIA GPU evidence bound to the request nonce, and every live
+proposal's completion verified with all six checks passing (`provider_tee` signature by the key
+bound in the model's report, TCB `UpToDate`, GPU evidence verified). Two serving instances were
+observed; they differ only in an instance label, and both are pinned.
 
 The official [`@nearai/inference-sdk`](https://docs.near.ai/cloud/inference-sdk/javascript) is the
 only verifier. Each completion gets an `Evidence` record (`out/evidence.jsonl`, digest and check
@@ -62,7 +64,8 @@ results only, never a raw quote). It is `verified: true` only when **all** of th
 What `verified: true` means, precisely: *the completion was signed by a key that, at
 `verified_at`, was bound to a TDX + GPU report matching our pinned measurements.* Limits:
 
-- the measurements are pinned on first observation (trust on first use), not independently audited;
+- the measurements are pinned on observation (trust on first use), not independently audited; a new
+  serving instance or a redeploy shows up as `measurement_changed` until it is reviewed and pinned;
 - the request nonce proves the report is fresh; the completion is linked to it only through the
   signing key, which every instance of the model shares;
 - NEAR's own docs describe the gateway-to-model chain of trust as not yet complete;
