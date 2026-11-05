@@ -1,0 +1,74 @@
+/* Purser design tokens (DESIGN-BRIEF §3 colors, §4 type). Dark is primary.
+   The brief's hexes are placeholders "to tune for WCAG AA"; values marked (tuned) were adjusted so
+   every text/background pair passes 4.5:1 and every control border 3:1 — see test/contrast.test.ts. */
+
+:root,
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #0b1220;
+  --surface: #111a2b;
+  --surface-2: #16223a;
+  --border: #24324d; /* hairlines and dividers (decorative) */
+  --border-strong: #5f7090; /* (tuned) control outlines: ≥3:1 on surfaces */
+  --text: #e8eef7;
+  --text-dim: #9fb0c8;
+  --brass: #c9a24b;
+  --brass-dim: #8a6e2e;
+  --ok: #3fb68b;
+  --warn: #e0a54b;
+  --alarm: #f06b62; /* (tuned from #E5544B: 4.31:1 on surface-2) */
+  --link: #6fa8dc;
+  --on-brass: #0b1220;
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+  --bg: #f7f9fc;
+  --surface: #ffffff;
+  --surface-2: #eef2f8;
+  --border: #c9d3e1;
+  --border-strong: #74849e; /* (tuned) */
+  --text: #10233f;
+  --text-dim: #4a5d78; /* (tuned) */
+  --brass: #7a5b12; /* (tuned: #C9A24B is 2.4:1 on white) */
+  --brass-dim: #5e4610;
+  --ok: #17714f; /* (tuned) */
+  --warn: #8a5300; /* (tuned) */
+  --alarm: #b42318; /* (tuned) */
+  --link: #1f5f99; /* (tuned) */
+  --on-brass: #ffffff;
+}
+
+/* No explicit choice: follow the OS. (theme.ts sets data-theme only when the user picks one.) */
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme]) {
+    color-scheme: light;
+    --bg: #f7f9fc;
+    --surface: #ffffff;
+    --surface-2: #eef2f8;
+    --border: #c9d3e1;
+    --border-strong: #74849e;
+    --text: #10233f;
+    --text-dim: #4a5d78;
+    --brass: #7a5b12;
+    --brass-dim: #5e4610;
+    --ok: #17714f;
+    --warn: #8a5300;
+    --alarm: #b42318;
+    --link: #1f5f99;
+    --on-brass: #ffffff;
+  }
+}
+
+:root {
+  --font-ui: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  --size-display: clamp(3.5rem, 9vw, 6.5rem); /* the Remaining numeral: the largest thing on the board */
+  --size-lg: 1.25rem;
+  --size-md: 1rem;
+  --size-sm: 0.875rem;
+  --size-xs: 0.75rem;
+  --radius: 10px;
+  --gap: 1rem;
+  --focus: 0 0 0 2px var(--bg), 0 0 0 4px var(--brass);
+}
