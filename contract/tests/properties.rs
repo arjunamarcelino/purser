@@ -1280,6 +1280,17 @@ mod contract_layer {
             prop_assert_eq!(c.reserved_amount, yocto(mc.amount));
             prop_assert_eq!(c.actual_spent, mc.spent.map(yocto));
             prop_assert_eq!(&c.intent, &intent(mc.amount, mc.recipient, mc.memo));
+            // Per-commitment money flow (the per-task sum above can mask one error with another):
+            // a transfer that executed is held or counted as spent, never released, except while
+            // a wrong release is still waiting for the callback that will contradict it.
+            if mc.transfer_ok && c.state == ReservationState::Failed {
+                prop_assert_eq!(
+                    mc.callback,
+                    Callback::Undelivered,
+                    "commitment {} executed its transfer but is released",
+                    c.id
+                );
+            }
         }
         prop_assert!(next.is_none(), "a commitment exists past the ledger end");
         for (i, (a, r)) in (0..ACTORS)
