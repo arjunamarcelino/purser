@@ -10,7 +10,8 @@ import { useEffect, useRef, useState } from "react";
 import type { ProposalRecord } from "@purser/types";
 import type { BoardSnapshot, BoardSource, HistorySource } from "./sources.ts";
 
-export const POLL_MS = 3000;
+export const POLL_MS = 4000; // the board shares a public RPC quota with the proposer
+const MAX_BACKOFF_MS = 30_000;
 
 export interface BoardState {
   snapshot: BoardSnapshot | null;
@@ -25,11 +26,17 @@ const EMPTY: BoardState = { snapshot: null, records: [], syncedAt: null, error: 
 export function useBoard(task: string | null, board: BoardSource, history: HistorySource, refreshKey = 0): BoardState {
   const [state, setState] = useState<BoardState>(EMPTY);
   const heightRef = useRef(0);
+  const taskRef = useRef<string | null>(null);
 
   useEffect(() => {
-    setState(EMPTY);
-    heightRef.current = 0;
+    // A task switch clears the board; a refresh (refreshKey) only polls now, keeping what's shown.
+    if (taskRef.current !== task) {
+      taskRef.current = task;
+      setState(EMPTY);
+      heightRef.current = 0;
+    }
     if (!task) return;
+    let failures = 0;
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
     let controller: AbortController | undefined;
@@ -45,6 +52,7 @@ export function useBoard(task: string | null, board: BoardSource, history: Histo
           history.available ? history.records(task, signal).catch(() => null) : Promise.resolve([]),
         ]);
         if (cancelled || signal.aborted) return;
+        failures = 0;
         if (snapshot === null) {
           setState((s) => ({ ...s, missing: true, error: null, syncedAt: Date.now() }));
         } else if (snapshot.blockHeight >= heightRef.current) {
@@ -53,9 +61,12 @@ export function useBoard(task: string | null, board: BoardSource, history: Histo
         }
       } catch (err) {
         if (cancelled || signal.aborted) return;
-        setState((s) => ({ ...s, error: err instanceof Error ? err.message : String(err) }));
+        failures++;
+        const message = err instanceof Error ? err.message : String(err);
+        setState((s) => ({ ...s, error: /429|rate limit/i.test(message) ? "RPC rate limit — backing off" : message }));
       } finally {
-        if (!cancelled && !signal.aborted) timer = setTimeout(tick, POLL_MS);
+        // Back off on consecutive failures (rate limits, timeouts): 3 s → 6 → 12 → 24 → 30 s.
+        if (!cancelled && !signal.aborted) timer = setTimeout(tick, Math.min(POLL_MS * 2 ** failures, MAX_BACKOFF_MS));
       }
     };
 

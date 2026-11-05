@@ -6,7 +6,7 @@ import { useBoard, useNow } from "./data/useBoard.ts";
 import { ago } from "./lib/format.ts";
 import { lineHealth } from "./lib/semantics.ts";
 import { useTheme } from "./theme.ts";
-import { useWalletAccount } from "./wallet/wallet.ts";
+import { WALLETS, useWalletAccount } from "./wallet/wallet.ts";
 import { DemoControls } from "./components/DemoControls.tsx";
 import { Icon } from "./components/Icon.tsx";
 import { ConfirmDialog, OwnerPanel, useOwnerActions } from "./components/owner.tsx";
@@ -47,13 +47,29 @@ export function App() {
   const [chainOk, setChainOk] = useState<boolean | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
   const [revoking, setRevoking] = useState<ReadonlyMap<string, number>>(new Map());
+  const [consoleSlot, setConsoleSlot] = useState<HTMLElement | null>(null);
   const now = useNow();
   const wallet = useWalletAccount();
   const refresh = useCallback(() => setRefreshKey((k) => k + 1), []);
 
-  // Refuse to show anything as "testnet" unless the RPC itself says so.
+  // Refuse to show anything as "testnet" unless the RPC itself says so. A failed check (e.g. a rate
+  // limit) is not an answer: retry with backoff; only a successful reply naming another chain blocks.
   useEffect(() => {
-    board.chainId().then((id) => setChainOk(id === "testnet"), () => setChainOk(false));
+    let live = true;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const check = (attempt: number) => {
+      board.chainId().then(
+        (id) => live && setChainOk(id === "testnet"),
+        () => {
+          if (live) timer = setTimeout(() => check(attempt + 1), Math.min(2000 * 2 ** attempt, 30_000));
+        },
+      );
+    };
+    check(0);
+    return () => {
+      live = false;
+      clearTimeout(timer);
+    };
   }, []);
 
   useEffect(() => {
@@ -133,7 +149,7 @@ export function App() {
         <span className="label">
           token <span className="mono">NEAR</span>
         </span>
-        <span className={`net ${chainOk === false ? "tone-alarm" : ""}`}>{chainOk === false ? "NOT TESTNET — refusing to load" : "NEAR testnet"}</span>
+        <span className={`net ${chainOk === false ? "tone-alarm" : ""}`}>{chainOk === false ? "NOT TESTNET — refusing to load" : chainOk === null ? "checking network…" : "NEAR testnet"}</span>
         <div className="account">
           {wallet.accountId ? (
             <>
@@ -147,9 +163,14 @@ export function App() {
               </button>
             </>
           ) : (
-            <button type="button" className="btn btn-small" onClick={() => void wallet.connect().catch(() => {})}>
-              Connect wallet
-            </button>
+            <span className="connect" role="group" aria-label="Connect the owner's wallet">
+              <span className="label">connect</span>
+              {WALLETS.map((w) => (
+                <button key={w.id} type="button" className="btn btn-small" title={w.hint} onClick={() => void wallet.connect(w.id).catch(() => {})}>
+                  {w.label}
+                </button>
+              ))}
+            </span>
           )}
         </div>
         <button type="button" className="icon-btn" aria-label={`Theme: ${theme}. Switch theme`} onClick={() => setTheme(theme === "dark" ? "light" : theme === "light" ? "system" : "dark")}>
@@ -171,6 +192,7 @@ export function App() {
           </>
         )}
         {!snap && !state.missing && !state.error && <p className="panel dim">Loading live state from {config.contractId}…</p>}
+        <div ref={setConsoleSlot} className="console-slot" />
       </main>
 
       <footer className="statusbar">
@@ -181,7 +203,7 @@ export function App() {
           cap={BigInt(snap?.invariant.cap ?? "0")}
         />
         <div className="status-row">
-          <DemoControls task={task} onJobFinished={refresh} />
+          <DemoControls task={task} onJobFinished={refresh} consoleSlot={consoleSlot} />
           <span className="meta small dim">
             synced {ago(state.syncedAt, now)} · block {snap?.blockHeight ?? "—"} ·{" "}
             <a href={explorer.account(config.contractId)} target="_blank" rel="noopener noreferrer" className="mono">

@@ -37,6 +37,20 @@ export interface HistorySource {
 }
 
 const decoder = new TextDecoder();
+const CALL_TIMEOUT_MS = 10_000;
+
+/** A provider call that gives up after 10 s or when the poll is aborted (near-api-js takes no signal). */
+function withTimeout<T>(p: Promise<T>, signal: AbortSignal): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error("RPC timed out")), CALL_TIMEOUT_MS);
+    const onAbort = () => reject(signal.reason ?? new Error("aborted"));
+    signal.addEventListener("abort", onAbort, { once: true });
+    p.then(resolve, reject).finally(() => {
+      clearTimeout(timer);
+      signal.removeEventListener("abort", onAbort);
+    });
+  });
+}
 const encoder = new TextEncoder();
 const PAGE = 100;
 
@@ -45,36 +59,44 @@ export class ChainBoardSource implements BoardSource {
   readonly #contractId: string;
 
   constructor(rpcUrl: string, contractId: string) {
-    this.#provider = new JsonRpcProvider({ url: rpcUrl });
+    // One attempt per call (near-api-js's `retries` is the ATTEMPT count — 0 would never send). Its own
+    // retry loop backs off for minutes with no timeout, freezing the board; useBoard backs off instead.
+    this.#provider = new JsonRpcProvider({ url: rpcUrl }, { retries: 1 });
     this.#contractId = contractId;
   }
 
   async #view<M extends keyof PurserViews>(method: M, args: PurserViews[M]["args"], blockId: number | undefined, signal: AbortSignal): Promise<PurserViews[M]["result"]> {
     signal.throwIfAborted();
-    const raw = await this.#provider.callFunctionRaw({
-      contractId: this.#contractId,
-      method,
-      args: encoder.encode(JSON.stringify(args)),
-      blockQuery: blockId === undefined ? { finality: "final" } : { blockId },
-    });
-    signal.throwIfAborted();
+    const raw = await withTimeout(
+      this.#provider.callFunctionRaw({
+        contractId: this.#contractId,
+        method,
+        args: encoder.encode(JSON.stringify(args)),
+        blockQuery: blockId === undefined ? { finality: "final" } : { blockId },
+      }),
+      signal,
+    );
     return parseU64Safe(decoder.decode(Uint8Array.from(raw.result))) as PurserViews[M]["result"];
   }
 
   async snapshot(task: string, signal: AbortSignal): Promise<BoardSnapshot | null> {
     // Pin every read to one final block: invariant, budget and the ledger then describe the SAME
     // chain state (separate "final" reads can land on different blocks or RPC nodes).
-    const block = await this.#provider.viewBlock({ finality: "final" });
+    const block = await withTimeout(this.#provider.viewBlock({ finality: "final" }), signal);
     const h = block.header.height;
     const budget = await this.#view("get_task", { task_id: task }, h, signal);
     if (budget === null) return null;
-    const [invariant, remaining, delegates, commitments] = await Promise.all([
+    // Five calls per poll (block + four views). "Remaining" is cap − used from the invariant view —
+    // the same math as remaining_budget, without another request against a rate-limited RPC.
+    const [invariant, delegates, commitments] = await Promise.all([
       this.#view("invariant", { task_id: task }, h, signal),
-      this.#view("remaining_budget", { task_id: task }, h, signal),
       this.#pages((from) => this.#view("list_delegates", { task_id: task, from_index: from, limit: PAGE }, h, signal)),
       this.#pages((from) => this.#view("list_commitments", { task_id: task, from_index: from, limit: PAGE }, h, signal)),
     ]);
     if (invariant === null) return null;
+    const used = BigInt(invariant.used);
+    const cap = BigInt(invariant.cap);
+    const remaining = (used >= cap ? 0n : cap - used).toString();
     return { task, blockHeight: h, budget, invariant, remaining, delegates, commitments };
   }
 
