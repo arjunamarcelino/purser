@@ -602,6 +602,10 @@ mod contract_layer {
         "removable.test.near",
         "stranger.test.near",
     ];
+    /// Memos a proposal may carry. The first two are the same request (no memo == empty memo);
+    /// the others differ, so a reused request_id with another memo must be refused.
+    const MEMOS: [Option<&str>; 4] = [None, Some(""), Some("note"), Some("other")];
+
     /// The reconcile time-lock as SPECIFIED (10 minutes), stated independently of the contract's
     /// constant so the model does not borrow the logic under test; `run` asserts they agree.
     const SPEC_RECONCILE_MIN_AGE_NS: u64 = 600 * 1_000_000_000;
@@ -667,14 +671,18 @@ mod contract_layer {
             r: u8,
             amount: Amount,
             recipient: usize,
+            /// Index into `MEMOS`; `None` and `Some("")` are the same request.
+            memo: usize,
             /// Hidden real-world outcome of the transfer this proposal would issue.
             transfer_ok: bool,
         },
-        /// Re-send a prior commitment's EXACT request (task, delegate, request_id, amount,
-        /// recipient): the honest retry, which must replay, report in-flight, or report failed,
-        /// and never open a second reservation.
+        /// Re-send a prior commitment's request (task, delegate, request_id, amount, recipient).
+        /// With `memo: None` it is the exact honest retry, which must replay, report in-flight, or
+        /// report failed, and never open a second reservation. With `Some(m)` only the memo
+        /// changes: the same request when canonically equal, otherwise a refused reuse.
         Retry {
             pick: Index,
+            memo: Option<usize>,
         },
         /// Deliver any undelivered callback (any order, any delay: NEAR bounds neither) with its
         /// real outcome. A callback that is never delivered is the lost-callback residual.
@@ -712,11 +720,12 @@ mod contract_layer {
 
     pub fn op_strategy() -> impl Strategy<Value = Op> {
         prop_oneof![
-            8 => (0..2usize, 0..ACTORS, 0..RIDS, amount_strategy(), 0..3usize, prop::bool::weighted(0.8))
-                .prop_map(|(task, who, r, amount, recipient, transfer_ok)| Op::Propose {
-                    task, who, r, amount, recipient, transfer_ok,
+            8 => (0..2usize, 0..ACTORS, 0..RIDS, amount_strategy(), 0..3usize, 0..MEMOS.len(), prop::bool::weighted(0.8))
+                .prop_map(|(task, who, r, amount, recipient, memo, transfer_ok)| Op::Propose {
+                    task, who, r, amount, recipient, memo, transfer_ok,
                 }),
-            3 => any::<Index>().prop_map(|pick| Op::Retry { pick }),
+            3 => (any::<Index>(), prop::option::of(0..MEMOS.len()))
+                .prop_map(|(pick, memo)| Op::Retry { pick, memo }),
             4 => any::<Index>().prop_map(|pick| Op::Deliver { pick }),
             2 => (any::<Index>(), prop::bool::weighted(0.6), any::<bool>())
                 .prop_map(|(pick, honest, guess)| Op::Reconcile { pick, honest, guess }),
@@ -742,6 +751,7 @@ mod contract_layer {
         key: Key,
         amount: u128,
         recipient: usize,
+        memo: usize,
         state: ReservationState,
         spent: Option<u128>,
         created_at: u64,
@@ -917,14 +927,19 @@ mod contract_layer {
         (tasks, commits, idem, next)
     }
 
-    fn intent(amount: u128, recipient: usize) -> PaymentIntent {
+    fn intent(amount: u128, recipient: usize, memo: usize) -> PaymentIntent {
         PaymentIntent {
             chain: Chain::NearNative,
             recipient: RECIPIENTS[recipient].to_string(),
             amount: yocto(amount),
             token: TokenSpec::NearNative,
-            memo: None,
+            memo: MEMOS[memo].map(str::to_string),
         }
+    }
+
+    /// The memo as the spec compares it: an empty memo is no memo.
+    fn canonical_memo(memo: usize) -> &'static str {
+        MEMOS[memo].unwrap_or("")
     }
 
     fn panic_out(msg: &str, expected: &[&'static str]) -> Out {
@@ -982,18 +997,23 @@ mod contract_layer {
                 r,
                 amount,
                 recipient,
+                memo,
                 transfer_ok,
             } => {
                 let (t, key) = (*task, (*who, *r));
                 let a = resolve_amount(*amount, m.caps[t], m.used(t));
                 let actual = sut.call(before, actor(*who), now, |c| {
-                    c.propose_payment(TASKS[t].into(), intent(a, *recipient), request_id(*r))
+                    c.propose_payment(
+                        TASKS[t].into(),
+                        intent(a, *recipient, *memo),
+                        request_id(*r),
+                    )
                 })?;
                 let actual = to_out(actual, |v| match v {
                     PromiseOrValue::Promise(_) => Out::Promise(u64::MAX),
                     PromiseOrValue::Value(cid) => Out::Value(cid),
                 });
-                let predicted = predict_propose(m, t, key, a, *recipient, *transfer_ok);
+                let predicted = predict_propose(m, t, key, a, *recipient, *memo, *transfer_ok);
                 // The fresh-path cid is the commitment just appended.
                 let actual = match (actual, &predicted) {
                     (Out::Promise(_), Out::Promise(cid)) => Out::Promise(*cid),
@@ -1001,21 +1021,22 @@ mod contract_layer {
                 };
                 (actual, predicted)
             }
-            Op::Retry { pick } => {
+            Op::Retry { pick, memo: swap } => {
                 if m.commits.is_empty() {
                     return Ok((Out::NoOp, Out::NoOp));
                 }
                 let c = &m.commits[pick.index(m.commits.len())];
                 let (t, key, a, rcp) = (c.task, c.key, c.amount, c.recipient);
+                let memo = swap.unwrap_or(c.memo);
                 let actual = sut.call(before, actor(key.0), now, |k| {
-                    k.propose_payment(TASKS[t].into(), intent(a, rcp), request_id(key.1))
+                    k.propose_payment(TASKS[t].into(), intent(a, rcp, memo), request_id(key.1))
                 })?;
                 let actual = to_out(actual, |v| match v {
                     PromiseOrValue::Promise(_) => Out::Promise(u64::MAX),
                     PromiseOrValue::Value(cid) => Out::Value(cid),
                 });
                 // a key that has a commitment always has an idempotency entry, so this never admits
-                (actual, predict_propose(m, t, key, a, rcp, false))
+                (actual, predict_propose(m, t, key, a, rcp, memo, false))
             }
             Op::Deliver { pick } => {
                 if pending.is_empty() {
@@ -1163,6 +1184,7 @@ mod contract_layer {
         key: Key,
         a: u128,
         rcp: usize,
+        memo: usize,
         transfer_ok: bool,
     ) -> Out {
         if m.registered[t][key.0] != Some(true) {
@@ -1173,7 +1195,12 @@ mod contract_layer {
             Some(IdemState::Failed) => return Out::Panic(MSG_ALREADY_FAILED),
             Some(IdemState::Committed { commitment_id }) => {
                 let c = &m.commits[*commitment_id as usize];
-                return if c.task == t && c.amount == a && c.recipient == rcp {
+                // the SAME request: task and the full intent, memo compared canonically
+                let same = c.task == t
+                    && c.amount == a
+                    && c.recipient == rcp
+                    && canonical_memo(c.memo) == canonical_memo(memo);
+                return if same {
                     Out::Value(*commitment_id)
                 } else {
                     Out::Panic(MSG_REQUEST_ID_REUSED)
@@ -1201,6 +1228,7 @@ mod contract_layer {
             key,
             amount: a,
             recipient: rcp,
+            memo,
             state: ReservationState::Reserved,
             spent: None,
             created_at: m.now,
@@ -1251,6 +1279,7 @@ mod contract_layer {
             prop_assert_eq!(c.state, mc.state);
             prop_assert_eq!(c.reserved_amount, yocto(mc.amount));
             prop_assert_eq!(c.actual_spent, mc.spent.map(yocto));
+            prop_assert_eq!(&c.intent, &intent(mc.amount, mc.recipient, mc.memo));
         }
         prop_assert!(next.is_none(), "a commitment exists past the ledger end");
         for (i, (a, r)) in (0..ACTORS)

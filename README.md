@@ -62,7 +62,11 @@ owner reconciles it with the transfer's **observed final outcome** (never on sil
 so the settlement callback stays authoritative even after a reconcile: if it proves a released
 payment actually landed, the contract records the spend, emits `reconcile_contradicted`, and, if
 that puts the task over its cap, **freezes** the task so it authorizes nothing more. The cap
-invariant holds for every task that is not frozen, and only a wrong owner attestation can freeze one. Never deploy Purser on
+invariant holds for every task that is not frozen, and only a wrong owner attestation can freeze one.
+
+**Retries.** A retry must repeat the same request: task, recipient, amount and memo (an empty memo
+counts as no memo). Reusing a settled `request_id` for anything else is refused with
+`request_id reused with a different request`; generate a fresh `request_id` per payment. Never deploy Purser on
 the owner's own account: `#[private]` callbacks would then accept the owner as the caller.
 
 ### Toolchain
