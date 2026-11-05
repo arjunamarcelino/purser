@@ -84,6 +84,8 @@ fn resolve_amount(a: Amount, cap: u128, used: u128) -> u128 {
     match a {
         Amount::Normal(p) => {
             let half = cap / 2;
+            // multiply first when it cannot overflow (precision on small caps); divide first on
+            // the u128::MAX/2 cap
             let v = if half < (1u128 << 100) {
                 half * p as u128 / 1000
             } else {
@@ -140,7 +142,8 @@ enum CoreOp {
     Revoke {
         d: usize,
     },
-    /// Time passes; nothing is delivered.
+    /// Time passes and nothing is delivered (the clock also advances by one on every step). The
+    /// silence check below is what this op exercises.
     Tick,
 }
 
@@ -160,12 +163,14 @@ fn core_op_strategy() -> impl Strategy<Value = CoreOp> {
             .prop_map(|(d, r, amount)| CoreOp::Propose { d, r, amount }),
         2 => any::<Index>().prop_map(|pick| CoreOp::Retry { pick }),
         3 => any::<Index>().prop_map(|pick| CoreOp::Sign { pick }),
-        3 => (any::<Index>(), 0u16..=1000)
+        3 => (any::<Index>(), 0u16..=1100)
             .prop_map(|(pick, spent_per_mille)| CoreOp::SettleOk { pick, spent_per_mille }),
         2 => any::<Index>().prop_map(|pick| CoreOp::FailPreSig { pick }),
         2 => any::<Index>().prop_map(|pick| CoreOp::Timeout { pick }),
         1 => any::<Index>().prop_map(|pick| CoreOp::CancelAttested { pick }),
-        1 => (0..DELEGATES).prop_map(|d| CoreOp::Revoke { d }),
+        // d0 is never revoked (revocation is terminal, as in the contract), so late proposals in a
+        // long sequence are not starved
+        1 => (1..DELEGATES).prop_map(|d| CoreOp::Revoke { d }),
         1 => Just(CoreOp::Tick),
     ]
 }
@@ -378,8 +383,8 @@ impl CoreModel {
     }
 }
 
-/// Spent amount for a settle: `per_mille` of the reservation, so `1000` settles in full.
-/// `> 1000` is never generated; `spent > reserved` is exercised by the pure-core unit tests.
+/// Spent amount for a settle: `per_mille` of the reservation, so `1000` settles in full and
+/// `> 1000` over-spends (which the core must refuse). Same overflow-safe ordering as `Amount`.
 fn spent_for(reserved: u128, per_mille: u16) -> u128 {
     if reserved < (1u128 << 100) {
         reserved * per_mille as u128 / 1000
@@ -428,7 +433,14 @@ fn step_core(sut: &mut CoreSut, model: &mut CoreModel, op: &CoreOp) -> (Outcome,
                         commitment_id: i as u64,
                     }),
                 );
-                let m = model.edge(i, &[Signed, Unknown], Confirmed);
+                // settle_confirmed checks the edge first, then the amount
+                let m = if !matches!(model.commits[i].state, Signed | Unknown) {
+                    Outcome::Illegal
+                } else if spent > model.commits[i].reserved {
+                    Outcome::SpentExceeds
+                } else {
+                    model.edge(i, &[Signed, Unknown], Confirmed)
+                };
                 if m == Outcome::Applied {
                     model.commits[i].spent = Some(spent);
                     model.idem.insert(
@@ -617,6 +629,8 @@ mod contract_layer {
     /// The reconcile time-lock as SPECIFIED (10 minutes), stated independently of the contract's
     /// constant so the model does not borrow the logic under test; `run` asserts they agree.
     const SPEC_RECONCILE_MIN_AGE_NS: u64 = 600 * 1_000_000_000;
+    /// Block timestamp the mocked chain starts at.
+    const GENESIS_NS: u64 = 1_000_000_000;
 
     fn contract_id() -> AccountId {
         "purser.test.near".parse().unwrap()
@@ -741,6 +755,7 @@ mod contract_layer {
             1 => (0..2usize, 0..ACTORS).prop_map(|(task, who)| Op::AddDelegate { task, who }),
             1 => Just(Op::RemoveAllowlist),
             1 => Just(Op::ReAddAllowlist),
+            // short ticks, and long ones that straddle the 600 s reconcile lock on purpose
             2 => prop_oneof![1u64..=10, 590u64..=900].prop_map(|secs| Op::Tick { secs }),
         ]
     }
@@ -769,7 +784,7 @@ mod contract_layer {
 
     /// What a call is predicted to (or did) return.
     #[derive(Clone, PartialEq, Eq, Debug)]
-    pub enum Out {
+    enum Out {
         Promise(u64),
         Value(u64),
         Panic(&'static str),
@@ -778,7 +793,7 @@ mod contract_layer {
     }
 
     #[derive(Clone, Debug)]
-    pub struct Model {
+    struct Model {
         caps: [u128; 2],
         commits: Vec<Commit>,
         idem: BTreeMap<Key, IdemState>,
@@ -804,7 +819,7 @@ mod contract_layer {
                     [Some(true), None, Some(true)],
                 ],
                 removable_allowed: true,
-                now: 1_000_000_000,
+                now: GENESIS_NS,
                 outflow: [0; 2],
                 frozen: [false; 2],
             }
@@ -857,14 +872,19 @@ mod contract_layer {
 
     // ---- SUT -----------------------------------------------------------------------------------
 
-    pub struct Sut;
+    struct Sut {
+        /// The `EVENT_JSON` logs of the last successful call.
+        logs: std::cell::RefCell<Vec<String>>,
+    }
 
     impl Sut {
         fn setup(caps: [u128; 2]) -> Self {
             install_quiet_hook();
             // Each proptest case starts from empty storage (`testing_env!` carries it over).
+            // UPGRADE HAZARD: this harness relies on near-sdk mock internals (`take_storage`,
+            // flush-on-drop, unwinding `panic_utf8`); re-verify them when bumping near-sdk.
             near_sdk::mock::with_mocked_blockchain(|b| drop(b.take_storage()));
-            set_ctx(actor(OWNER), 1_000_000_000);
+            set_ctx(actor(OWNER), GENESIS_NS);
             let mut c = Purser::new(actor(OWNER), "v1.signer-prod.testnet".parse().unwrap());
             for (t, cap) in TASKS.iter().zip(caps) {
                 c.create_task(t.to_string(), yocto(cap), TokenSpec::NearNative, 3);
@@ -882,7 +902,9 @@ mod contract_layer {
             c.set_recipient_allowlist("t2".into(), vec![RECIPIENTS[0].into()]);
             env::state_write(&c);
             drop(c); // flush the store caches
-            Sut
+            Sut {
+                logs: Default::default(),
+            }
         }
 
         /// One NEAR function call: load, run, then flush on success or discard on panic.
@@ -900,6 +922,7 @@ mod contract_layer {
                 Ok(r) => {
                     env::state_write(&c);
                     drop(c);
+                    *self.logs.borrow_mut() = near_sdk::test_utils::get_logs();
                     Ok(Ok(r))
                 }
                 Err(msg) => {
@@ -912,7 +935,7 @@ mod contract_layer {
         }
     }
 
-    pub type Snap = (
+    type Snap = (
         Vec<Option<TaskBudget>>,
         Vec<Commitment>,
         Vec<Option<IdemState>>,
@@ -983,15 +1006,24 @@ mod contract_layer {
         }
     }
 
+    /// `(event, commitment_id)` of every NEP-297 event the last successful call emitted.
+    fn events(sut: &Sut) -> Vec<(String, Option<u64>)> {
+        sut.logs
+            .borrow()
+            .iter()
+            .filter_map(|l| l.strip_prefix("EVENT_JSON:"))
+            .map(|j| {
+                let v: serde_json::Value = serde_json::from_str(j).unwrap();
+                let name = v["event"].as_str().unwrap().to_string();
+                (name, v["data"]["commitment_id"].as_u64())
+            })
+            .collect()
+    }
+
     // ---- step ----------------------------------------------------------------------------------
 
     /// Apply `op` to the contract and to the model; return (actual, predicted).
-    pub fn step(
-        sut: &Sut,
-        before: &Snap,
-        m: &mut Model,
-        op: &Op,
-    ) -> Result<(Out, Out), TestCaseError> {
+    fn step(sut: &Sut, before: &Snap, m: &mut Model, op: &Op) -> Result<(Out, Out), TestCaseError> {
         use ReservationState::*;
         let pending: Vec<usize> = (0..m.commits.len())
             .filter(|&i| m.commits[i].callback == Callback::Undelivered)
@@ -1017,16 +1049,16 @@ mod contract_layer {
                         request_id(*r),
                     )
                 })?;
+                // A fresh admission returns a Promise; its cid is the one `payment_reserved` names
+                // (the indexer's wire), never assumed from the ledger length.
                 let actual = to_out(actual, |v| match v {
-                    PromiseOrValue::Promise(_) => Out::Promise(u64::MAX),
+                    PromiseOrValue::Promise(_) => match events(sut).as_slice() {
+                        [(e, Some(cid))] if e == "payment_reserved" => Out::Promise(*cid),
+                        other => panic!("a fresh admission emitted {other:?}"),
+                    },
                     PromiseOrValue::Value(cid) => Out::Value(cid),
                 });
                 let predicted = predict_propose(m, t, key, a, *recipient, *memo, *transfer_ok);
-                // The fresh-path cid is the commitment just appended.
-                let actual = match (actual, &predicted) {
-                    (Out::Promise(_), Out::Promise(cid)) => Out::Promise(*cid),
-                    (other, _) => other,
-                };
                 (actual, predicted)
             }
             Op::Retry { pick, memo: swap } => {
@@ -1062,8 +1094,22 @@ mod contract_layer {
                     c.on_near_settled(i as u64, rid, res)
                 })?;
                 let actual = to_out(actual, |_| Out::Done);
+                let emitted: Vec<String> = events(sut).into_iter().map(|(e, _)| e).collect();
                 let c = &mut m.commits[i];
                 c.callback = Callback::Delivered;
+                let expected_event = match (c.state, ok) {
+                    (Reserved, true) => Some("payment_confirmed"),
+                    (Reserved, false) => Some("payment_failed"),
+                    (Failed, true) | (Confirmed, false) => Some("reconcile_contradicted"),
+                    _ => None,
+                };
+                prop_assert_eq!(
+                    emitted,
+                    expected_event
+                        .map(str::to_string)
+                        .into_iter()
+                        .collect::<Vec<_>>()
+                );
                 let committed = IdemState::Committed {
                     commitment_id: i as u64,
                 };
@@ -1252,7 +1298,7 @@ mod contract_layer {
 
     // ---- checks --------------------------------------------------------------------------------
 
-    pub fn check(op: &Op, before: &Snap, m: &Model, outs: (Out, Out)) -> Result<(), TestCaseError> {
+    fn check(op: &Op, before: &Snap, m: &Model, outs: (Out, Out)) -> Result<(), TestCaseError> {
         let (actual, predicted) = outs;
         prop_assert_eq!(&actual, &predicted, "contract disagrees with the model");
         // Storage persists across `testing_env!`, so any context can read it.
