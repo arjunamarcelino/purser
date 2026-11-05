@@ -1,13 +1,14 @@
 .PHONY: build build-release test fmt lint \
         contract-build contract-build-release contract-test contract-fmt contract-lint prove \
+        ts-install ts-lint ts-test ts-test-sandbox types-gen crew \
         deploy-testnet demo metrics hooks
 
-# Aggregate targets — expand to also run TS services (app/proposer/indexer) as they land.
+# Aggregate targets: the contract plus the TS workspace (packages/*, proposer).
 build: contract-build
 build-release: contract-build-release
-test: contract-test
+test: contract-test ts-test
 fmt: contract-fmt
-lint: contract-lint
+lint: contract-lint ts-lint
 
 # Contract (Rust / near-sdk). --all-features fails by design (build.rs gates the test-only
 # `fault-injection` feature); shipped wasm is guarded by scripts/check-wasm-clean.sh.
@@ -20,8 +21,27 @@ contract-lint: ; cd contract && cargo clippy --all-targets -- -D warnings
 # Security evidence: the property tests + the named attack cases, with race-proof heights printed.
 prove: ; cd contract && cargo test --test properties --test attacks -- --nocapture --test-threads=4
 
+# TypeScript workspace (pnpm). Node runs .ts directly; `tsc` is the only type check.
+ts-install: ; pnpm install --frozen-lockfile
+ts-lint: ts-install ; pnpm -r --workspace-concurrency=1 run typecheck
+ts-test: ts-install ; pnpm -r run test
+# Regenerate packages/types/src/generated.ts from a fresh ABI (CI fails on any drift).
+types-gen: contract-build ts-install ; pnpm --filter @purser/types run gen
+# The proposer on a local chain: crew integration tests + the model-independence property test.
+# The sandbox binary is nearcore 2.14.0, sha256-pinned (scripts/sandbox-bin.sh).
+ts-test-sandbox: contract-build ts-install
+	NEAR_SANDBOX_BIN_PATH="$$(scripts/sandbox-bin.sh)" pnpm --filter @purser/proposer run test:sandbox
+
+# Run the proposer crew: make crew [NETWORK=sandbox|testnet] [SCENARIO=demo|legit|race|rogue] [MODEL=near-ai|scripted]
+NETWORK ?= sandbox
+SCENARIO ?= demo
+crew: contract-build ts-install
+	NEAR_SANDBOX_BIN_PATH="$$(scripts/sandbox-bin.sh)" pnpm --filter @purser/proposer run crew \
+	  --network $(NETWORK) --scenario $(SCENARIO) $(if $(MODEL),--model $(MODEL))
+
 # Ops (stubs until their prompts)
-deploy-testnet: ; @echo "TODO (Prompt 10): build + deploy to testnet (must run scripts/check-wasm-clean.sh on the wasm first)"
+# Deploy to testnet and provision the crew (needs OPERATOR_ACCOUNT_ID and near-cli-rs). Prompt 10 extends it.
+deploy-testnet: contract-build ts-install ; scripts/deploy-testnet.sh
 demo: ; @echo "TODO (Prompt 10): run the 7-case demo"
 metrics: ; @echo "TODO (Prompt 13): measure + write docs/METRICS.md"
 hooks: ; cp scripts/pre-commit .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit && echo "pre-commit hook installed"

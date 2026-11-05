@@ -6,25 +6,29 @@ set -euo pipefail
 # Scan ONLY added lines (avoids false-triggers on removed/context lines).
 added="$(git diff --cached -U0 | grep '^+' | grep -v '^+++' || true)"
 
-# High-signal key material: NEAR ed25519 secret keys, PEM private keys, AWS access-key ids.
-if printf '%s\n' "$added" | grep -nE \
-  'ed25519:[A-Za-z0-9]{40,}|-----BEGIN [A-Z ]*PRIVATE KEY-----|AKIA[0-9A-Z]{16}'; then
+# High-signal key material: NEAR ed25519 secret keys, PEM private keys, AWS access-key ids,
+# NEAR AI Cloud / OpenAI-style API keys (sk-...).
+# Matches are never printed: the hook must not echo the secret it caught into a terminal or log.
+if printf '%s\n' "$added" | grep -qE \
+  'ed25519:[A-Za-z0-9]{40,}|-----BEGIN [A-Z ]*PRIVATE KEY-----|AKIA[0-9A-Z]{16}|sk-[A-Za-z0-9_-]{20,}'; then
   echo "✋ Possible secret key in staged additions. Commit aborted (override with --no-verify only if sure)."
   exit 1
 fi
 
 # Secret-looking assignment with a real, non-empty, non-comment value (e.g. FOO_PRIVATE_KEY=abc...).
-# Matches the name only when followed by : or = and a 12+ char value, so prose mentions and
-# empty template vars (e.g. RELAYER_PRIVATE_KEY= in .env.example) do NOT trigger.
-if printf '%s\n' "$added" | grep -nEi \
-  '(private_key|secret_key|mnemonic|seed_phrase)[[:space:]]*[:=][[:space:]]*[^[:space:]#]{12,}'; then
+# Matches the name only when followed by : or = and a 12+ char value that contains a digit (key
+# material does; code identifiers like `FOO_PRIVATE_KEY: optionalString,` don't), so prose mentions
+# and empty template vars (e.g. RELAYER_PRIVATE_KEY= in .env.example) do NOT trigger.
+if printf '%s\n' "$added" | grep -oEi \
+  '(private_key|secret_key|mnemonic|seed_phrase)[[:space:]]*[:=][[:space:]]*[^[:space:]#,;]{12,}' \
+  | grep -qE '[:=][[:space:]]*[^[:space:]]*[0-9]'; then
   echo "✋ Possible secret value in staged additions. Commit aborted (override with --no-verify only if sure)."
   exit 1
 fi
 
 # URL-embedded credentials, e.g. a DB/relayer connection string carrying user:pass@host.
 # High-precision: won't match Cargo.lock checksums or bare hashes (gitleaks covers those in CI).
-if printf '%s\n' "$added" | grep -nE \
+if printf '%s\n' "$added" | grep -qE \
   '[a-zA-Z][a-zA-Z0-9+.-]*://[^/:@[:space:]]+:[^/@[:space:]]+@'; then
   echo "✋ Possible URL-embedded credential in staged additions. Commit aborted (override with --no-verify only if sure)."
   exit 1

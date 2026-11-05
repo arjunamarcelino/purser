@@ -1,0 +1,10 @@
+# TS services join this list when they land (app, indexer, relayer).
+packages:
+  - packages/*
+  - proposer
+
+# Supply chain: refuse versions published less than 7 days ago, and run no dependency
+# install scripts unless listed here (none are needed).
+minimumReleaseAge: 10080
+onlyBuiltDependencies: []
+engineStrict: true

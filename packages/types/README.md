@@ -7,9 +7,28 @@ The Purser contract (Rust/near-sdk) is the source of truth for `PaymentIntent`, 
 To avoid four-way drift, every TypeScript service — `app`, `proposer`, `indexer`, `relayer` —
 imports these types from here and does **not** hand-mirror them.
 
-Generated from the contract ABI (`contract/target/near/purser_contract_abi.json`, emitted by
-`cargo near build`). The ABI→TS codegen is wired in when the first TS service lands; until then this
-package is a reserved placeholder so the ownership decision is explicit, not accidental.
+`src/generated.ts` is generated from the contract ABI (`contract/target/near/purser_contract_abi.json`,
+emitted by `cargo near build`) and committed. Regenerate with `make types-gen`; CI regenerates it from
+the freshly built ABI and fails on any diff. The package is pure (no Node or network imports), so the
+browser dashboard can bundle it.
+
+| Module | What it holds |
+|---|---|
+| `generated.ts` | Every ABI type, `PurserViews` / `PurserCalls` (args + result per method), `VIEW_METHODS`, `CALL_METHODS`, `U64_BIGINT_FIELDS` |
+| `brands.ts` | `YoctoString`, `CommitmentId`, `RequestId`: wire values branded at the one place they are validated |
+| `refusals.ts` | The frozen table below as code: `REFUSALS`, `classifyRefusal(raw)` (exact match, never substring) |
+| `records.ts` | zod schemas for the off-chain JSONL records (`ProposalRecord`, `Evidence`). Readers must validate: they are written by untrusted processes |
+
+Wire details the ABI cannot express:
+
+- `NearToken` is a bare JSON string in the ABI, so generated fields are `string`; amounts are built as
+  `YoctoString` (decimal yoctoNEAR, within u128).
+- Block timestamps (`created_at`, `updated_at`, `added_at`) are plain `u64` JSON numbers around 1.7e18,
+  beyond 2^53. A plain `JSON.parse` silently rounds them. They are typed `bigint`; parse view results with a
+  reviver keyed on `U64_BIGINT_FIELDS`.
+
+Do not use `near-abi-client-js`: the npm name is a malware placeholder. Codegen uses
+`json-schema-to-typescript` on the ABI's `body.root_schema`.
 
 ## Refusal wire contract (frozen)
 

@@ -1,0 +1,21 @@
+{
+  "name": "@purser/types",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Contract↔TypeScript type boundary, generated from the Purser ABI. Pure: no Node or network imports.",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "gen": "node scripts/gen.ts",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "node --test 'test/**/*.test.ts'"
+  },
+  "devDependencies": {
+    "json-schema-to-typescript": "16.0.0"
+  },
+  "dependencies": {
+    "zod": "4.6.7"
+  }
+}
