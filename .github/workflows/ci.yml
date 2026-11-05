@@ -3,13 +3,19 @@ on:
   push:
     branches: [main]
   pull_request:
+  schedule:
+    - cron: "0 3 * * *"     # nightly: the deep property run
 
 permissions:
   contents: read            # least privilege
 
 # Actions are pinned to full commit SHAs (immutable); the trailing comment tracks the version.
+#
+# Layout: `lint`, `wasm` and `host-tests` run in parallel; `sandbox-tests` waits only for `wasm`
+# and runs the near-workspaces suites against the artifacts `wasm` built ONCE (passed in via
+# PURSER_WASM_*), so no job rebuilds a wasm another job already built.
 jobs:
-  contract:
+  lint:
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -22,7 +28,10 @@ jobs:
           targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
-          workspaces: contract
+          workspaces: |
+            contract -> target
+            contract/tests/fixtures/race-driver -> ../../../target/race-driver
+          cache-on-failure: true
       - run: cargo fmt --all -- --check
       - run: cargo clippy --all-targets -- -D warnings
       - run: PURSER_ALLOW_FAULT_INJECTION=1 cargo clippy --all-targets --features fault-injection -- -D warnings   # the test-only fault build must lint too
@@ -31,18 +40,102 @@ jobs:
           cargo fmt --manifest-path tests/fixtures/race-driver/Cargo.toml -- --check
           CARGO_TARGET_DIR="$PWD/target/race-driver" cargo clippy --locked --manifest-path tests/fixtures/race-driver/Cargo.toml --all-targets -- -D warnings
       - name: Keep the sandbox-only race driver out of deploy tooling
-        run: "! grep -rn race-driver ../scripts"
-      # Installed BEFORE `cargo test`: the near-workspaces suites compile the contract via
-      # `compile_project`, which spawns the `cargo near` CLI from PATH.
+        run: "! grep -rn race-driver ../scripts ../Makefile"
+      - name: Keep the race-driver toolchain and near-sdk pin in lock-step with the contract
+        run: |
+          diff <(grep -v '^#' rust-toolchain.toml) <(grep -v '^#' tests/fixtures/race-driver/rust-toolchain.toml)
+          pin() { grep -m1 -oE 'near-sdk = "=[0-9.]+"' "$1"; }
+          [ "$(pin Cargo.toml)" = "$(pin tests/fixtures/race-driver/Cargo.toml)" ]
+
+  wasm:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: contract
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@035fceb3c12fb0c6a9461b52775e16473133e591 # 1.95.0
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        with:
+          workspaces: |
+            contract -> target
+            contract/tests/fixtures/race-driver -> ../../../target/race-driver
+          cache-on-failure: true
       - name: Install cargo-near (official prebuilt binary — avoids a source build of hidapi/libudev)
         run: curl --proto '=https' --tlsv1.2 -LsSf https://github.com/near/cargo-near/releases/download/cargo-near-v0.22.0/cargo-near-installer.sh | sh
-      - run: cargo test
-      - run: cargo near build non-reproducible-wasm   # also emits target/near/*_abi.json
+      - run: cargo near build non-reproducible-wasm   # the shipped wasm; also emits target/near/*_abi.json
       - run: ../scripts/check-wasm-clean.sh target/near/purser_contract.wasm      # never ship a fault-injection build
+      - name: Build the test-only artifacts (fault-injection contract, race driver)
+        run: |
+          CARGO_TARGET_DIR="$PWD/target/fault-injection" cargo near build non-reproducible-wasm --locked --no-abi \
+            --features fault-injection --env PURSER_ALLOW_FAULT_INJECTION=1
+          CARGO_TARGET_DIR="$PWD/target/race-driver" cargo near build non-reproducible-wasm --locked --no-abi \
+            --manifest-path tests/fixtures/race-driver/Cargo.toml
+          mkdir -p test-wasms
+          cp target/fault-injection/near/purser_contract.wasm test-wasms/fault.wasm
+          cp target/race-driver/near/race_driver.wasm test-wasms/driver.wasm
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: wasm-and-abi
           path: contract/target/near/*
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: test-wasms     # TEST-ONLY artifacts; never deploy these
+          path: contract/test-wasms/*
+
+  host-tests:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: contract
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@035fceb3c12fb0c6a9461b52775e16473133e591 # 1.95.0
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        with:
+          workspaces: contract -> target
+          cache-on-failure: true
+      - run: cargo test --lib
+      # Property depth is tiered: a quick pass on PRs, the in-code defaults (10k pure-core /
+      # 2k contract cases) on main, and a deep run nightly.
+      - name: Property tests (PR)
+        if: github.event_name == 'pull_request'
+        run: PROPTEST_CASES=256 cargo test --test properties
+      - name: Property tests (main)
+        if: github.event_name == 'push'
+        run: cargo test --test properties
+      - name: Property tests (nightly, deep)
+        if: github.event_name == 'schedule'
+        run: PROPTEST_CASES=20000 cargo test --test properties
+
+  sandbox-tests:
+    needs: wasm
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: contract
+    env:
+      PURSER_WASM_PROD: ${{ github.workspace }}/wasm/prod/purser_contract.wasm
+      PURSER_WASM_FAULT: ${{ github.workspace }}/wasm/test/fault.wasm
+      PURSER_WASM_DRIVER: ${{ github.workspace }}/wasm/test/driver.wasm
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@035fceb3c12fb0c6a9461b52775e16473133e591 # 1.95.0
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        with:
+          workspaces: contract -> target
+          cache-on-failure: true
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: wasm-and-abi
+          path: wasm/prod
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: test-wasms
+          path: wasm/test
+      - run: cargo test --test attacks --test payments --test delegates -- --test-threads=4
 
   secrets:
     runs-on: ubuntu-latest
