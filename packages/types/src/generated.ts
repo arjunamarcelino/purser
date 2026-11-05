@@ -39,6 +39,7 @@ export type IdemState =
     }
   | "Failed";
 export type GetTaskResult = TaskBudget | null;
+export type InvariantResult = InvariantView | null;
 export type IsDelegateAuthorizedResult = boolean;
 export type IsRecipientAllowedResult = boolean;
 export type ListCommitmentsResult = Commitment[];
@@ -192,6 +193,26 @@ export interface TaskBudget {
   owner: string;
   token: TokenSpec;
 }
+export interface InvariantArgs {
+  task_id: string;
+}
+/**
+ * The contract's own verdict on safety invariant (I) `completed + outstanding <= cap` for one task, surfaced by [`Purser::invariant`]. JSON-only (view DTO) — never stored, no Borsh-freeze obligation. `used` is `completed + outstanding`; if that sum would overflow `u128` (unreachable under (I)) it reads `NearToken::MAX` and `holds` is `false` — see [`InvariantReport`].
+ */
+export interface InvariantView {
+  cap: string;
+  completed: string;
+  /**
+   * Mirrors `TaskBudget.frozen`: the only state in which `holds` may legitimately be `false`.
+   */
+  frozen: boolean;
+  /**
+   * `completed + outstanding <= cap`, computed by the contract (not the client).
+   */
+  holds: boolean;
+  outstanding: string;
+  used: string;
+}
 export interface IsDelegateAuthorizedArgs {
   task_id: string;
   account_id: string;
@@ -281,6 +302,7 @@ export interface PurserViews {
   get_config: { args: GetConfigArgs; result: Config };
   get_idempotency: { args: GetIdempotencyArgs; result: GetIdempotencyResult };
   get_task: { args: GetTaskArgs; result: GetTaskResult };
+  invariant: { args: InvariantArgs; result: InvariantResult };
   is_delegate_authorized: { args: IsDelegateAuthorizedArgs; result: IsDelegateAuthorizedResult };
   is_recipient_allowed: { args: IsRecipientAllowedArgs; result: IsRecipientAllowedResult };
   list_commitments: { args: ListCommitmentsArgs; result: ListCommitmentsResult };
@@ -303,7 +325,7 @@ export interface PurserCalls {
   set_recipient_allowlist: { args: SetRecipientAllowlistArgs; result: void };
 }
 
-export const VIEW_METHODS = ["contract_source_metadata", "get_commitment", "get_config", "get_idempotency", "get_task", "is_delegate_authorized", "is_recipient_allowed", "list_commitments", "list_delegates", "list_task_ids", "payload_scheme", "remaining_budget", "version"] as const satisfies readonly (keyof PurserViews)[];
+export const VIEW_METHODS = ["contract_source_metadata", "get_commitment", "get_config", "get_idempotency", "get_task", "invariant", "is_delegate_authorized", "is_recipient_allowed", "list_commitments", "list_delegates", "list_task_ids", "payload_scheme", "remaining_budget", "version"] as const satisfies readonly (keyof PurserViews)[];
 export const CALL_METHODS = ["add_delegate", "create_task", "new", "propose_payment", "reconcile", "remove_recipient_allowlist", "revoke_delegate", "set_recipient_allowlist"] as const satisfies readonly (keyof PurserCalls)[];
 
 /** u64 fields typed `bigint`: parse view JSON with a reviver keyed on these names. */
