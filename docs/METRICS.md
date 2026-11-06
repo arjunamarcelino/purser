@@ -8,11 +8,11 @@ Reproduce: `make metrics` (from a clean checkout; `QUICK=1 make metrics` for a s
 
 | Field | Value |
 |---|---|
-| git sha | `62c406c866e120282458a28fe20bdea585bdfcde (dirty tree)` |
+| git sha | `cd8f95d95dd479660b503be6527bc74bfc70329b` |
 | wasm sha256 | `55d40b073e6b5a0f2bae878bf35fe4f68fd85d22213b6395ef59b466f6281fe4` |
 | nearcore / workspaces | `nearcore 2.14.0 sandbox (near-workspaces 0.24.0)` |
 | toolchain | `rustc 1.95.0 (59807616e 2026-04-14); cargo-near-near 0.22.0; node v26.9.0` |
-| date | `2026-11-06T09:43:10.839Z` |
+| date | `2026-11-06T10:56:41.977Z` |
 | repeats (N) | `10` |
 | mode | `full` |
 
@@ -52,8 +52,8 @@ Core cases must pass N/N. Racing cases (2b/4b) depend on real scheduling; their 
 
 | Racing case | Passed | Attempts needed (n, min / median / p95 / max) |
 |---|---|---|
-| `case_2b_external_parallel_dispatch_races` | 10/10 | no race.attempts emitted |
-| `case_4b_external_in_flight_retry` | 10/10 | no race.attempts emitted |
+| `case_2b_external_parallel_dispatch_races` | 10/10 | 10 samples: 1 / 1 / 1 / 1 |
+| `case_4b_external_in_flight_retry` | 10/10 | 10 samples: 1 / 1 / 1 / 1 |
 
 ## Gas (NEAR path)
 
@@ -73,8 +73,8 @@ Blocks from admission to settlement (from receipt heights): median 2, p95 2, ran
 
 | Arm | n | min ms | median ms | p95 ms | max ms |
 |---|---|---|---|---|---|
-| propose_payment | 300 | 602 | 624 | 645 | 662 |
-| baseline transfer | 300 | 348 | 370 | 385 | 407 |
+| propose_payment | 300 | 605 | 629 | 647 | 658 |
+| baseline transfer | 300 | 357 | 375 | 388 | 397 |
 
 Added wall time = median(propose) - median(baseline) = **254 ms** (sandbox). Sandbox wall-clock is dominated by block time and polling, so read the block count above as the honest figure. No means are reported.
 

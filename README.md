@@ -74,7 +74,7 @@ merchant's balance, receipt events). Headline rows are quoted below from that fi
 | Gas per authorization | 3.51 Tgas (propose) + 2.22 Tgas (settlement callback) = 5.74 Tgas |
 | Storage per commitment | 375 bytes |
 
-Run: N=10, commit `62c406c866e1` (dirty tree), wasm sha256 `55d40b073e6b5a0f…`. Reproduce with `make metrics`.
+Run: N=10, commit `cd8f95d95dd4`, wasm sha256 `55d40b073e6b5a0f…`. Reproduce with `make metrics`.
 <!-- metrics:end -->
 
 ## Architecture
