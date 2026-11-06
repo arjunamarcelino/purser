@@ -127,7 +127,7 @@ actually changed state. It **cannot** un-issue or recall a signature/transaction
 produced — no on-chain mechanism can — and it does **not** release that delegate's
 already-reserved (`outstanding`) budget, which stays reserved until settled or failed by the
 normal lifecycle (no reclaim on silence). The dashboard greys out a revoked agent and marks
-new proposals BLOCKED, with a caption noting already-issued signatures cannot be recalled.
+new proposals BLOCKED; the owner's revoke confirmation states that a payment or signature already made cannot be recalled.
 
 **Operational notes.** A commitment whose settlement callback was lost stays reserved until the
 owner reconciles it with the transfer's **observed final outcome** (never on silence), and
