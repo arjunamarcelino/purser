@@ -58,6 +58,7 @@ export type IdemState =
   | "Failed";
 export type GetRelayerResult = string | null;
 export type GetSignedTxResult = SignedTxView | null;
+export type GetTaskLimitsResult = TaskLimits | null;
 export type GetTaskResult = TaskBudget | null;
 export type InvariantResult = InvariantView | null;
 export type IsDelegateAuthorizedResult = boolean;
@@ -299,6 +300,28 @@ export interface SignedTxView {
 export interface GetTaskArgs {
   task_id: string;
 }
+export interface GetTaskLimitsArgs {
+  task_id: string;
+}
+/**
+ * Per-task state-growth limits (S8). Stored OUTSIDE `TaskBudget` and `Purser` (a separate map under an appended storage prefix) so adding it changes no existing Borsh layout: the deployed contract upgrades in place with no migration. A task with no stored entry uses the defaults.
+ *
+ * `created_count` counts every commitment ever opened for the task and never decrements, not even when a commitment later fails and releases its budget: commitments and their idempotency entries are never pruned, so only a count of what was created bounds storage growth.
+ */
+export interface TaskLimits {
+  /**
+   * Commitments created so far.
+   */
+  created_count: number;
+  /**
+   * Most commitments the task may ever create.
+   */
+  max_commitments: number;
+  /**
+   * Smallest NEAR-native payment the task admits (`0` = no minimum). Not applied to EVM tasks, whose amounts are in wei and which have their own owner-set `min_value`.
+   */
+  min_payment: string;
+}
 /**
  * One shared, capped task budget.
  *
@@ -452,6 +475,11 @@ export interface SetRecipientAllowlistArgs {
 export interface SetRelayerArgs {
   relayer: string;
 }
+export interface SetTaskLimitsArgs {
+  task_id: string;
+  min_payment: string;
+  max_commitments: number;
+}
 export interface TaskUnitArgs {
   task_id: string;
 }
@@ -469,6 +497,7 @@ export interface PurserViews {
   get_relayer: { args: GetRelayerArgs; result: GetRelayerResult };
   get_signed_tx: { args: GetSignedTxArgs; result: GetSignedTxResult };
   get_task: { args: GetTaskArgs; result: GetTaskResult };
+  get_task_limits: { args: GetTaskLimitsArgs; result: GetTaskLimitsResult };
   invariant: { args: InvariantArgs; result: InvariantResult };
   is_delegate_authorized: { args: IsDelegateAuthorizedArgs; result: IsDelegateAuthorizedResult };
   is_recipient_allowed: { args: IsRecipientAllowedArgs; result: IsRecipientAllowedResult };
@@ -500,10 +529,11 @@ export interface PurserCalls {
   set_evm_cfg: { args: SetEvmCfgArgs; result: void };
   set_recipient_allowlist: { args: SetRecipientAllowlistArgs; result: void };
   set_relayer: { args: SetRelayerArgs; result: void };
+  set_task_limits: { args: SetTaskLimitsArgs; result: void };
 }
 
-export const VIEW_METHODS = ["contract_source_metadata", "evm_lane", "evm_payload_scheme", "get_commitment", "get_config", "get_evm_cfg", "get_idempotency", "get_relayer", "get_signed_tx", "get_task", "invariant", "is_delegate_authorized", "is_recipient_allowed", "list_commitments", "list_delegates", "list_task_ids", "payload_scheme", "remaining_budget", "task_unit", "version"] as const satisfies readonly (keyof PurserViews)[];
-export const CALL_METHODS = ["add_delegate", "attest_external", "cache_derived_key", "confirm_release", "create_task", "enable_evm_task", "mark_unknown", "new", "propose_payment", "reconcile", "remove_recipient_allowlist", "request_cancel", "revoke_delegate", "seed_evm_nonce", "set_evm_cfg", "set_recipient_allowlist", "set_relayer"] as const satisfies readonly (keyof PurserCalls)[];
+export const VIEW_METHODS = ["contract_source_metadata", "evm_lane", "evm_payload_scheme", "get_commitment", "get_config", "get_evm_cfg", "get_idempotency", "get_relayer", "get_signed_tx", "get_task", "get_task_limits", "invariant", "is_delegate_authorized", "is_recipient_allowed", "list_commitments", "list_delegates", "list_task_ids", "payload_scheme", "remaining_budget", "task_unit", "version"] as const satisfies readonly (keyof PurserViews)[];
+export const CALL_METHODS = ["add_delegate", "attest_external", "cache_derived_key", "confirm_release", "create_task", "enable_evm_task", "mark_unknown", "new", "propose_payment", "reconcile", "remove_recipient_allowlist", "request_cancel", "revoke_delegate", "seed_evm_nonce", "set_evm_cfg", "set_recipient_allowlist", "set_relayer", "set_task_limits"] as const satisfies readonly (keyof PurserCalls)[];
 
 /** u64 fields typed `bigint`: parse view JSON with a reviver keyed on these names. */
 export const U64_BIGINT_FIELDS = ["added_at", "created_at", "updated_at"] as const;

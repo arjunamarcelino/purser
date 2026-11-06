@@ -31,13 +31,14 @@ pub use budget::{
     try_reserve, InvariantReport,
 };
 pub use error::{
-    PurserError, MSG_ALREADY_FAILED, MSG_CAP_POSITIVE, MSG_CREW_CAP_MIN, MSG_CREW_CAP_REACHED,
-    MSG_DELEGATE_EXISTS, MSG_DELEGATE_NOT_AUTHORIZED, MSG_EXCEEDS_BUDGET, MSG_ILLEGAL,
-    MSG_INVALID_PATH, MSG_INVALID_RECIPIENT, MSG_INVALID_REQUEST_ID, MSG_INVALID_TASK_ID,
-    MSG_IN_FLIGHT, MSG_MEMO_TOO_LONG, MSG_NOT_RECONCILABLE, MSG_NO_SUCH_COMMITMENT,
-    MSG_NO_SUCH_DELEGATE, MSG_NO_SUCH_TASK, MSG_ONLY_OWNER, MSG_OVERFLOW,
-    MSG_RECIPIENT_NOT_ALLOWED, MSG_RECONCILE_TOO_EARLY, MSG_REQUEST_ID_REUSED, MSG_TASK_EXISTS,
-    MSG_TASK_FROZEN, MSG_UNSUPPORTED_CHAIN, MSG_UNSUPPORTED_TOKEN, MSG_ZERO_AMOUNT,
+    PurserError, MSG_ALREADY_FAILED, MSG_BELOW_MIN_PAYMENT, MSG_CAP_POSITIVE, MSG_COMMITMENT_LIMIT,
+    MSG_CREW_CAP_MIN, MSG_CREW_CAP_REACHED, MSG_DELEGATE_EXISTS, MSG_DELEGATE_NOT_AUTHORIZED,
+    MSG_EXCEEDS_BUDGET, MSG_ILLEGAL, MSG_INVALID_PATH, MSG_INVALID_RECIPIENT,
+    MSG_INVALID_REQUEST_ID, MSG_INVALID_TASK_ID, MSG_IN_FLIGHT, MSG_MEMO_TOO_LONG,
+    MSG_NOT_RECONCILABLE, MSG_NO_SUCH_COMMITMENT, MSG_NO_SUCH_DELEGATE, MSG_NO_SUCH_TASK,
+    MSG_ONLY_OWNER, MSG_OVERFLOW, MSG_RECIPIENT_NOT_ALLOWED, MSG_RECONCILE_TOO_EARLY,
+    MSG_REQUEST_ID_REUSED, MSG_TASK_EXISTS, MSG_TASK_FROZEN, MSG_UNSUPPORTED_CHAIN,
+    MSG_UNSUPPORTED_TOKEN, MSG_ZERO_AMOUNT,
 };
 pub use error::{
     MSG_CANCEL_EXISTS, MSG_EVM_BAD_CFG, MSG_EVM_INVALID_FEE, MSG_EVM_KEY_CACHED,
@@ -63,7 +64,7 @@ pub use reservation::{transition, Event};
 pub use types::{
     CancelMeta, Chain, Commitment, CommitmentId, Delegate, EvmCfg, EvmMeta, EvmSig, IdemState,
     Lane, PaymentIntent, ReleaseEvidence, RequestId, ReservationState, TaskBudget, TaskId,
-    TokenSpec,
+    TaskLimits, TokenSpec,
 };
 
 /// Max byte length of an owner-chosen `task_id` (mirrors NEAR's account-id max); an
@@ -77,6 +78,11 @@ const MAX_DERIVATION_PATH_LEN: usize = 128;
 const MAX_REQUEST_ID_LEN: usize = 64;
 /// Max byte length of an `intent.memo` (stored inside the `Commitment`). Same griefing rationale.
 const MAX_MEMO_LEN: usize = 256;
+/// Default most commitments a task may ever create when the owner has not called `set_task_limits`
+/// (S8). Each commitment plus its idempotency entry costs the contract roughly 0.004-0.005 NEAR of
+/// storage stake, so this bounds what a hostile delegate can lock per task; the owner raises it
+/// for a long-running task.
+pub const DEFAULT_MAX_COMMITMENTS: u32 = 1000;
 /// Static gas for the `on_near_settled` callback: a few `store` writes + one event `log!`.
 /// ~2x NEAR's canonical callback floor (`FIVE_TGAS`); the bare `Transfer` action costs ~0.5 Tgas
 /// and does not compete. Measured (EVM spike): the callback burns ~2.1 Tgas; +2.5 KB of wasm adds ~0.003 Tgas.
@@ -110,6 +116,22 @@ fn fault_lost_callback() {}
 pub(crate) enum PayloadAnchor<'a> {
     Near(&'a AccountId),
     Evm([u8; 32]),
+}
+
+/// The per-task limits map. Built on demand over its own appended storage prefix and never held in
+/// `Purser`, so the contract's Borsh state is unchanged and an already-deployed contract upgrades
+/// without a migration. `LookupMap::new` reads nothing; writes flush when the map drops.
+fn limits_map() -> LookupMap<TaskId, TaskLimits> {
+    LookupMap::new(StorageKey::TaskLimits)
+}
+
+/// A task's effective limits: its stored entry, or the defaults (no minimum, `DEFAULT_MAX_COMMITMENTS`).
+fn effective_limits(map: &LookupMap<TaskId, TaskLimits>, task: &TaskId) -> TaskLimits {
+    map.get(task).cloned().unwrap_or(TaskLimits {
+        min_payment: NearToken::ZERO,
+        max_commitments: DEFAULT_MAX_COMMITMENTS,
+        created_count: 0,
+    })
 }
 
 /// Abort the call (rolling it back) with a core error's canonical message.
@@ -152,6 +174,8 @@ enum StorageKey {
     EvmLanes,
     PathIndex,
     EvmMeta,
+    // S8 per-task limits, appended after `EvmMeta`. Used only through `limits_map()`, never a struct field.
+    TaskLimits,
 }
 
 /// Purser — an on-chain spending controller for crews of AI agents.
@@ -504,6 +528,26 @@ impl Purser {
         .emit();
     }
 
+    /// Set a task's state-growth limits (S8). Owner-gated; the task must exist. `min_payment` is the
+    /// smallest NEAR-native payment admitted (`0` = none; EVM tasks ignore it), `max_commitments`
+    /// the most commitments the task may ever create. Lowering `max_commitments` below the number
+    /// already created simply stops new admissions; history is never touched. The running
+    /// `created_count` is preserved.
+    pub fn set_task_limits(
+        &mut self,
+        task_id: TaskId,
+        min_payment: NearToken,
+        max_commitments: u32,
+    ) {
+        require!(env::predecessor_account_id() == self.owner, MSG_ONLY_OWNER);
+        require!(self.tasks.contains_key(&task_id), MSG_NO_SUCH_TASK);
+        let mut limits = limits_map();
+        let mut current = effective_limits(&limits, &task_id);
+        current.min_payment = min_payment;
+        current.max_commitments = max_commitments;
+        limits.insert(task_id, current);
+    }
+
     // ---- delegate-gated payment flow (Prompt 4; TECHNICAL §5–§6, TRD §4–§5) ------
 
     /// Propose a NEAR-native payment: the load-bearing reserve-before-sign flow.
@@ -519,9 +563,9 @@ impl Purser {
     /// no second transfer). A failed transfer still returns the `cid` — the caller learns the
     /// outcome from `get_commitment(cid).state` / the `payment_failed` event, not an error.
     ///
-    /// `#[payable]` is retained for forward-compat with the deferred NEP-145 storage-deposit guard
-    /// (P-11); no deposit is required in the MVP.
-    #[payable]
+    /// Not `#[payable]` (S8): the runtime rejects any attached deposit, so a caller cannot donate
+    /// to, or be silently charged by, the contract. Storage stake for the commitment is paid from
+    /// the contract's own balance and bounded by the per-task commitment limit.
     pub fn propose_payment(
         &mut self,
         task: TaskId,
@@ -583,6 +627,10 @@ impl Purser {
         let payload = build_near_payload(&task_token, &intent, MAX_MEMO_LEN)
             .unwrap_or_else(|e| env::panic_str(&e.to_string())); // recipient parsed here, reused in (d)+(e)
         self.assert_allowlisted(&task, &payload.recipient); // fail-closed: deny-by-default
+        require!(
+            intent.amount >= effective_limits(&limits_map(), &task).min_payment,
+            MSG_BELOW_MIN_PAYMENT
+        );
 
         // (d) ATOMIC ADMIT + RESERVE + PAYLOAD-HASH + IDEMPOTENCY WRITE — synchronous, before any Promise.
         let now = env::block_timestamp();
@@ -878,6 +926,14 @@ impl Purser {
         now: u64,
     ) -> (CommitmentId, [u8; 32], u16) {
         let cid = self.next_commitment_id;
+        // S8: count every commitment ever created for the task (never decremented), before any state
+        // write so a refusal persists nothing. Both NEAR and EVM proposals pass through here.
+        let mut limits = limits_map();
+        let mut task_limits = effective_limits(&limits, task);
+        require!(
+            task_limits.created_count < task_limits.max_commitments,
+            MSG_COMMITMENT_LIMIT
+        );
         let b = self
             .tasks
             .get_mut(task)
@@ -914,6 +970,8 @@ impl Purser {
         commitment.payload_hash = Some(payload_hash);
         commitment.payload_version = Some(payload_version);
         self.commitments.insert(cid, commitment); // `b` borrow ended (NLL) — disjoint field
+        task_limits.created_count += 1; // < max_commitments <= u32::MAX, cannot overflow
+        limits.insert(task.clone(), task_limits);
         self.next_commitment_id += 1; // monotonic; first cid = 0
         (cid, payload_hash, payload_version)
     }
@@ -957,6 +1015,14 @@ impl Purser {
                 frozen: b.frozen,
             }
         })
+    }
+
+    /// A task's state-growth limits and how many commitments it has created, or `None` for an
+    /// unknown task. A task the owner never configured reports the defaults.
+    pub fn get_task_limits(&self, task_id: TaskId) -> Option<TaskLimits> {
+        self.tasks
+            .contains_key(&task_id)
+            .then(|| effective_limits(&limits_map(), &task_id))
     }
 
     /// A page of a task's delegates (active and revoked), for the dashboard crew view —

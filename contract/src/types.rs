@@ -87,6 +87,25 @@ pub struct TaskBudget {
     pub frozen: bool,
 }
 
+/// Per-task state-growth limits (S8). Stored OUTSIDE `TaskBudget` and `Purser` (a separate map under
+/// an appended storage prefix) so adding it changes no existing Borsh layout: the deployed contract
+/// upgrades in place with no migration. A task with no stored entry uses the defaults.
+///
+/// `created_count` counts every commitment ever opened for the task and never decrements, not even
+/// when a commitment later fails and releases its budget: commitments and their idempotency
+/// entries are never pruned, so only a count of what was created bounds storage growth.
+#[near(serializers = [json, borsh])]
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct TaskLimits {
+    /// Smallest NEAR-native payment the task admits (`0` = no minimum). Not applied to EVM tasks,
+    /// whose amounts are in wei and which have their own owner-set `min_value`.
+    pub min_payment: NearToken,
+    /// Most commitments the task may ever create.
+    pub max_commitments: u32,
+    /// Commitments created so far.
+    pub created_count: u32,
+}
+
 /// Reservation lifecycle state (TECHNICAL §4). Variant order is the borsh wire
 /// format — append-only.
 #[near(serializers = [json, borsh])]

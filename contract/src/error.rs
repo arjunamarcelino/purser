@@ -65,6 +65,11 @@ pub const MSG_RECONCILE_TOO_EARLY: &str = "reconcile too early";
 pub const MSG_REQUEST_ID_REUSED: &str = "request_id reused with a different request";
 // A task frozen by a contradicted reconcile accepts no new proposal.
 pub const MSG_TASK_FROZEN: &str = "task frozen";
+// S8 (state-growth griefing): a NEAR payment below the owner-set per-task minimum, and a task that
+// has already created its maximum number of commitments (the count never decrements, so a failing
+// transfer cannot be looped to grow state for free).
+pub const MSG_BELOW_MIN_PAYMENT: &str = "payment below minimum";
+pub const MSG_COMMITMENT_LIMIT: &str = "task commitment limit reached";
 
 // EVM payment path (Prompt 12). Same rules as above: bare literals, no numeric state, pinned by value in
 // `msg_constants_are_frozen`. The relayer and `packages/types` (`classifyRefusal`) branch on them.
@@ -188,6 +193,8 @@ mod tests {
         assert_eq!(MSG_MEMO_TOO_LONG, "memo too long");
         // owner / registry boundary guards
         assert_eq!(MSG_ONLY_OWNER, "only owner");
+        assert_eq!(MSG_BELOW_MIN_PAYMENT, "payment below minimum");
+        assert_eq!(MSG_COMMITMENT_LIMIT, "task commitment limit reached");
         assert_eq!(MSG_TASK_EXISTS, "task exists");
         assert_eq!(MSG_CAP_POSITIVE, "cap must be positive");
         assert_eq!(MSG_CREW_CAP_MIN, "crew_cap must be >= 1");

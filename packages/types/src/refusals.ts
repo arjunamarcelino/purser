@@ -24,6 +24,10 @@ export const REFUSALS = {
   not_reconcilable: { message: "not reconcilable", retry: "terminal" },
   no_such_commitment: { message: "no such commitment", retry: "terminal" },
   only_owner: { message: "only owner", retry: "terminal" },
+  // S8 (state-growth limits; contract/src/error.rs). A payment under the task's minimum can succeed with a
+  // larger amount; a task past its commitment limit refuses everything until the owner raises it.
+  payment_below_minimum: { message: "payment below minimum", retry: "terminal_for_amount" },
+  task_commitment_limit_reached: { message: "task commitment limit reached", retry: "terminal" },
   // EVM payment path (Prompt 12; contract/src/error.rs). "retry_later" = a condition an operator or the
   // passage of time clears; "wait" = another commitment holds the lane.
   evm_value_below_minimum: { message: "evm value below minimum", retry: "terminal" },

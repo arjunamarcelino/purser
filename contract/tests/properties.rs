@@ -23,7 +23,8 @@
 //! on-chain. Its propose composition is re-assembled here from the public pure fns. That is
 //! acceptable only because Layer B (`contract_*`) drives the real `Purser` composition.
 //!
-//! Case counts default to the `with_cases` values below; `PROPTEST_CASES` overrides them.
+//! Case counts default to the values passed to `cases(..)` below; `PROPTEST_CASES` overrides them.
+//! (`ProptestConfig::with_cases` alone ignores the env var, so `cases` reads it explicitly.)
 
 use std::collections::BTreeMap;
 
@@ -372,8 +373,11 @@ impl CoreModel {
             .sum()
     }
 
+    /// Saturating: a frozen task (a contradicted reconcile recorded real spend) can legitimately
+    /// hold `completed + outstanding` above `u128::MAX` when the cap is near `2^127`, and every
+    /// caller only compares this against the cap, so saturation preserves the comparison.
     fn used(&self) -> u128 {
-        self.completed() + self.outstanding()
+        self.completed().saturating_add(self.outstanding())
     }
 
     fn propose(&mut self, key: Key, amount: u128) -> Outcome {
@@ -574,6 +578,15 @@ fn step_core(sut: &mut CoreSut, model: &mut CoreModel, op: &CoreOp) -> (Outcome,
                     Outcome::Illegal
                 } else if spent > model.commits[i].reserved {
                     Outcome::SpentExceeds
+                } else if model
+                    .completed()
+                    .checked_add(spent)
+                    .and_then(|c| c.checked_add(model.outstanding()))
+                    .is_none()
+                {
+                    // checked u128 arithmetic: a landed spend that would overflow completed + outstanding
+                    // is refused atomically (reachable only with a cap near u128::MAX / 2)
+                    Outcome::Overflow
                 } else {
                     let r = model.edge(i, &[Failed, Cancelled], Confirmed);
                     model.commits[i].spent = Some(spent);
@@ -691,8 +704,25 @@ fn check_core(
     Ok(())
 }
 
+/// Case count for a property block: `PROPTEST_CASES` if set to a positive integer, else `default`.
+fn cases(default: u32) -> u32 {
+    std::env::var("PROPTEST_CASES")
+        .ok()
+        .and_then(|v| v.parse::<u32>().ok())
+        .filter(|n| *n > 0)
+        .unwrap_or(default)
+}
+
+/// Emits the case counts the blocks below run with, for `scripts/metrics.sh`. The numbers come from
+/// the same `cases` calls the blocks use, so the report cannot drift from what ran.
+#[test]
+fn report_configured_case_counts() {
+    println!("METRIC proptest.cases {} test=core", cases(10_000));
+    println!("METRIC proptest.cases {} test=contract", cases(2_000));
+}
+
 proptest! {
-    #![proptest_config(ProptestConfig::with_cases(10_000))]
+    #![proptest_config(ProptestConfig::with_cases(cases(10_000)))]
 
     /// Layer A: invariant, exactly-once, and no-release-on-silence over the pure core.
     #[test]
@@ -1518,7 +1548,7 @@ mod contract_layer {
 }
 
 proptest! {
-    #![proptest_config(ProptestConfig::with_cases(2_000))]
+    #![proptest_config(ProptestConfig::with_cases(cases(2_000)))]
 
     /// Layer B: the same three properties over the real `Purser` entrypoints, with callbacks
     /// delivered out of order or lost, owner reconciles, revocation, re-adds, allowlist churn,
