@@ -532,10 +532,7 @@ impl Purser {
     /// smallest NEAR-native payment admitted (`0` = none; EVM tasks ignore it), `max_commitments`
     /// the most commitments the task may ever create. Lowering `max_commitments` below the number
     /// already created simply stops new admissions; history is never touched. The running
-    /// `created_count` is preserved. `max_commitments = 0` admits nothing (the check is
-    /// `created_count < max_commitments`), which is the intended way to pause a task's new
-    /// admissions until the owner raises it again. No event is emitted: limit changes are not
-    /// visible to the indexer.
+    /// `created_count` is preserved.
     pub fn set_task_limits(
         &mut self,
         task_id: TaskId,
