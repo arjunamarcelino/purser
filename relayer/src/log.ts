@@ -15,6 +15,8 @@ export type ErrorClass =
 
 export type WarnCode =
   | "single_rpc_evidence"
+  | "evidence_needs_second_rpc"
+  | "nonce_unconfirmed"
   | "recipient_is_contract"
   | "recipient_unknown"
   | "balance_low"
@@ -26,15 +28,16 @@ export type WarnCode =
   | "cursor_stalled";
 
 export type LogEvent =
-  | { event: "config"; network: string; contract_id: string; relayer: string; providers: number; evidence: "single_rpc" | "dual_rpc"; finality: "finalized" }
+  | { event: "config"; network: string; contract_id: string; relayer: string; providers: number; evidence: "single_rpc_withheld" | "single_rpc_opt_in" | "dual_rpc"; finality: "finalized" }
   | { event: "startup_ok"; chain_id: bigint }
   | { event: "tick"; active: number; scanned_to: number }
   | { event: "broadcast"; cid: number; kind: "original" | "cancel"; hash: string; rpc: string; outcome: string }
   | { event: "mined"; cid: number; kind: "original" | "cancel"; hash: string; success: boolean; block: bigint; finalized: boolean }
   | { event: "attested"; cid: number; kind: "original" | "cancel"; hash: string; success: boolean; block: bigint; result: "sent" | "refused" | "unknown" }
   | { event: "mark_unknown"; cid: number; result: "sent" | "refused" | "unknown" }
-  | { event: "cancel_requested"; cid: number; max_fee: bigint; tip: bigint; result: "sent" | "refused" | "unknown" }
+  | { event: "cancel_requested"; cid: number; max_fee: bigint; tip: bigint; result: "sent" | "refused" | "unknown"; on_chain: boolean }
   | { event: "anomaly"; cid: number; reason: "invalid_raw" | "hash_mismatch" | "both_landed" | "nonce_consumed_no_receipt" | "wrong_chain" }
+  | { event: "anomaly_cleared"; cid: number; reason: "invalid_raw" | "hash_mismatch" | "both_landed" | "nonce_consumed_no_receipt" | "wrong_chain" }
   | { event: "warn"; code: WarnCode; cid: number | null; rpc?: string; detail?: string }
   | { event: "error"; where: string; class: ErrorClass; rpc?: string }
   | { event: "status"; cid: number; state: string; nonce: bigint; original: string | null; cancel: string | null; evidence: string | null; explorer: string | null };

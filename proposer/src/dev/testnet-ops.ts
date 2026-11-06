@@ -49,10 +49,26 @@ function base58(bytes: Uint8Array): string {
   return s;
 }
 
+// ---- error scrubbing ---------------------------------------------------------------------------------
+// near-api-js and fetch errors embed the request URL, and a provider URL often carries an API key. Every URL given
+// on the command line or in the environment is registered here, and EVERY message that leaves this process (the
+// top-level handler, the verify paths) goes through scrubText: registered secrets first, then any URL-shaped text.
+const knownSecrets = new Set<string>();
+function learnUrl(v: string | undefined): void {
+  if (v !== undefined && /^[a-z][a-z0-9+.-]*:\/\//i.test(v)) for (const s of urlSecrets(v)) knownSecrets.add(s);
+}
+for (const a of process.argv.slice(2)) learnUrl(a);
+for (const k of ["NEAR_RPC_URL", "EVM_RPC_URL", "EVM_RPC_URL_2"]) learnUrl(process.env[k]);
+
+const URL_IN_TEXT = /\b[a-z][a-z0-9+.-]*:\/\/[^\s"'<>)\]]+/gi;
+function scrubText(s: string): string {
+  return makeScrubber([...knownSecrets])(s).replace(URL_IN_TEXT, "[url]");
+}
+
 async function testnet(rpc: string): Promise<JsonRpcProvider> {
   const p = new JsonRpcProvider({ url: rpc });
   const { chain_id } = await p.viewNodeStatus();
-  if (chain_id !== "testnet") throw new Error(`RPC ${rpc} reports chain_id "${chain_id}", not testnet — refusing`);
+  if (chain_id !== "testnet") throw new Error(`the NEAR RPC reports chain_id "${chain_id}", not testnet — refusing`);
   return p;
 }
 
@@ -188,7 +204,14 @@ async function nearTx(rpc: string, signer: string, label: string, nearArgs: stri
     throw new Error(`${label}: ${why ?? "no transaction id in near output"} (the call MAY have landed; read state before retrying)\n${tail}`);
   }
   process.stdout.write(`TXHASH ${hash}\n`);
-  const res = await retryRateLimited(() => provider.viewTransactionStatus({ txHash: hash, accountId: signer, waitUntil: "EXECUTED" }));
+  // The hash is only a claim parsed off near's output until the chain confirms it: the shell logs it as "landed"
+  // only after the `TX <hash>` line below, and as "sent, unverified" otherwise.
+  let res: Awaited<ReturnType<JsonRpcProvider["viewTransactionStatus"]>>;
+  try {
+    res = await retryRateLimited(() => provider.viewTransactionStatus({ txHash: hash, accountId: signer, waitUntil: "EXECUTED" }));
+  } catch (e) {
+    throw new Error(scrubText(`${label}: tx ${hash} was sent but could not be verified on chain (${(e as Error).message.slice(0, 200)}); read state before retrying`));
+  }
   const tx = res.transaction as { signer_id: string };
   if (tx.signer_id !== signer) throw new Error(`${label}: tx ${hash} was signed by ${tx.signer_id}, expected ${signer}`);
   const failed = (st: unknown) => typeof st === "object" && st !== null && "Failure" in st;
@@ -317,6 +340,11 @@ async function run(): Promise<void> {
       if (hexOf(keccak256(new Uint8Array())) !== "c5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470") throw new Error("keccak256 self-test failed");
       const key = base58decode("67756ZjiVxANYvYhQagGaWj2APpo1C1UMq2ebVWoy3GMU3zmYaM9ho6DNyDxRjo1Uzo2UDMkmeutgZFKQhgpnd1W");
       if (key.length !== 64 || evmAddress(key) !== "0x0f3798297b9500b6c63ecc6c8101a7d6fae81e02") throw new Error("address derivation self-test failed");
+      const canary = "https://canary.example.invalid/v3/CANARYKEY0123456789abcdef";
+      learnUrl(canary);
+      const leaked = scrubText(`HTTP request failed: POST ${canary} refused; also http://other.example.invalid:8545/abc and ${["https:/", "/user:pw1234@host.example.invalid/x"].join("")}`);
+      if (/CANARY|canary\.example|other\.example|host\.example|pw1234/.test(leaked)) throw new Error("error scrubber self-test failed");
+      knownSecrets.clear();
       console.log("ok");
       return;
     }
@@ -401,7 +429,12 @@ async function run(): Promise<void> {
       if (!/^[1-9][0-9]{0,38}$/.test(value!)) throw new Error("bad value");
       const p = await testnet(rpc!);
       const kp = KeyPair.fromString(readFileSync(keyFile!, "utf8").trim() as KeyPairString);
-      const k = await retryRateLimited(() => p.viewAccessKey({ accountId: delegate!, publicKey: kp.getPublicKey().toString() }));
+      let k: Awaited<ReturnType<JsonRpcProvider["viewAccessKey"]>>;
+      try {
+        k = await retryRateLimited(() => p.viewAccessKey({ accountId: delegate!, publicKey: kp.getPublicKey().toString() }));
+      } catch (e) {
+        throw new Error(scrubText(`could not read the delegate's access key before proposing; nothing was sent (${(e as Error).message.slice(0, 200)})`));
+      }
       const fc = (k.permission as { FunctionCall?: { receiver_id: string; method_names: string[] } }).FunctionCall;
       if (!fc || fc.receiver_id !== contract || fc.method_names.join() !== "propose_payment") throw new Error("delegate key must be a propose_payment-only function-call key on this contract");
       const body = JSON.stringify({
@@ -415,14 +448,24 @@ async function run(): Promise<void> {
         timer = setTimeout(() => rej(new Error("send timed out (it may have landed: read get_idempotency before anything else)")), 240_000);
       });
       try {
-        const res = await Promise.race([
-          account.callFunctionRaw({ contractId: contract!, methodName: "propose_payment", args: new TextEncoder().encode(body), gas: 150_000_000_000_000n, deposit: 0n, waitUntil: "EXECUTED_OPTIMISTIC" }),
-          timeout,
-        ]);
+        let res: Awaited<ReturnType<Account["callFunctionRaw"]>>;
+        try {
+          res = await Promise.race([
+            account.callFunctionRaw({ contractId: contract!, methodName: "propose_payment", args: new TextEncoder().encode(body), gas: 150_000_000_000_000n, deposit: 0n, waitUntil: "EXECUTED_OPTIMISTIC" }),
+            timeout,
+          ]);
+        } catch (e) {
+          throw new Error(scrubText(`propose_payment: ${(e as Error).message.slice(0, 200)} (it MAY have landed: read get_idempotency before anything else)`));
+        }
         const hash = res.transaction.hash;
         console.log(`TXHASH ${hash}`);
         // Bind the hash to what was meant: signer, receiver and method, re-read from the chain.
-        const again = await retryRateLimited(() => p.viewTransactionStatus({ txHash: hash, accountId: delegate!, waitUntil: "EXECUTED_OPTIMISTIC" }));
+        let again: Awaited<ReturnType<JsonRpcProvider["viewTransactionStatus"]>>;
+        try {
+          again = await retryRateLimited(() => p.viewTransactionStatus({ txHash: hash, accountId: delegate!, waitUntil: "EXECUTED_OPTIMISTIC" }));
+        } catch (e) {
+          throw new Error(scrubText(`tx ${hash} was sent but could not be verified on chain (${(e as Error).message.slice(0, 200)}); read get_idempotency before resending`));
+        }
         const tx = again.transaction as { signer_id: string; receiver_id: string; actions: Array<{ FunctionCall?: { method_name: string } }> };
         if (tx.signer_id !== delegate || tx.receiver_id !== contract || tx.actions[0]?.FunctionCall?.method_name !== "propose_payment") {
           throw new Error(`tx ${hash} is ${tx.signer_id} -> ${tx.receiver_id}, not the proposal that was sent`);
@@ -445,6 +488,6 @@ async function run(): Promise<void> {
 }
 
 run().catch((e: unknown) => {
-  process.stderr.write(`testnet-ops: ${e instanceof Error ? e.message : String(e)}\n`);
+  process.stderr.write(`testnet-ops: ${scrubText(e instanceof Error ? e.message : String(e))}\n`);
   process.exit(1);
 });

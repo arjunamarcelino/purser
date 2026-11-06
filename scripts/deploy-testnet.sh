@@ -113,8 +113,16 @@ else
   [ -f "$WASM" ] || die "missing $WASM — run: make build"
   "$ROOT/scripts/check-wasm-clean.sh" "$WASM" >/dev/null || die "wasm failed the fault-injection gate; refusing to deploy"
   if [ "$("${OPS[@]}" has-code "$RPC" "$CONTRACT")" = "yes" ]; then   # an RPC error aborts (set -e); it never reads as "empty"
+    # The account has code and its hash differs from the built wasm. The Purser struct is Borsh state: a build whose
+    # field layout differs (the EVM path appended evm_cfg, evm_tasks, evm_lanes, path_index, evm_meta, relayer_id) cannot
+    # read the state the old code wrote, and every view and call then panics until the old wasm is put back. There is no
+    # migrate method, so an in-place swap is only safe when the layouts are known to match.
+    if [ "${ALLOW_STATE_BREAKING_REDEPLOY:-}" != "1" ]; then
+      die "$CONTRACT already has DIFFERENT code than $WASM. Redeploying over it can brick its stored state: the Borsh layout of Purser changed (the EVM path appended six fields) and there is no migrate method, so after the swap every call would panic. Nothing was deployed. Options: (1) use a fresh account for the EVM build: scripts/evm-testnet.sh deploy (it creates purser2.<operator> and never touches this contract); (2) after you have written and tested a migration, or accepted losing this contract's state, re-run with ALLOW_STATE_BREAKING_REDEPLOY=1."
+    fi
+    echo "    ALLOW_STATE_BREAKING_REDEPLOY=1: swapping code over existing state; the stored state may no longer deserialize" >&2
     near_quiet contract deploy "$CONTRACT" use-file "$WASM" without-init-call "${TX[@]}"
-    echo "    upgraded code (state kept)"
+    echo "    upgraded code (state layout NOT verified)"
   else
     init_args="{\"owner\":\"$OP\",\"signer_id\":\"v1.signer-prod.testnet\"}"
     near_quiet contract deploy "$CONTRACT" use-file "$WASM" with-init-call new \

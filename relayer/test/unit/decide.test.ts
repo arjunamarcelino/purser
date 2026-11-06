@@ -40,6 +40,9 @@ function obs(over: Partial<Observations> = {}): Observations {
     canRebroadcast: true,
     recipient: "eoa",
     balanceShort: false,
+    singleRpc: false,
+    allowSingleRpcEvidence: false,
+    nonceCheck: { others: "none", priorStreak: 0 },
     ...over,
   };
 }
@@ -103,10 +106,34 @@ describe("decide", () => {
     expect(decide(state(t), obs({ nowNs: SIGNED_AT + hr }))).toEqual([{ t: "mark_unknown" }]);
   });
 
-  it("anomaly: nonce consumed at finalized with no receipt for either hash", () => {
-    expect(decide(state(tx()), obs({ nonceFinalized: 5n }))).toEqual([{ t: "anomaly", reason: "nonce_consumed_no_receipt" }]);
+  it("anomaly: nonce consumed at finalized with no receipt for either hash, once corroborated", () => {
+    const agreed = { others: "agree", priorStreak: 0 } as const;
+    expect(decide(state(tx()), obs({ nonceFinalized: 5n, nonceCheck: agreed }))).toEqual([{ t: "anomaly", reason: "nonce_consumed_no_receipt" }]);
     const u = tx({ state: "Unknown", cancel: { maxFee: 20n, tip: 2n, to: "0xaa", value: 0n, raw: "0x02bb", txHash: CANCEL } });
-    expect(decide(state(u), obs({ nonceFinalized: 5n, cancel: { receipt: null, refetchedHash: null, agreed: true }, verdict: { original: "ok", cancel: "ok" } }))).toEqual([{ t: "anomaly", reason: "nonce_consumed_no_receipt" }]);
+    expect(decide(state(u), obs({ nonceFinalized: 5n, nonceCheck: agreed, cancel: { receipt: null, refetchedHash: null, agreed: true }, verdict: { original: "ok", cancel: "ok" } }))).toEqual([{ t: "anomaly", reason: "nonce_consumed_no_receipt" }]);
+  });
+
+  it("one read of the nonce condition is only a suspicion: a second RPC must agree, or 3 consecutive ticks without one", () => {
+    const suspect = [{ t: "suspect", reason: "nonce_consumed_no_receipt" }];
+    const anomaly = [{ t: "anomaly", reason: "nonce_consumed_no_receipt" }];
+    expect(decide(state(tx()), obs({ nonceFinalized: 5n }))).toEqual(suspect); // single RPC, first sighting
+    expect(decide(state(tx()), obs({ nonceFinalized: 5n, nonceCheck: { others: "none", priorStreak: 1 } }))).toEqual(suspect);
+    expect(decide(state(tx()), obs({ nonceFinalized: 5n, nonceCheck: { others: "none", priorStreak: 2 } }))).toEqual(anomaly);
+    expect(decide(state(tx()), obs({ nonceFinalized: 5n, nonceCheck: { others: "disagree", priorStreak: 99 } }))).toEqual(suspect); // another RPC cannot confirm
+    expect(decide(state(tx()), obs({ nonceFinalized: 5n, nonceCheck: { others: "agree", priorStreak: 0 } }))).toEqual(anomaly);
+  });
+
+  it("release evidence on a single RPC is withheld unless the operator opted in (reverted original AND cancel)", () => {
+    const r = receipt({ status: "reverted" });
+    const one = { singleRpc: true, finalizedNumber: 100n };
+    expect(decide(state(tx()), obs({ ...one, original: mined(r) }))).toEqual([{ t: "warn", code: "evidence_needs_second_rpc" }]);
+    expect(decide(state(tx()), obs({ ...one, original: mined(r), allowSingleRpcEvidence: true }))[0]?.t).toBe("attest");
+    const u = tx({ state: "Unknown", cancel: { maxFee: 20n, tip: 2n, to: "0xaa", value: 0n, raw: "0x02bb", txHash: CANCEL } });
+    const c = obs({ ...one, cancel: mined(receipt()), verdict: { original: "ok", cancel: "ok" } });
+    expect(decide(state(u), c)).toEqual([{ t: "warn", code: "evidence_needs_second_rpc" }]);
+    expect(decide(state(u), { ...c, allowSingleRpcEvidence: true })[0]?.t).toBe("attest");
+    // a SUCCESS original is not release evidence: no second RPC, no opt-in needed
+    expect(decide(state(tx()), obs({ ...one, original: mined(receipt()) }))[0]?.t).toBe("attest");
   });
 
   it("a stopped cid is never acted on again", () => {

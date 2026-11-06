@@ -1,9 +1,10 @@
 import { inspect } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ConfigError, Secret, loadConfig } from "../../src/config.ts";
-import { describeError, stderrLogger } from "../../src/log.ts";
+import { describeError, errorText, stderrLogger } from "../../src/log.ts";
 import { Relayer } from "../../src/worker.ts";
 import { FakeChain, FakeNear } from "./fakes.ts";
+import { startRpcStub } from "./rpc-stub.ts";
 
 const CANARY_URL_KEY = "CANARYKEY0123456789abcdef";
 const CANARY_URL = `https://sepolia.rpc.example.invalid/v3/${CANARY_URL_KEY}`;
@@ -58,6 +59,14 @@ describe("secret hygiene", () => {
     expect(() => loadConfig({ ...ENV, EVM_RPC_URL_2: ENV.EVM_RPC_URL })).toThrow(ConfigError);
   });
 
+  it("RELAYER_ALLOW_SINGLE_RPC_EVIDENCE is off unless exactly 1; anything else is refused", () => {
+    expect(loadConfig(ENV).allowSingleRpcEvidence).toBe(false);
+    expect(loadConfig({ ...ENV, RELAYER_ALLOW_SINGLE_RPC_EVIDENCE: "" }).allowSingleRpcEvidence).toBe(false);
+    expect(loadConfig({ ...ENV, RELAYER_ALLOW_SINGLE_RPC_EVIDENCE: "0" }).allowSingleRpcEvidence).toBe(false);
+    expect(loadConfig({ ...ENV, RELAYER_ALLOW_SINGLE_RPC_EVIDENCE: "1" }).allowSingleRpcEvidence).toBe(true);
+    expect(() => loadConfig({ ...ENV, RELAYER_ALLOW_SINGLE_RPC_EVIDENCE: "yes" })).toThrow(ConfigError);
+  });
+
   it("describeError returns a class and nothing else", () => {
     const err = Object.assign(new Error(`HTTP request failed.\n\nStatus: 429\nURL: ${CANARY_URL}`), { cause: new Error(`fetch failed ${CANARY_URL}`) });
     expect(describeError(err)).toBe("rate_limited");
@@ -65,33 +74,45 @@ describe("secret hygiene", () => {
     expect(describeError("whatever")).toBe("unknown");
   });
 
-  it("a full fake run whose errors embed the canary URL and key writes neither to stderr", async () => {
+  it("a full run through the REAL viem adapter, whose own errors embed the canary URL, writes neither the URL nor the key to stderr", async () => {
     const written = captureStderr();
     const chain = new FakeChain();
     const near = new FakeNear();
     await near.addSigned(0, { maxFee: 100n });
     await near.addSigned(1, { maxFee: 100n });
-    const leak = new Error(`HTTP request failed.\n\nStatus: 429\nURL: ${CANARY_URL}\nDetails: ${CANARY_NEAR_KEY}`, { cause: new Error(CANARY_URL) });
-    const relayer = new Relayer({ near, evm: [chain.client("provider#1")], log: stderrLogger });
+    let failing = false;
+    const stub = await startRpcStub(chain, { path: `/v3/${CANARY_URL_KEY}`, fail: () => (failing ? 500 : null) });
+    try {
+      const client = stub.client("provider#1");
+      // Prove the premise: the adapter's own error text really carries the URL and its key.
+      failing = true;
+      const raw = await client.getFinalized().then(() => "", (e: unknown) => errorText(e));
+      expect(raw).toContain(CANARY_URL_KEY);
+      failing = false;
 
-    near.failCommitmentOnce.add(1);
-    await relayer.tick();
-    chain.failWith = leak;
-    await relayer.tick();
-    near.failReadsWith = leak;
-    await relayer.tick(); // scan failure is logged by class, not thrown
-    near.failReadsWith = null;
-    chain.failWith = null;
-    chain.finalizeAll();
-    await relayer.tick();
-    await relayer.tick();
+      const relayer = new Relayer({ near, evm: [client], log: stderrLogger });
+      near.failCommitmentOnce.add(1);
+      await relayer.tick();
+      failing = true; // every read now fails inside viem, with the URL in its error
+      await relayer.tick();
+      near.failReadsWith = new Error(`HTTP request failed.\n\nStatus: 429\nURL: ${CANARY_URL}\nDetails: ${CANARY_NEAR_KEY}`, { cause: new Error(CANARY_URL) });
+      await relayer.tick(); // scan failure is logged by class, not thrown
+      near.failReadsWith = null;
+      failing = false;
+      chain.finalizeAll();
+      await relayer.tick();
+      await relayer.tick();
+    } finally {
+      await stub.close();
+    }
 
     const out = written.join("");
     expect(out.length).toBeGreaterThan(0);
     expect(out).not.toContain(CANARY_URL_KEY);
     expect(out).not.toContain("CANARY");
     expect(out).not.toContain(CANARY_NEAR_KEY);
-    expect(out).not.toContain("example.invalid");
+    expect(out).not.toContain("127.0.0.1");
+    expect(out).toContain("http_error"); // the real adapter's 500 was classified, not printed
     expect(out).toContain("rate_limited");
   });
 

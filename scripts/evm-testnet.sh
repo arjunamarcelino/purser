@@ -32,7 +32,13 @@ umask 077
 
 die() { echo "evm-testnet: $*" >&2; exit 1; }
 step() { echo "==> $*"; }
-scrub() { sed -E 's/ed25519:[A-Za-z0-9]{40,}/ed25519:[redacted]/g; s/secp256k1:[A-Za-z0-9]{40,}/secp256k1:[redacted]/g'; }
+# Masks key material AND any URL (a provider URL carries its API key; near-api-js errors embed the request URL).
+scrub() { sed -E 's/ed25519:[A-Za-z0-9]{40,}/ed25519:[redacted]/g; s/secp256k1:[A-Za-z0-9]{40,}/secp256k1:[redacted]/g; s#[A-Za-z][A-Za-z0-9+.-]*://[^[:space:]"'"'"'<>)]+#[url]#g'; }
+scrub_selftest() { # a canary URL (path and query key) and a canary key must not survive scrub()
+  local canary_key="CANARYKEY0123456789abcdef" out
+  out="$(printf 'POST https://rpc.example.invalid/v3/%s failed; see %s and %s\n' "$canary_key" "http://h.example.invalid:8545/x?k=$canary_key" "ed25519:$(printf 'Q%.0s' {1..50})" | scrub)"
+  case "$out" in *CANARY*|*example.invalid*|*QQQQQQQQQQ*) die "scrub() self-test failed (a canary survived): $out" ;; esac
+}
 
 # ---- config ----------------------------------------------------------------------------------------
 # Read one KEY from .env.testnet without sourcing it (it holds secrets and is not trusted shell).
@@ -84,19 +90,32 @@ report_landed() {
   local rc=$?
   rm -f "$ERRF"
   if [ "$rc" -ne 0 ] && [ "${#LANDED[@]}" -gt 0 ]; then
-    echo "evm-testnet: stopped with exit $rc. Transactions that landed in this run:" >&2
+    echo "evm-testnet: stopped with exit $rc. Transactions that landed (verified on chain) in this run:" >&2
     local l; for l in "${LANDED[@]}"; do echo "    $l" >&2; done
     echo "    (full history: $TXLOG; re-run the same subcommand to continue)" >&2
+  fi
+  if [ "$rc" -ne 0 ] && [ "${#UNVERIFIED[@]}" -gt 0 ]; then
+    echo "evm-testnet: transactions SENT but NOT verified on chain (check each before re-running):" >&2
+    local u; for u in "${UNVERIFIED[@]}"; do echo "    $u" >&2; done
   fi
 }
 trap report_landed EXIT
 
 link() { echo "https://testnet.nearblocks.io/txns/$1"; }
-record_tx() { # <label> <hash>
+# A hash parsed from near's output is only a claim until testnet-ops re-read it from the chain (it then prints
+# `TX <hash>`). "landed" is logged ONLY for a verified hash; otherwise "sent, unverified".
+UNVERIFIED=()
+record_tx() { # <label> <hash> <verified: yes|no>
   local line; line="$1: $(link "$2")"
-  LANDED+=("$line")
-  echo "    tx $line"
-  printf '%s %s\n' "$(date -u +%FT%TZ)" "$line" >> "$TXLOG"
+  if [ "${3:-no}" = yes ]; then
+    LANDED+=("$line")
+    echo "    tx landed $line"
+    printf '%s landed %s\n' "$(date -u +%FT%TZ)" "$line" >> "$TXLOG"
+  else
+    UNVERIFIED+=("$line")
+    echo "    tx sent, unverified (check it before re-running) $line"
+    printf '%s sent-unverified %s\n' "$(date -u +%FT%TZ)" "$line" >> "$TXLOG"
+  fi
 }
 
 # Read-only call with backoff (public RPCs answer 429). Reads are idempotent; writes never go through here.
@@ -115,11 +134,14 @@ exists() { [ "$(ro "${OPS[@]}" account-exists "$RPC" "$1")" = "yes" ]; }
 # One near-cli send: spawned with a timeout and scrubbed env inside testnet-ops, the tx id parsed from stderr and
 # re-read from the chain. A failure after a parsed hash still records that hash (it may have landed).
 ntx() { # <label> <signer> <near args...>
-  local label="$1" signer="$2" out rc=0 h
+  local label="$1" signer="$2" out rc=0 h v
   shift 2
   out="$("${OPS[@]}" near-tx "$RPC" "$signer" "$label" -- "$@" 2>"$ERRF")" || rc=$?
   h="$(printf '%s\n' "$out" | sed -n 's/^TXHASH //p' | head -1)"
-  if [ -n "$h" ]; then record_tx "$label" "$h"; fi
+  v="$(printf '%s\n' "$out" | sed -n 's/^TX //p' | head -1)"
+  if [ -n "$h" ]; then
+    if [ "$rc" -eq 0 ] && [ "$v" = "$h" ]; then record_tx "$label" "$h" yes; else record_tx "$label" "$h" no; fi
+  fi
   if [ "$rc" -ne 0 ]; then
     scrub < "$ERRF" >&2
     die "$label failed (see above); do not blind-retry: re-run this script, it reads chain state first"
@@ -137,6 +159,7 @@ chk_tools() {
   local t
   for t in node pnpm near jq bc; do command -v "$t" >/dev/null 2>&1 || die "missing $t"; done
   case "$(node -v)" in v26.*) ;; *) die "Node 26.x required (found $(node -v))" ;; esac
+  scrub_selftest
   "${OPS[@]}" selftest >/dev/null || die "testnet-ops self-test failed"
   "${OPS[@]}" chain-id "$RPC" >/dev/null || die "NEAR RPC does not report testnet"
 }
@@ -363,7 +386,9 @@ cmd_propose() {
   idem_args="{\"account_id\":\"$DELEGATE\",\"request_id\":\"$rid\"}"
   out="$("${OPS[@]}" evm-propose "$RPC" "$CONTRACT" "$DELEGATE" "$KEYS/evmscout.key" "$TASK" "$to" "$value" "$rid" 2>"$ERRF")" || rc=$?
   h="$(printf '%s\n' "$out" | sed -n 's/^TXHASH //p' | head -1)"
-  if [ -n "$h" ]; then record_tx "propose_payment" "$h"; fi
+  if [ -n "$h" ]; then
+    if [ "$rc" -eq 0 ] && [ "$(printf '%s\n' "$out" | sed -n 's/^TX //p' | head -1)" = "$h" ]; then record_tx "propose_payment" "$h" yes; else record_tx "propose_payment" "$h" no; fi
+  fi
   if [ "$rc" -ne 0 ]; then
     scrub < "$ERRF" >&2
     echo "evm-testnet: propose did not finish cleanly. Do NOT resend before reading get_idempotency for request_id $rid:" >&2

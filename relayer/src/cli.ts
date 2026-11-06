@@ -8,7 +8,7 @@ import { loadConfig, ConfigError, SEPOLIA_CHAIN_ID, StartupError, type Config } 
 import { ViemEvmClient, explorerTx, type EvmClient } from "./evm.ts";
 import { describeError, installCrashHandlers, providerLabel, stderrLogger as log } from "./log.ts";
 import { RpcNearClient, assertRelayerKey } from "./near.ts";
-import { Relayer, requestCancel } from "./worker.ts";
+import { Relayer, cancelExitCode, requestCancel } from "./worker.ts";
 import { startupChecks } from "./startup.ts";
 
 const USAGE = `usage:
@@ -45,18 +45,30 @@ async function main(): Promise<number> {
 
   await assertRelayerKey(near.provider, cfg.relayerAccountId, cfg.relayerKey, cfg.contractId);
   await startupChecks(cfg, evm, near, log);
-  log({ event: "config", network: cfg.network, contract_id: cfg.contractId, relayer: cfg.relayerAccountId, providers: evm.length, evidence: evm.length > 1 ? "dual_rpc" : "single_rpc", finality: cfg.finality });
+  log({ event: "config", network: cfg.network, contract_id: cfg.contractId, relayer: cfg.relayerAccountId, providers: evm.length, evidence: evm.length > 1 ? "dual_rpc" : cfg.allowSingleRpcEvidence ? "single_rpc_opt_in" : "single_rpc_withheld", finality: cfg.finality });
   log({ event: "startup_ok", chain_id: SEPOLIA_CHAIN_ID });
 
   if (cmd === "relay") {
-    await new Relayer({ near, evm, log }).run(ac.signal, { pollMs: cfg.pollMs, once: values.once === true });
+    await new Relayer({ near, evm, log, allowSingleRpcEvidence: cfg.allowSingleRpcEvidence }).run(ac.signal, { pollMs: cfg.pollMs, once: values.once === true });
     return 0;
   }
 
   if (cmd === "cancel") {
     if (arg === undefined || !/^[0-9]+$/.test(arg)) throw new ConfigError("cancel needs a commitment id");
-    const result = await requestCancel(near, log, Number(arg), decimal(values["max-fee"], "--max-fee"), decimal(values.tip, "--tip"));
-    return result === "sent" ? 0 : 1;
+    const cid = Number(arg);
+    const out = await requestCancel(near, log, cid, decimal(values["max-fee"], "--max-fee"), decimal(values.tip, "--tip"));
+    const txNote = near.lastTxHash ? ` (NEAR tx ${near.lastTxHash})` : "";
+    const code = cancelExitCode(out);
+    if (code === 0) {
+      process.stdout.write(`cid ${cid}: the cancel is on chain${out.result === "refused" ? " (it was already requested; nothing new was sent)" : ""}${txNote}. The running relayer broadcasts it; run \`status\` to follow it.\n`);
+      return code;
+    }
+    if (code === 1) {
+      process.stderr.write(`cid ${cid}: the cancel was REFUSED and nothing was requested (the commitment is not Unknown, or the contract rejected the call)${txNote}.\n`);
+      return code;
+    }
+    process.stderr.write(`cid ${cid}: UNRESOLVED. The request was sent but its outcome could not be confirmed${txNote}. Run \`status\` and check whether a cancel exists for this commitment BEFORE running this command again (a second request is only safe because the contract rejects a duplicate).\n`);
+    return code;
   }
 
   // status

@@ -78,6 +78,7 @@ const EnvSchema = z.object({
   EVM_RPC_URL: httpsUrl("EVM_RPC_URL"),
   EVM_RPC_URL_2: optional.pipe(httpsUrl("EVM_RPC_URL_2").optional()),
   OPERATOR_ACCOUNT_ID: optional,
+  RELAYER_ALLOW_SINGLE_RPC_EVIDENCE: optional.pipe(z.enum(["0", "1"], { error: "RELAYER_ALLOW_SINGLE_RPC_EVIDENCE must be 1 (opt in) or unset" }).optional()),
   RELAYER_POLL_MS: optional.transform((v) => (v === undefined ? undefined : Number(v))).pipe(z.number({ error: "RELAYER_POLL_MS must be a number" }).int().min(1000).max(600_000).optional()),
 });
 
@@ -91,6 +92,12 @@ export interface Config {
   evmRpcUrls: Secret[];
   /** For the "relayer != owner" check, when the operator account is known (the contract has no owner view). */
   operatorAccountId: string | undefined;
+  /**
+   * Release evidence (a landed cancel, a reverted original) is attested only when a second, independent RPC
+   * agrees. With ONE RPC configured it is not attested at all unless the operator opts in with
+   * RELAYER_ALLOW_SINGLE_RPC_EVIDENCE=1 (the single provider then becomes a trusted witness).
+   */
+  allowSingleRpcEvidence: boolean;
   pollMs: number;
   /** Finality is fixed. `Safe` never changes contract state, so there is no knob. */
   finality: "finalized";
@@ -114,6 +121,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
     relayerKey: new Secret(e.RELAYER_PRIVATE_KEY),
     evmRpcUrls: urls.map((u) => new Secret(u)),
     operatorAccountId: e.OPERATOR_ACCOUNT_ID,
+    allowSingleRpcEvidence: e.RELAYER_ALLOW_SINGLE_RPC_EVIDENCE === "1",
     pollMs: e.RELAYER_POLL_MS ?? 15_000,
     finality: "finalized",
   };

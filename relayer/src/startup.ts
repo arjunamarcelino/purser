@@ -8,7 +8,7 @@ import type { NearClient } from "./near.ts";
 
 export { StartupError };
 
-export async function startupChecks(cfg: Pick<Config, "relayerAccountId" | "operatorAccountId">, evm: EvmClient[], near: NearClient, log: Logger): Promise<void> {
+export async function startupChecks(cfg: Pick<Config, "relayerAccountId" | "operatorAccountId"> & Partial<Pick<Config, "allowSingleRpcEvidence">>, evm: EvmClient[], near: NearClient, log: Logger): Promise<void> {
   for (const c of evm) {
     let id: bigint;
     try {
@@ -23,7 +23,10 @@ export async function startupChecks(cfg: Pick<Config, "relayerAccountId" | "oper
       throw new StartupError(`${c.label}: the "finalized" block tag is not supported (${describeError(err)}); use a provider that serves it`);
     }
   }
-  if (evm.length < 2) log({ event: "warn", code: "single_rpc_evidence", cid: null });
+  if (evm.length < 2) {
+    // One RPC cannot corroborate itself: release evidence is withheld unless the operator opted in.
+    log({ event: "warn", code: "single_rpc_evidence", cid: null, detail: cfg.allowSingleRpcEvidence === true ? "opt_in_single_rpc_evidence_enabled" : "release_evidence_disabled_set_EVM_RPC_URL_2" });
+  }
 
   await near.pin();
   const evmCfg = await near.getEvmCfg();

@@ -3,7 +3,7 @@ import { Relayer, requestCancel } from "../../src/worker.ts";
 import type { LogEvent } from "../../src/log.ts";
 import { FakeChain, FakeNear } from "./fakes.ts";
 
-function setup(opts: { maxFee: bigint; baseFee: bigint; rpcs?: number }) {
+function setup(opts: { maxFee: bigint; baseFee: bigint; rpcs?: number; allowSingle?: boolean }) {
   const chain = new FakeChain();
   chain.baseFee = opts.baseFee;
   const near = new FakeNear();
@@ -15,6 +15,7 @@ function setup(opts: { maxFee: bigint; baseFee: bigint; rpcs?: number }) {
     log: (e) => events.push(e),
     nowMs: () => clock,
     rebroadcastMs: 60_000,
+    ...(opts.allowSingle !== undefined ? { allowSingleRpcEvidence: opts.allowSingle } : {}),
   });
   return { chain, near, events, relayer, advanceMs: (ms: number) => (clock += ms) };
 }
@@ -65,7 +66,8 @@ describe("relayer sim: instant-mine", () => {
 
 describe("relayer sim: stuck original -> mark_unknown -> cancel -> cancel attested", () => {
   it("runs the whole reclaim flow and stops acting once evidence is recorded", async () => {
-    const { chain, near, events, relayer, advanceMs } = setup({ maxFee: 10n, baseFee: 1000n });
+    // One RPC: the cancel is release evidence, attested only because the operator opted in.
+    const { chain, near, events, relayer, advanceMs } = setup({ maxFee: 10n, baseFee: 1000n, allowSingle: true });
     await near.addSigned(0, { maxFee: 10n });
 
     await relayer.tick();
@@ -85,8 +87,8 @@ describe("relayer sim: stuck original -> mark_unknown -> cancel -> cancel attest
 
     // Operator trigger: the contract signs the cancel at the ceiling.
     const log = (e: LogEvent) => events.push(e);
-    expect(await requestCancel(near, log, 0, 10_000n, 100n)).toBe("sent");
-    expect(await requestCancel(near, log, 0, 10_000n, 100n)).toBe("refused"); // compare-and-set
+    expect(await requestCancel(near, log, 0, 10_000n, 100n)).toEqual({ result: "sent", onChain: true });
+    expect(await requestCancel(near, log, 0, 10_000n, 100n)).toEqual({ result: "refused", onChain: true }); // compare-and-set; the first cancel is on chain
 
     advanceMs(61_000);
     await relayer.tick(); // broadcasts the cancel; mined at once
@@ -106,15 +108,21 @@ describe("relayer sim: stuck original -> mark_unknown -> cancel -> cancel attest
     expect(events.filter((e) => e.event === "warn" && e.code === "awaiting_owner_confirm_release")).toHaveLength(1);
   });
 
-  it("an unmined original that later disappears behind someone else's nonce is an anomaly, then ignored", async () => {
+  it("an unmined original that disappears behind someone else's nonce is an anomaly only after 3 consecutive ticks (one RPC), then ignored", async () => {
     const { chain, near, events, relayer, advanceMs } = setup({ maxFee: 10n, baseFee: 1000n });
     await near.addSigned(0, { maxFee: 10n });
     await relayer.tick();
     // Another party burns nonce 0 (no receipt for either of our hashes is visible).
     chain.receipts.set(`0x${"ee".repeat(32)}`, { status: "success", blockNumber: 85n, blockHash: `0x${"cc".repeat(32)}` });
+    const anomalies = () => events.filter((e) => e.event === "anomaly" && e.reason === "nonce_consumed_no_receipt").length;
+    for (let i = 0; i < 2; i++) {
+      advanceMs(61_000);
+      await relayer.tick();
+      expect(anomalies()).toBe(0); // one or two reads are not enough to stop
+    }
     advanceMs(61_000);
     await relayer.tick();
-    expect(events.some((e) => e.event === "anomaly" && e.reason === "nonce_consumed_no_receipt")).toBe(true);
+    expect(anomalies()).toBe(1);
     const sends = chain.sends;
     near.nowNsValue += near.cfg.minUnknownAgeNs * 2n;
     advanceMs(61_000);

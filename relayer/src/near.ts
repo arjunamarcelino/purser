@@ -15,7 +15,7 @@ import {
   TransactionExecutionError,
 } from "near-api-js/rpc-errors";
 import { NearChainReader, UnknownBlockError, retryRateLimited, withTimeout } from "@purser/chain-read";
-import type { PurserViews, ReservationState } from "@purser/types";
+import { parseU64Safe, type PurserViews, type ReservationState } from "@purser/types";
 import { z } from "zod";
 import { StartupError, type Secret } from "./config.ts";
 import type { Hex } from "./evm.ts";
@@ -157,6 +157,11 @@ export interface NearClient {
   getRelayer(): Promise<string | null>;
   getCommitment(cid: number): Promise<CommitmentLite | null>;
   getSignedTx(cid: number): Promise<SignedTx | null>;
+  /**
+   * `get_signed_tx` at OPTIMISTIC finality: sees what a send just executed, which the pinned FINAL views lag behind.
+   * Only used to resolve an uncertain `request_cancel`; every decision of the loop reads the pinned final view.
+   */
+  getSignedTxFresh(cid: number): Promise<SignedTx | null>;
   getLane(path: string): Promise<Lane | null>;
   /** Idempotent by contract design: a blind resend is safe. Finality is always `Finalized`. */
   attest(cid: number, txHash: Hex, outcome: AttestOutcome): Promise<SendResult>;
@@ -164,6 +169,8 @@ export interface NearClient {
   markUnknown(cid: number): Promise<SendResult>;
   /** Compare-and-set on the contract: a second call fails, so an `unknown` is resolved by re-reading get_signed_tx. */
   requestCancel(cid: number, maxFee: bigint, tip: bigint): Promise<SendResult>;
+  /** Hash of the last send that got an outcome back (null if none did). For the operator to look up; never a secret. */
+  lastTxHash?: string | null;
 }
 
 export const RELAYER_METHODS = ["attest_external", "mark_unknown", "request_cancel"] as const;
@@ -180,6 +187,15 @@ const isProtocolRejection = (err: unknown) =>
   err instanceof AccessKeyMethodNameMismatchActionError ||
   err instanceof AccessKeyRequiresFullAccessActionError ||
   err instanceof AccessKeyNotEnoughAllowanceActionError;
+
+/** A NEAR execution status -> SendResult. `Failure` is a definite refusal; anything without a `SuccessValue` is unproven. */
+export function classifyNearStatus(status: unknown): SendResult {
+  if (typeof status === "object" && status !== null) {
+    if ("SuccessValue" in status && (status as { SuccessValue?: unknown }).SuccessValue !== undefined) return "sent";
+    if ("Failure" in status && (status as { Failure?: unknown }).Failure !== undefined) return "refused";
+  }
+  return "unknown";
+}
 
 export function classifyNearSendError(err: unknown): SendResult {
   if (isProtocolRejection(err) || err instanceof ContractExecutionError || err instanceof TransactionExecutionError) return "refused";
@@ -203,6 +219,7 @@ export class RpcNearClient implements NearClient {
   readonly #signal: AbortSignal;
   readonly #timeoutMs: number;
   #height: bigint | null = null;
+  lastTxHash: string | null = null;
 
   constructor(opts: RpcNearClientOptions) {
     // near-api-js 7: `retries` is the ATTEMPT count; chain-read does the 429 retrying.
@@ -247,6 +264,17 @@ export class RpcNearClient implements NearClient {
   async getSignedTx(cid: number) {
     return parseSignedTx(await this.#view("get_signed_tx", { commitment_id: cid }));
   }
+  async getSignedTxFresh(cid: number) {
+    const raw = await retryRateLimited(
+      () =>
+        withTimeout(
+          this.provider.callFunctionRaw({ contractId: this.#contractId, method: "get_signed_tx", args: new TextEncoder().encode(JSON.stringify({ commitment_id: cid })), blockQuery: { finality: "optimistic" } }),
+          this.#signal,
+        ),
+      { signal: this.#signal },
+    );
+    return parseSignedTx(parseU64Safe(new TextDecoder().decode(Uint8Array.from(raw.result))));
+  }
   async getLane(path: string) {
     return parseLane(await this.#view("evm_lane", { path }));
   }
@@ -282,8 +310,8 @@ export class RpcNearClient implements NearClient {
     });
     try {
       const res = await Promise.race([call, timeout]);
-      const status = res.status as { SuccessValue?: string } | string;
-      return typeof status === "object" && status.SuccessValue !== undefined ? "sent" : "unknown";
+      this.lastTxHash = (res as { transaction?: { hash?: string } }).transaction?.hash ?? null;
+      return classifyNearStatus(res.status);
     } catch (err) {
       return classifyNearSendError(err);
     } finally {

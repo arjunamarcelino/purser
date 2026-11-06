@@ -74,14 +74,21 @@ export interface TxFields {
   txHash: string | null;
   to: string;
   value: bigint;
+  /** The contract's view of the fee fields (`max_fee_per_gas`, `max_priority_fee_per_gas`). */
+  maxFee: bigint;
+  tip: bigint;
 }
 
 export type RawVerdict = "ok" | "absent" | "bad_hash" | "bad_signer" | "bad_chain" | "bad_fields" | "unparseable";
 
+/** Gas of a plain transfer: the contract fixes it (evm_tx::GAS_LIMIT). */
+export const TRANSFER_GAS = 21_000n;
+
 /**
  * Validate `raw` against what the contract said it signed: keccak256(raw) == tx_hash, the recovered
- * signer is the lane address, chain id and nonce/to/value match. Anything else is an anomaly and the
- * bytes are never broadcast.
+ * signer is the lane address, and every field the contract describes matches: type 0x02, chain id, nonce,
+ * gas limit 21000, `to`, `value`, empty calldata, empty access list, and both fee fields. Anything else is an
+ * anomaly and the bytes are never broadcast (the relayer does not send what the contract did not describe).
  */
 export async function verifyRaw(t: TxFields, lane: { address: string; nonce: bigint }, chainId: bigint): Promise<RawVerdict> {
   if (t.raw === null || t.txHash === null) return "absent";
@@ -89,8 +96,12 @@ export async function verifyRaw(t: TxFields, lane: { address: string; nonce: big
   try {
     const serialized = t.raw as TransactionSerialized;
     const parsed = parseTransaction(serialized);
+    if (parsed.type !== "eip1559") return "bad_fields";
     if (BigInt(parsed.chainId ?? -1) !== chainId) return "bad_chain";
     if (BigInt(parsed.nonce ?? -1) !== lane.nonce || (parsed.to ?? "").toLowerCase() !== t.to.toLowerCase() || (parsed.value ?? 0n) !== t.value) return "bad_fields";
+    if (parsed.gas !== TRANSFER_GAS) return "bad_fields";
+    if ((parsed.data ?? "0x") !== "0x" || (parsed.accessList ?? []).length > 0) return "bad_fields";
+    if (parsed.maxFeePerGas !== t.maxFee || parsed.maxPriorityFeePerGas !== t.tip) return "bad_fields";
     const signer = await recoverTransactionAddress({ serializedTransaction: serialized });
     if (signer.toLowerCase() !== lane.address.toLowerCase()) return "bad_signer";
     return "ok";

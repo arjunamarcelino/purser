@@ -8,12 +8,16 @@
 
 import { setTimeout as delay } from "node:timers/promises";
 import { SEPOLIA_CHAIN_ID } from "./config.ts";
-import { verifyRaw, type EvmClient, type Hex, type RawVerdict, type Receipt, type SendOutcome } from "./evm.ts";
+import { TRANSFER_GAS, verifyRaw, type EvmClient, type Hex, type RawVerdict, type Receipt, type SendOutcome } from "./evm.ts";
 import { describeError, type Logger, type WarnCode } from "./log.ts";
-import type { NearClient, SendResult, SignedTx } from "./near.ts";
+import type { Lane, NearClient, SendResult, SignedTx } from "./near.ts";
 
-/** Gas of a plain transfer: the contract fixes it (evm_tx::GAS_LIMIT). */
-export const TRANSFER_GAS = 21_000n;
+export { TRANSFER_GAS };
+
+/** The nonce-consumed-without-receipt anomaly needs this many consecutive ticks when there is no second RPC to ask. */
+export const NONCE_ANOMALY_TICKS = 3;
+/** Ids discovered per round of concurrent `get_commitment` reads. */
+export const SCAN_BATCH = 4;
 
 // ---- pure core -----------------------------------------------------------------------------------
 
@@ -21,7 +25,11 @@ export interface HashObs {
   receipt: Receipt | null;
   /** The block hash re-fetched at `receipt.blockNumber` (only read when that block is at or below `finalized`). */
   refetchedHash: Hex | null;
-  /** Every OTHER configured RPC reports the same status and block hash. True when there is no other RPC. */
+  /**
+   * Every OTHER configured RPC reports the same status and block hash, with that block at or below ITS finalized
+   * head. Computed for any release evidence (a cancel, a reverted original). True when there is no other RPC;
+   * `Observations.singleRpc` says so, and decide() then refuses release evidence unless the operator opted in.
+   */
   agreed: boolean;
 }
 
@@ -38,6 +46,16 @@ export interface Observations {
   canRebroadcast: boolean;
   recipient: "eoa" | "contract" | "unknown";
   balanceShort: boolean;
+  /** Only ONE RPC is configured: nothing can corroborate release evidence. */
+  singleRpc: boolean;
+  /** RELAYER_ALLOW_SINGLE_RPC_EVIDENCE=1. */
+  allowSingleRpcEvidence: boolean;
+  /**
+   * Corroboration of "nonce consumed at finalized, no receipt for either hash". `others`: "none" = no second RPC;
+   * "agree" = every other RPC says the same; "disagree" = at least one cannot confirm. `priorStreak` = consecutive
+   * earlier ticks on which the condition held (only consulted when there is no second RPC).
+   */
+  nonceCheck: { others: "none" | "agree" | "disagree"; priorStreak: number };
 }
 
 export interface CidState {
@@ -55,6 +73,8 @@ export type Action =
   | { t: "attest"; kind: Kind; hash: Hex; success: boolean; blockNumber: bigint; blockHash: Hex }
   | { t: "mark_unknown" }
   | { t: "anomaly"; reason: AnomalyReason }
+  /** The nonce-consumed condition held this tick but is not yet confirmed: count it, do not stop. */
+  | { t: "suspect"; reason: "nonce_consumed_no_receipt" }
   | { t: "warn"; code: WarnCode };
 
 type Finality = "none" | "mined" | "reorg_guard" | "finalized";
@@ -114,14 +134,25 @@ export function decide(s: CidState, o: Observations): Action[] {
         out.push({ t: "warn", code: "evidence_rpcs_disagree" });
         continue;
       }
+      // Release evidence on ONE RPC's word is never sent unless the operator explicitly opted in.
+      if (releaseEvidence && o.singleRpc && !o.allowSingleRpcEvidence) {
+        out.push({ t: "warn", code: "evidence_needs_second_rpc" });
+        continue;
+      }
       out.push({ t: "attest", kind, hash, success, blockNumber: r.blockNumber, blockHash: r.blockHash });
     }
     return out;
   }
 
   // 2. Nothing mined. If the sender's nonce is already consumed at `finalized` yet neither of our hashes has
-  //    a receipt, something else won the nonce (or the RPC is pruned): stop and alert, do not guess.
-  if (o.nonceFinalized !== null && o.nonceFinalized > tx.nonce) return [{ t: "anomaly", reason: "nonce_consumed_no_receipt" }];
+  //    a receipt, something else won the nonce (or the RPC is pruned, or a load balancer served two backends).
+  //    One read is not enough to stop: every other RPC must say the same, or (alone) it must hold on
+  //    NONCE_ANOMALY_TICKS consecutive ticks. The stop is re-evaluated every tick and clears with the condition.
+  if (o.nonceFinalized !== null && o.nonceFinalized > tx.nonce) {
+    const n = o.nonceCheck;
+    if (n.others === "agree" || (n.others === "none" && n.priorStreak + 1 >= NONCE_ANOMALY_TICKS)) return [{ t: "anomaly", reason: "nonce_consumed_no_receipt" }];
+    return [{ t: "suspect", reason: "nonce_consumed_no_receipt" }];
+  }
 
   const out: Action[] = [];
   if (tx.state === "Signed") {
@@ -149,28 +180,42 @@ export interface RelayerDeps {
   /** Wall clock in ms; only throttles rebroadcasts. */
   nowMs?: () => number;
   rebroadcastMs?: number;
+  /** RELAYER_ALLOW_SINGLE_RPC_EVIDENCE=1: attest release evidence on one RPC's word (default false). */
+  allowSingleRpcEvidence?: boolean;
+  /** Concurrent `get_commitment` reads while discovering ids (default SCAN_BATCH). */
+  scanBatch?: number;
 }
 
 const TERMINAL = new Set(["Confirmed", "Failed", "Cancelled"]);
 
 export class Relayer {
   readonly #d: RelayerDeps;
-  #cursor = 0;
+  /** First id never read. Ids below it are known: terminal/non-EVM (`#done`) or live (`#active`). Memory only. */
+  #nextUnseen = 0;
+  #caughtUp = false;
+  /** Live EVM commitments -> created_at (immutable, so it is read once at discovery). */
+  readonly #active = new Map<number, bigint>();
   readonly #done = new Set<number>();
-  readonly #stopped = new Set<number>();
+  /** Stopped for the process lifetime: a broadcast came back with a different hash than the contract signed. */
+  readonly #hardStopped = new Set<number>();
+  /** Currently stopped by an observation-based anomaly; re-evaluated (and cleared) on every tick. */
+  readonly #anomalies = new Map<number, AnomalyReason>();
+  readonly #nonceStreak = new Map<number, number>();
   readonly #lastBroadcast = new Map<string, number>();
   readonly #warned = new Set<string>();
   readonly #recipientKind = new Map<number, "eoa" | "contract" | "unknown">();
+  /** A lane's address never changes for a path. */
+  readonly #lanes = new Map<string, Lane>();
 
   constructor(deps: RelayerDeps) {
     this.#d = deps;
   }
 
   get stoppedCids(): ReadonlySet<number> {
-    return this.#stopped;
+    return new Set([...this.#hardStopped, ...this.#anomalies.keys()]);
   }
 
-  /** One pass over every non-terminal EVM commitment. Returns how many were active. */
+  /** One pass over every live EVM commitment. Returns how many were active. */
   async tick(): Promise<number> {
     const { near, log } = this.#d;
     await near.pin();
@@ -181,72 +226,110 @@ export class Relayer {
       return 0;
     }
 
-    const active: number[] = [];
-    let scanned = this.#cursor;
-    for (let cid = this.#cursor; ; cid++) {
-      if (this.#done.has(cid)) {
-        scanned = cid + 1;
-        continue;
-      }
-      let c;
-      try {
-        c = await near.getCommitment(cid);
-      } catch (err) {
-        // Never skip an id we could not read: stop the scan here, retry from this id next tick.
-        log({ event: "error", where: "scan", class: describeError(err) });
-        log({ event: "warn", code: "cursor_stalled", cid });
-        break;
-      }
-      if (c === null) break; // ids are assigned contiguously: the first absent id is the end
-      scanned = cid + 1;
-      if (!c.evm || TERMINAL.has(c.state)) this.#done.add(cid);
-      else active.push(cid);
-    }
-    while (this.#done.has(this.#cursor)) this.#cursor++;
-    this.#d.log({ event: "tick", active: active.length, scanned_to: scanned });
+    await this.#discover();
+    const cids = [...this.#active.keys()].sort((x, y) => x - y);
+    log({ event: "tick", active: cids.length, scanned_to: this.#nextUnseen });
 
-    const lanes = new Map<string, Awaited<ReturnType<NearClient["getLane"]>>>();
-    for (const cid of active) {
+    for (const cid of cids) {
       try {
-        await this.#process(cid, nowNs, cfg, lanes);
+        await this.#process(cid, nowNs, cfg);
       } catch (err) {
         log({ event: "error", where: "process", class: describeError(err) });
       }
     }
-    return active.length;
+    return cids.length;
   }
 
-  async #process(cid: number, nowNs: bigint, cfg: NonNullable<Awaited<ReturnType<NearClient["getEvmCfg"]>>>, lanes: Map<string, Awaited<ReturnType<NearClient["getLane"]>>>): Promise<void> {
+  /**
+   * Find ids this process has not seen yet, `scanBatch` reads at a time (ids are contiguous; the first absent id
+   * is the end). Each id is read here exactly once for its whole life: a terminal one is remembered and never
+   * read again; a live one is afterwards read through `get_signed_tx` only (its state, in the same read the
+   * decision needs). Once caught up, a tick probes ONE id past the end.
+   */
+  async #discover(): Promise<void> {
+    const { near, log } = this.#d;
+    const width = Math.max(1, this.#d.scanBatch ?? SCAN_BATCH);
+    let first = true;
+    for (;;) {
+      const size = first && this.#caughtUp ? 1 : width;
+      first = false;
+      const ids = Array.from({ length: size }, (_, i) => this.#nextUnseen + i);
+      const results = await Promise.allSettled(ids.map((id) => near.getCommitment(id)));
+      for (const [i, r] of results.entries()) {
+        const cid = ids[i] as number;
+        if (r.status === "rejected") {
+          // Never skip an id we could not read: stop here, retry from this id next tick.
+          log({ event: "error", where: "scan", class: describeError(r.reason) });
+          log({ event: "warn", code: "cursor_stalled", cid });
+          return;
+        }
+        const c = r.value;
+        if (c === null) {
+          this.#caughtUp = true;
+          return;
+        }
+        this.#nextUnseen = cid + 1;
+        if (!c.evm || TERMINAL.has(c.state)) this.#done.add(cid);
+        else this.#active.set(cid, c.createdAtNs);
+      }
+      this.#caughtUp = false;
+    }
+  }
+
+  async #lane(path: string): Promise<Lane | null> {
+    const known = this.#lanes.get(path);
+    if (known) return known;
+    const lane = await this.#d.near.getLane(path);
+    if (lane) this.#lanes.set(path, lane);
+    return lane;
+  }
+
+  async #process(cid: number, nowNs: bigint, cfg: NonNullable<Awaited<ReturnType<NearClient["getEvmCfg"]>>>): Promise<void> {
     const { near, evm } = this.#d;
-    if (this.#stopped.has(cid)) return;
-    const [commitment, tx] = await Promise.all([near.getCommitment(cid), near.getSignedTx(cid)]);
-    if (commitment === null || tx === null) return;
+    if (this.#hardStopped.has(cid)) return;
+    const createdAtNs = this.#active.get(cid);
+    if (createdAtNs === undefined) return;
+    // The single per-tick read of this id: it carries the state, so no separate get_commitment is needed.
+    const tx = await near.getSignedTx(cid);
+    if (tx === null) return;
+    if (TERMINAL.has(tx.state)) {
+      this.#active.delete(cid);
+      this.#done.add(cid);
+      this.#clear(cid);
+      return;
+    }
     const base = { nowNs, cfg: { minUnknownAgeNs: cfg.minUnknownAgeNs, reservedAmbiguousMinAgeNs: cfg.reservedAmbiguousMinAgeNs } };
-    const state: CidState = { tx, createdAtNs: commitment.createdAtNs, stopped: false };
+    const state: CidState = { tx, createdAtNs, stopped: false };
+    const single = evm.length < 2;
+    const shared = { singleRpc: single, allowSingleRpcEvidence: this.#d.allowSingleRpcEvidence === true, nonceCheck: { others: "none" as const, priorStreak: this.#nonceStreak.get(cid) ?? 0 } };
 
     let obs: Observations;
     if (tx.state === "Reserved") {
-      obs = { ...base, finalizedNumber: null, nonceFinalized: null, original: null, cancel: null, verdict: { original: "absent", cancel: "absent" }, canRebroadcast: false, recipient: "eoa", balanceShort: false };
+      obs = { ...base, ...shared, finalizedNumber: null, nonceFinalized: null, original: null, cancel: null, verdict: { original: "absent", cancel: "absent" }, canRebroadcast: false, recipient: "eoa", balanceShort: false };
     } else {
-      if (!lanes.has(tx.path)) lanes.set(tx.path, await near.getLane(tx.path));
-      const lane = lanes.get(tx.path);
+      const lane = await this.#lane(tx.path);
       if (!lane) return;
       const primary = evm[0] as EvmClient;
       const from = lane.address as Hex;
+      const laneRef = { address: lane.address, nonce: tx.nonce };
       const verdict = {
-        original: await verifyRaw({ raw: tx.original.raw, txHash: tx.original.txHash, to: tx.original.to, value: tx.original.value }, { address: lane.address, nonce: tx.nonce }, SEPOLIA_CHAIN_ID),
-        cancel: tx.cancel ? await verifyRaw({ raw: tx.cancel.raw, txHash: tx.cancel.txHash, to: tx.cancel.to, value: tx.cancel.value }, { address: lane.address, nonce: tx.nonce }, SEPOLIA_CHAIN_ID) : ("absent" as RawVerdict),
+        original: await verifyRaw({ raw: tx.original.raw, txHash: tx.original.txHash, to: tx.original.to, value: tx.original.value, maxFee: tx.original.maxFee, tip: tx.original.tip }, laneRef, SEPOLIA_CHAIN_ID),
+        cancel: tx.cancel ? await verifyRaw({ raw: tx.cancel.raw, txHash: tx.cancel.txHash, to: tx.cancel.to, value: tx.cancel.value, maxFee: tx.cancel.maxFee, tip: tx.cancel.tip }, laneRef, SEPOLIA_CHAIN_ID) : ("absent" as RawVerdict),
       };
       // Order matters: the finalized nonce is read BEFORE the receipts (see decide, rule 2).
       const nonceFinalized = await primary.getNonce(from, "finalized");
       const fin = await primary.getFinalized();
-      const original = tx.original.txHash ? await this.#observe(tx.original.txHash, fin.number, tx.cancel !== null) : null;
-      const cancel = tx.cancel?.txHash ? await this.#observe(tx.cancel.txHash, fin.number, true) : null;
+      const original = tx.original.txHash ? await this.#observe(tx.original.txHash, fin.number, "original") : null;
+      const cancel = tx.cancel?.txHash ? await this.#observe(tx.cancel.txHash, fin.number, "cancel") : null;
+      const consumed = nonceFinalized > tx.nonce && original?.receipt == null && cancel?.receipt == null;
+      const others = consumed ? await this.#othersConfirmConsumed(from, tx) : "none";
       const signed = tx.state === "Signed";
       const recipient = signed ? await this.#recipient(cid, tx.original.to as Hex) : "eoa";
       const balanceShort = signed ? await this.#balanceShort(from, tx.original.value, tx.original.maxFee, cfg.maxFeeCeiling) : false;
       obs = {
         ...base,
+        ...shared,
+        nonceCheck: { others, priorStreak: shared.nonceCheck.priorStreak },
         finalizedNumber: fin.number,
         nonceFinalized,
         original,
@@ -258,21 +341,41 @@ export class Relayer {
       };
     }
 
-    for (const a of decide(state, obs)) await this.#run(cid, a);
+    const actions = decide(state, obs);
+    const nonceHeld = actions.some((a) => a.t === "suspect" || (a.t === "anomaly" && a.reason === "nonce_consumed_no_receipt"));
+    if (!nonceHeld) this.#nonceStreak.delete(cid);
+    const prior = this.#anomalies.get(cid);
+    if (prior !== undefined && !actions.some((a) => a.t === "anomaly")) {
+      this.#anomalies.delete(cid);
+      this.#d.log({ event: "anomaly_cleared", cid, reason: prior });
+    }
+    for (const a of actions) await this.#run(cid, a);
   }
 
-  async #observe(hash: Hex, finalizedNumber: bigint, needAgreement: boolean): Promise<HashObs> {
+  #clear(cid: number): void {
+    this.#anomalies.delete(cid);
+    this.#nonceStreak.delete(cid);
+    this.#recipientKind.delete(cid);
+  }
+
+  /** Release evidence (a cancel, or a reverted original) needs every other RPC to report the same status AND block, final there too. */
+  async #observe(hash: Hex, finalizedNumber: bigint, kind: Kind): Promise<HashObs> {
     const [primary, ...others] = this.#d.evm as [EvmClient, ...EvmClient[]];
     const receipt = await primary.getReceipt(hash);
     if (receipt === null) return { receipt: null, refetchedHash: null, agreed: true };
     if (receipt.blockNumber > finalizedNumber) return { receipt, refetchedHash: null, agreed: true };
     const refetched = await primary.getBlock(receipt.blockNumber);
     let agreed = true;
-    if (needAgreement) {
+    if (kind === "cancel" || receipt.status === "reverted") {
       for (const other of others) {
         try {
           const r = await other.getReceipt(hash);
-          if (r === null || r.status !== receipt.status || r.blockHash.toLowerCase() !== receipt.blockHash.toLowerCase()) agreed = false;
+          if (r === null || r.status !== receipt.status || r.blockHash.toLowerCase() !== receipt.blockHash.toLowerCase()) {
+            agreed = false;
+            continue;
+          }
+          const [fin, block] = await Promise.all([other.getFinalized(), other.getBlock(receipt.blockNumber)]);
+          if (fin.number < receipt.blockNumber || block === null || block.hash.toLowerCase() !== receipt.blockHash.toLowerCase()) agreed = false;
         } catch (err) {
           agreed = false;
           this.#d.log({ event: "error", where: "evidence_second_rpc", class: describeError(err), rpc: other.label });
@@ -280,6 +383,22 @@ export class Relayer {
       }
     }
     return { receipt, refetchedHash: refetched?.hash ?? null, agreed };
+  }
+
+  /** The other RPCs must also see the nonce consumed at finalized and no receipt for either hash. */
+  async #othersConfirmConsumed(from: Hex, tx: SignedTx): Promise<"none" | "agree" | "disagree"> {
+    const others = this.#d.evm.slice(1);
+    if (others.length === 0) return "none";
+    for (const other of others) {
+      try {
+        if ((await other.getNonce(from, "finalized")) <= tx.nonce) return "disagree";
+        for (const h of [tx.original.txHash, tx.cancel?.txHash ?? null]) if (h && (await other.getReceipt(h)) !== null) return "disagree";
+      } catch (err) {
+        this.#d.log({ event: "error", where: "nonce_second_rpc", class: describeError(err), rpc: other.label });
+        return "disagree";
+      }
+    }
+    return "agree";
   }
 
   async #recipient(cid: number, to: Hex): Promise<"eoa" | "contract" | "unknown"> {
@@ -314,9 +433,18 @@ export class Relayer {
     const { near, log } = this.#d;
     switch (a.t) {
       case "anomaly":
-        this.#stopped.add(cid);
-        log({ event: "anomaly", cid, reason: a.reason });
+        // Logged on the transition only; the next tick re-evaluates and clears it if the condition is gone.
+        if (this.#anomalies.get(cid) !== a.reason) {
+          this.#anomalies.set(cid, a.reason);
+          log({ event: "anomaly", cid, reason: a.reason });
+        }
         return;
+      case "suspect": {
+        const streak = (this.#nonceStreak.get(cid) ?? 0) + 1;
+        this.#nonceStreak.set(cid, streak);
+        log({ event: "warn", code: "nonce_unconfirmed", cid, detail: `${streak}/${NONCE_ANOMALY_TICKS}` });
+        return;
+      }
       case "warn": {
         const key = `${cid}:${a.code}`;
         if (this.#warned.has(key)) return;
@@ -349,7 +477,7 @@ export class Relayer {
         for (const [rpc, r] of results) {
           log({ event: "broadcast", cid, kind: a.kind, hash: a.hash, rpc, outcome: r.kind });
           if (r.kind === "Accepted" && r.hash.toLowerCase() !== a.hash.toLowerCase()) {
-            this.#stopped.add(cid);
+            this.#hardStopped.add(cid);
             log({ event: "anomaly", cid, reason: "hash_mismatch" });
             return;
           }
@@ -382,24 +510,53 @@ export class Relayer {
 
 // ---- operator trigger: the one cancel ------------------------------------------------------------
 
+export interface CancelOutcome {
+  result: SendResult;
+  /** The signed cancel is visible in `get_signed_tx` (at optimistic finality): the request took effect. */
+  onChain: boolean;
+}
+/** 0 = the cancel is on chain (requested now or earlier); 1 = refused, nothing requested; 3 = unresolved, check before re-running. */
+export function cancelExitCode(o: CancelOutcome): 0 | 1 | 3 {
+  if (o.onChain) return 0;
+  return o.result === "refused" ? 1 : 3;
+}
+export interface CancelOptions {
+  /** Polls of the optimistic view after an uncertain send (default 6). */
+  pollAttempts?: number;
+  pollMs?: number;
+  sleep?: (ms: number) => Promise<void>;
+}
+
 /**
  * Ask the contract for the single nonce-burn cancel of an Unknown commitment. The running loop sees
- * the signed cancel in `get_signed_tx` and broadcasts it. Compare-and-set on the contract: a duplicate
- * request fails there, so an `unknown` send is resolved by re-reading the view.
+ * the signed cancel in `get_signed_tx` and broadcasts it. The contract's compare-and-set is the only real guard
+ * against a duplicate: a second request fails there. The send is NEVER retried here; an uncertain one
+ * (`unknown`) is resolved by polling `get_signed_tx` at OPTIMISTIC finality (the pinned final view lags a send
+ * that waited for EXECUTED_OPTIMISTIC), and a `Failure` outcome is a definite `refused`.
  */
-export async function requestCancel(near: NearClient, log: Logger, cid: number, maxFee: bigint, tip: bigint): Promise<SendResult> {
-  await near.pin();
-  const tx = await near.getSignedTx(cid);
-  if (tx === null || tx.state !== "Unknown" || tx.cancel !== null) {
-    log({ event: "cancel_requested", cid, max_fee: maxFee, tip, result: "refused" });
-    return "refused";
+export async function requestCancel(near: NearClient, log: Logger, cid: number, maxFee: bigint, tip: bigint, opts: CancelOptions = {}): Promise<CancelOutcome> {
+  const before = await near.getSignedTxFresh(cid);
+  if (before === null || before.state !== "Unknown" || before.cancel !== null) {
+    const onChain = before?.cancel != null;
+    log({ event: "cancel_requested", cid, max_fee: maxFee, tip, result: "refused", on_chain: onChain });
+    return { result: "refused", onChain };
   }
   let result = await near.requestCancel(cid, maxFee, tip);
+  let onChain = result === "sent";
   if (result === "unknown") {
-    await near.pin();
-    const after = await near.getSignedTx(cid);
-    if (after?.cancel) result = "sent";
+    const sleep = opts.sleep ?? ((ms: number) => delay(ms));
+    for (let i = 0; i < (opts.pollAttempts ?? 6) && !onChain; i++) {
+      await sleep(opts.pollMs ?? 2000);
+      try {
+        if ((await near.getSignedTxFresh(cid))?.cancel) {
+          onChain = true;
+          result = "sent";
+        }
+      } catch (err) {
+        log({ event: "error", where: "cancel_resolve", class: describeError(err) });
+      }
+    }
   }
-  log({ event: "cancel_requested", cid, max_fee: maxFee, tip, result });
-  return result;
+  log({ event: "cancel_requested", cid, max_fee: maxFee, tip, result, on_chain: onChain });
+  return { result, onChain };
 }
