@@ -1,0 +1,2 @@
+METRIC proptest.cases 256 test=contract_properties
+test result: ok. 3 passed; 0 failed; 0 ignored

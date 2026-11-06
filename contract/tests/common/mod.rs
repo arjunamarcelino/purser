@@ -317,6 +317,16 @@ pub fn err_string(res: ExecutionFinalResult) -> String {
     format!("{:?}", res.into_result().unwrap_err())
 }
 
+/// One machine-readable observation for `scripts/metrics.sh` (format: `METRIC <name> <int> k=v ...`).
+/// The aggregator rejects anything else, so every number in `docs/METRICS.md` comes through here.
+pub fn metric(name: &str, value: i128, tags: &[(&str, &str)]) {
+    let mut line = format!("METRIC {name} {value}");
+    for (k, v) in tags {
+        line.push_str(&format!(" {k}={v}"));
+    }
+    println!("{line}");
+}
+
 // ---- race proof ---------------------------------------------------------------------------------
 
 /// What one `propose_payment` receipt at Purser did.
