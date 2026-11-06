@@ -165,8 +165,7 @@ Sepolia evidence.
 - **Cap is value, not gas.** Gas is paid in ETH from the derived address and sits outside the cap. The fee
   ceiling and `min_value` (both owner-set) and the dedicated task's cap bound the exposure.
 - **One in-flight payment per derived address (lane).** The relayer attests only at Sepolia `finalized`,
-  which lags head by about 19 minutes (observed 14 to 15 minutes from broadcast to attestation on both live runs), so throughput is about one payment per 15 minutes per delegate
-  (expect 20-25 minutes from broadcast to settlement in the relayer's own estimate).
+  which lags head by about 19 minutes (observed 14 to 15 minutes from broadcast to attestation on both live runs), so throughput is about one payment per 15 minutes per delegate.
 - **Safe finality never changes state.** Only `Finalized` attestations move a commitment.
 - **EOA recipients only in v1.** A 21000-gas send to a contract can revert. A reverted receipt is attested
   `success=false`, moves nothing, and releases only through the owner. The relayer warns when `eth_getCode(to)`
