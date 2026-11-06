@@ -1,7 +1,8 @@
-# TS services join this list when they land (relayer).
+# TS services join this list when they land.
 packages:
   - packages/*
   - proposer
+  - relayer
   - indexer
   - app
 

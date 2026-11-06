@@ -5,21 +5,21 @@
 //! question: can the contract build an EIP-1559 transaction, RLP-encode it and hash it within NEAR size
 //! and gas limits? That is the prerequisite for never blind-signing an EVM payment.
 //!
-//! What it is NOT: it is not wired into `propose_payment`, `open_reservation` or `payload_scheme()`, and
-//! `Chain::Evm` is still rejected. [`sighash`] is `pub(crate)`: nothing outside this crate can ask the
-//! contract for a signable digest over caller-supplied fields. The raw export below exists only so a
-//! sandbox test can read gas; it is stateless, take no deposit and make no promise. It is a plain
-//! `extern "C"` export (not `#[near]`), so it never appear in the ABI or in `packages/types`.
+//! Since Prompt 12 the encoder itself lives in the always-compiled, pure [`crate::evm_tx`]; this module is
+//! only the measurement harness around it (a looped hash, and one raw export). The 36 vectors and the
+//! `rlp`/`sha3` oracles moved to `evm_tx`'s tests. The spike marker strings live ONLY here, so a default
+//! build never contains them and `scripts/check-wasm-clean.sh` can refuse a spike wasm.
 //!
-//! The digest is `keccak256(0x02 || rlp([chain_id, nonce, max_priority_fee_per_gas, max_fee_per_gas,
-//! gas_limit, to, value, data, access_list]))` with `data` and `access_list` always empty: exactly the
-//! native-transfer shape a payment needs. keccak is the NEAR host function (no wasm bytes); only the RLP
-//! encoder is code.
+//! What it is NOT: it adds nothing to `propose_payment`, `open_reservation` or any `#[near]` method. The
+//! raw export below exists only so a sandbox test can read gas; it is stateless, takes no deposit and makes
+//! no promise. It is a plain `extern "C"` export (not `#[near]`), so it never appears in the ABI or in
+//! `packages/types`. keccak is the NEAR host function (no wasm bytes); only the RLP encoder is code.
 
 // The raw exports below exist only on wasm32, like near-sdk's own; on the host (unit tests, clippy, ABI generation)
 // the helpers they call are used by the tests only.
 #![cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 
+use crate::evm_tx::{self, Eip1559Unsigned};
 use near_sdk::env;
 
 /// Embedded in every spike wasm (and logged by the exports so `lto` cannot drop it).
@@ -33,72 +33,9 @@ const MAX_REPEAT: u32 = 1000;
 /// to [u8;20] | value u128 | repeat u32, all big-endian. No JSON, so parsing adds no size to the delta.
 const INPUT_LEN: usize = 8 + 8 + 16 + 16 + 8 + 20 + 16 + 4;
 
-/// An unsigned EIP-1559 native transfer. `u128` bounds the fee and value fields (real EVM fields are 256-bit;
-/// the bound is deliberate and recorded in the spike's "does not establish" list).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct Eip1559Unsigned {
-    pub chain_id: u64,
-    pub nonce: u64,
-    pub max_priority_fee_per_gas: u128,
-    pub max_fee_per_gas: u128,
-    pub gas_limit: u64,
-    pub to: [u8; 20],
-    pub value: u128,
-}
-
-/// RLP of a byte string. Callers pass at most 32 bytes, so only the single-byte and short forms exist.
-fn push_string(out: &mut Vec<u8>, bytes: &[u8]) {
-    match bytes {
-        [b] if *b < 0x80 => out.push(*b),
-        _ => {
-            debug_assert!(bytes.len() <= 55);
-            out.push(0x80 + bytes.len() as u8);
-            out.extend_from_slice(bytes);
-        }
-    }
-}
-
-/// RLP of an unsigned integer: minimal big-endian bytes, zero is the empty string (`0x80`).
-fn push_uint(out: &mut Vec<u8>, v: u128) {
-    let be = v.to_be_bytes();
-    let first = be.iter().position(|b| *b != 0).unwrap_or(be.len());
-    push_string(out, &be[first..]);
-}
-
-/// RLP list header for a payload of `len` bytes (short form up to 55, long form above).
-fn push_list_header(out: &mut Vec<u8>, len: usize) {
-    if len <= 55 {
-        out.push(0xc0 + len as u8);
-    } else {
-        let be = (len as u64).to_be_bytes();
-        let first = be.iter().position(|b| *b != 0).unwrap_or(be.len() - 1);
-        out.push(0xf7 + (be.len() - first) as u8);
-        out.extend_from_slice(&be[first..]);
-    }
-}
-
-/// `0x02 || rlp([... , data = "", access_list = []])`, the exact bytes that are hashed.
-pub(crate) fn encode_unsigned(tx: &Eip1559Unsigned) -> Vec<u8> {
-    let mut body = Vec::with_capacity(96);
-    push_uint(&mut body, tx.chain_id as u128);
-    push_uint(&mut body, tx.nonce as u128);
-    push_uint(&mut body, tx.max_priority_fee_per_gas);
-    push_uint(&mut body, tx.max_fee_per_gas);
-    push_uint(&mut body, tx.gas_limit as u128);
-    push_string(&mut body, &tx.to);
-    push_uint(&mut body, tx.value);
-    body.push(0x80); // data: empty
-    body.push(0xc0); // access_list: empty
-    let mut out = Vec::with_capacity(body.len() + 4);
-    out.push(0x02);
-    push_list_header(&mut out, body.len());
-    out.extend_from_slice(&body);
-    out
-}
-
-/// The 32-byte signing hash. keccak256 is the NEAR host function.
+/// The 32-byte signing hash, through the shared encoder. keccak256 is the NEAR host function.
 pub(crate) fn sighash(tx: &Eip1559Unsigned) -> [u8; 32] {
-    env::keccak256_array(encode_unsigned(tx))
+    evm_tx::sighash(tx, |b| env::keccak256_array(b))
 }
 
 fn be<const N: usize>(input: &[u8], at: usize) -> [u8; N] {
@@ -151,115 +88,7 @@ pub extern "C" fn evm_spike_sighash() {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use near_sdk::serde_json::Value;
-    use proptest::prelude::*;
     use sha3::{Digest, Keccak256};
-
-    fn unhex(s: &str) -> Vec<u8> {
-        let s = s.strip_prefix("0x").unwrap_or(s);
-        (0..s.len())
-            .step_by(2)
-            .map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap())
-            .collect()
-    }
-
-    fn tx_from(v: &Value) -> Eip1559Unsigned {
-        let n = |k: &str| v[k].as_str().unwrap().to_string();
-        Eip1559Unsigned {
-            chain_id: n("chain_id").parse().unwrap(),
-            nonce: n("nonce").parse().unwrap(),
-            max_priority_fee_per_gas: n("max_priority_fee_per_gas").parse().unwrap(),
-            max_fee_per_gas: n("max_fee_per_gas").parse().unwrap(),
-            gas_limit: n("gas_limit").parse().unwrap(),
-            to: unhex(&n("to")).try_into().unwrap(),
-            value: n("value").parse().unwrap(),
-        }
-    }
-
-    /// Independent oracle: the parity `rlp` crate for the bytes, `sha3` for the hash.
-    fn oracle(tx: &Eip1559Unsigned) -> (Vec<u8>, [u8; 32]) {
-        let mut s = rlp::RlpStream::new_list(9);
-        s.append(&tx.chain_id)
-            .append(&tx.nonce)
-            .append(&tx.max_priority_fee_per_gas)
-            .append(&tx.max_fee_per_gas);
-        s.append(&tx.gas_limit)
-            .append(&tx.to.as_slice())
-            .append(&tx.value)
-            .append_empty_data()
-            .begin_list(0);
-        let mut bytes = vec![0x02];
-        bytes.extend_from_slice(&s.out());
-        (bytes.clone(), Keccak256::digest(&bytes).into())
-    }
-
-    #[test]
-    fn matches_every_viem_and_chainsig_vector() {
-        let file: Value = near_sdk::serde_json::from_str(include_str!(
-            "../tests/fixtures/evm-spike-vectors.json"
-        ))
-        .unwrap();
-        let vectors = file["vectors"].as_array().unwrap();
-        assert_eq!(vectors.len(), 36, "the fixture generator emits 36 vectors");
-        let (mut short, mut long) = (0, 0);
-        for v in vectors {
-            let tx = tx_from(v);
-            let bytes = encode_unsigned(&tx);
-            assert_eq!(
-                bytes,
-                unhex(v["unsigned_serialized"].as_str().unwrap()),
-                "rlp bytes: {}",
-                v["name"]
-            );
-            assert_eq!(
-                sighash(&tx).to_vec(),
-                unhex(v["sighash"].as_str().unwrap()),
-                "sighash: {}",
-                v["name"]
-            );
-            if bytes[1] >= 0xf8 {
-                long += 1
-            } else {
-                short += 1
-            }
-        }
-        assert!(
-            short > 0 && long > 0,
-            "both RLP list-header forms must be covered ({short} short, {long} long)"
-        );
-    }
-
-    #[test]
-    fn integer_boundaries_agree_with_the_rlp_crate() {
-        let edges_u128 = [
-            0u128,
-            1,
-            0x7f,
-            0x80,
-            0xff,
-            0x100,
-            u64::MAX as u128,
-            u64::MAX as u128 + 1,
-            u128::MAX,
-        ];
-        let edges_u64 = [0u64, 1, 0x7f, 0x80, 0xff, 0x100, u64::MAX];
-        for &fee in &edges_u128 {
-            for &n in &edges_u64 {
-                let tx = Eip1559Unsigned {
-                    chain_id: n,
-                    nonce: n,
-                    max_priority_fee_per_gas: fee,
-                    max_fee_per_gas: fee,
-                    gas_limit: n,
-                    to: [0u8; 20],
-                    value: fee,
-                };
-                let (bytes, hash) = oracle(&tx);
-                assert_eq!(encode_unsigned(&tx), bytes);
-                assert_eq!(sighash(&tx), hash);
-            }
-        }
-    }
 
     /// The fold rule itself is checked against an independent reference in the sandbox test
     /// (`reference_digest`, repeat 2/3/10/100/1000); here: round 1 is the plain sighash, later rounds differ,
@@ -275,11 +104,8 @@ mod tests {
             to: [0x11; 20],
             value: 10u128.pow(16),
         };
-        assert_eq!(
-            run(start, 1),
-            oracle(&start).1,
-            "repeat = 1 is the plain sighash"
-        );
+        let plain: [u8; 32] = Keccak256::digest(evm_tx::encode_unsigned(&start)).into();
+        assert_eq!(run(start, 1), plain, "repeat = 1 is the plain sighash");
         assert_ne!(
             run(start, 1),
             run(start, 2),
@@ -305,19 +131,5 @@ mod tests {
             script.contains(&format!("'{EVM_SPIKE_MARKER}'")),
             "scripts/check-wasm-clean.sh must carry the same marker"
         );
-    }
-
-    proptest! {
-        #![proptest_config(ProptestConfig::with_cases(2000))]
-        #[test]
-        fn random_transactions_match_the_rlp_crate_and_sha3(
-            chain_id in any::<u64>(), nonce in any::<u64>(), tip in any::<u128>(), cap in any::<u128>(),
-            gas in any::<u64>(), to in any::<[u8; 20]>(), value in any::<u128>(),
-        ) {
-            let tx = Eip1559Unsigned { chain_id, nonce, max_priority_fee_per_gas: tip, max_fee_per_gas: cap, gas_limit: gas, to, value };
-            let (bytes, hash) = oracle(&tx);
-            prop_assert_eq!(encode_unsigned(&tx), bytes);
-            prop_assert_eq!(sighash(&tx), hash);
-        }
     }
 }

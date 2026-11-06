@@ -68,7 +68,7 @@ async fn add_delegate(
     Ok(owner
         .call(c.id(), "add_delegate")
         .args_json(
-            json!({ "task_id": task_id, "account_id": account_id, "derivation_path": "m/44/0" }),
+            json!({ "task_id": task_id, "account_id": account_id, "derivation_path": format!("m/{task_id}/{account_id}") }),
         )
         .max_gas()
         .transact()

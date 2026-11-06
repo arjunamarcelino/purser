@@ -2,6 +2,22 @@
 // Regenerate: make types-gen
 
 /**
+ * What an attestation says happened on the EVM chain.
+ */
+export type ExternalOutcome = {
+  Landed: {
+    block_hash: string;
+    block_number: string;
+    finality: Finality;
+    signature?: SignatureInput | null;
+    success: boolean;
+  };
+};
+/**
+ * How final the reported landing is. Only `Finalized` changes state; `Safe` is recorded as an event.
+ */
+export type Finality = "Finalized" | "Safe";
+/**
  * Which chain a payment settles on. `Evm` is the stretch external path.
  */
 export type Chain =
@@ -25,7 +41,9 @@ export type TokenSpec =
  * Reservation lifecycle state (TECHNICAL §4). Variant order is the borsh wire format — append-only.
  */
 export type ReservationState = "Reserved" | "Signed" | "Confirmed" | "Unknown" | "Failed" | "Cancelled";
+export type EvmLaneResult = LaneView | null;
 export type GetCommitmentResult = Commitment | null;
+export type GetEvmCfgResult = EvmCfgView | null;
 export type GetIdempotencyResult = IdemState | null;
 /**
  * Tri-state idempotency entry, keyed by `(AccountId, RequestId)` — the proposing delegate plus the client request id (TECHNICAL §6).
@@ -38,6 +56,8 @@ export type IdemState =
       };
     }
   | "Failed";
+export type GetRelayerResult = string | null;
+export type GetSignedTxResult = SignedTxView | null;
 export type GetTaskResult = TaskBudget | null;
 export type InvariantResult = InvariantView | null;
 export type IsDelegateAuthorizedResult = boolean;
@@ -45,15 +65,35 @@ export type IsRecipientAllowedResult = boolean;
 export type ListCommitmentsResult = Commitment[];
 export type ListDelegatesResult = Delegate[];
 export type ListTaskIdsResult = string[];
+export type MarkUnknownResult = boolean;
+export type PromiseOrValueBoolean = boolean;
 export type PromiseOrValueuint64 = number;
 export type RemainingBudgetResult = string;
 export type RevokeDelegateResult = boolean;
+export type TaskUnitResult = string | null;
 export type VersionResult = string;
 
 export interface AddDelegateArgs {
   task_id: string;
   account_id: string;
   derivation_path: string;
+}
+export interface AttestExternalArgs {
+  commitment_id: number;
+  tx_hash: string;
+  outcome: ExternalOutcome;
+}
+/**
+ * `(r, s, yParity)` as hex (`r`, `s`: 64 digits; optional `0x`).
+ */
+export interface SignatureInput {
+  r: string;
+  s: string;
+  y_parity: number;
+}
+export interface CacheDerivedKeyArgs {
+  task_id: string;
+  account_id: string;
 }
 /**
  * A single reservation in the ledger.
@@ -94,7 +134,7 @@ export interface PaymentIntent {
   chain: Chain;
   memo?: string | null;
   /**
-   * `AccountId` (NEAR) or `0x`-address (EVM). Validated/parsed by `payload::build_near_payload`.
+   * `AccountId` (NEAR) or `0x`-address (EVM). Validated/parsed by `payload::build_near_payload` (NEAR) or `evm_tx::parse_address` (EVM).
    */
   recipient: string;
   token: TokenSpec;
@@ -119,6 +159,9 @@ export interface Config {
    * How old a `Reserved` commitment must be (block-timestamp ns) before `reconcile` accepts it.
    */
   reconcile_min_age_ns: string;
+}
+export interface ConfirmReleaseArgs {
+  commitment_id: number;
 }
 export interface ContractSourceMetadataArgs {}
 export interface CreateTaskArgs {
@@ -151,13 +194,107 @@ export interface Delegate {
    */
   public_key?: string | null;
 }
+export interface EnableEvmTaskArgs {
+  task_id: string;
+}
+/**
+ * The owner-set EVM configuration plus the fixed constants a client needs.
+ */
+export interface EvmCfgView {
+  cancel_bump_bps: string;
+  chain_id: string;
+  gas_limit: string;
+  max_fee_ceiling: string;
+  max_priority_ceiling: string;
+  min_unknown_age_ns: string;
+  min_value: string;
+  /**
+   * `Reserved` EVM commitments older than this may be marked Unknown (Ambiguous).
+   */
+  reserved_ambiguous_min_age_ns: string;
+}
+export interface EvmLaneArgs {
+  path: string;
+}
+/**
+ * A derived-address lane.
+ */
+export interface LaneView {
+  /**
+   * `0x` + 40 hex (the address the operator funds).
+   */
+  address: string;
+  chain_id: string;
+  in_flight?: number | null;
+  /**
+   * `None` until seeded.
+   */
+  next_nonce?: string | null;
+  path: string;
+  /**
+   * The cached 64-byte uncompressed key, hex.
+   */
+  pubkey: string;
+}
+/**
+ * The EVM payload scheme, surfaced by [`Purser::evm_payload_scheme`] (a SEPARATE view: changing `payload_scheme()`'s return type would break `packages/types`, the indexer and the app).
+ */
+export interface EvmPayloadScheme {
+  chain: string;
+  encoding: string;
+  hash_algorithm: string;
+  preimage: string;
+  version: number;
+}
+export interface EvmPayloadSchemeArgs {}
+/**
+ * One built transaction (original or cancel) as the relayer needs it.
+ */
+export interface EvmTxView {
+  max_fee_per_gas: string;
+  max_priority_fee_per_gas: string;
+  /**
+   * `0x02 || rlp(...)` with the signature; `None` until a verified signature is recorded.
+   */
+  raw_tx?: string | null;
+  /**
+   * The digest that was signed.
+   */
+  sighash: string;
+  to: string;
+  tx_hash?: string | null;
+  value: string;
+}
 export interface GetCommitmentArgs {
   commitment_id: number;
 }
 export interface GetConfigArgs {}
+export interface GetEvmCfgArgs {}
 export interface GetIdempotencyArgs {
   account_id: string;
   request_id: string;
+}
+export interface GetRelayerArgs {}
+export interface GetSignedTxArgs {
+  commitment_id: number;
+}
+/**
+ * Everything EVM about one commitment ([`Purser::get_signed_tx`]).
+ */
+export interface SignedTxView {
+  cancel?: EvmTxView | null;
+  chain_id: string;
+  commitment_id: number;
+  /**
+   * `cancel_landed` | `original_reverted` once the relayer attested release evidence.
+   */
+  evidence?: string | null;
+  from: string;
+  nonce: string;
+  original: EvmTxView;
+  path: string;
+  signed_at_ns?: string | null;
+  state: ReservationState;
 }
 export interface GetTaskArgs {
   task_id: string;
@@ -235,6 +372,9 @@ export interface ListTaskIdsArgs {
   from_index: number;
   limit: number;
 }
+export interface MarkUnknownArgs {
+  commitment_id: number;
+}
 export interface NewArgs {
   owner: string;
   signer_id: string;
@@ -285,22 +425,49 @@ export interface RemoveRecipientAllowlistArgs {
   task_id: string;
   recipients: string[];
 }
+export interface RequestCancelArgs {
+  commitment_id: number;
+  max_fee: string;
+  tip: string;
+}
 export interface RevokeDelegateArgs {
   task_id: string;
   account_id: string;
 }
+export interface SeedEvmNonceArgs {
+  path: string;
+  nonce: string;
+}
+export interface SetEvmCfgArgs {
+  chain_id: string;
+  max_fee_ceiling: string;
+  max_priority_ceiling: string;
+  min_value: string;
+  min_unknown_age_ns: string;
+}
 export interface SetRecipientAllowlistArgs {
   task_id: string;
   recipients: string[];
+}
+export interface SetRelayerArgs {
+  relayer: string;
+}
+export interface TaskUnitArgs {
+  task_id: string;
 }
 export interface VersionArgs {}
 
 /** View methods (free, no signer). */
 export interface PurserViews {
   contract_source_metadata: { args: ContractSourceMetadataArgs; result: void };
+  evm_lane: { args: EvmLaneArgs; result: EvmLaneResult };
+  evm_payload_scheme: { args: EvmPayloadSchemeArgs; result: EvmPayloadScheme };
   get_commitment: { args: GetCommitmentArgs; result: GetCommitmentResult };
   get_config: { args: GetConfigArgs; result: Config };
+  get_evm_cfg: { args: GetEvmCfgArgs; result: GetEvmCfgResult };
   get_idempotency: { args: GetIdempotencyArgs; result: GetIdempotencyResult };
+  get_relayer: { args: GetRelayerArgs; result: GetRelayerResult };
+  get_signed_tx: { args: GetSignedTxArgs; result: GetSignedTxResult };
   get_task: { args: GetTaskArgs; result: GetTaskResult };
   invariant: { args: InvariantArgs; result: InvariantResult };
   is_delegate_authorized: { args: IsDelegateAuthorizedArgs; result: IsDelegateAuthorizedResult };
@@ -310,23 +477,33 @@ export interface PurserViews {
   list_task_ids: { args: ListTaskIdsArgs; result: ListTaskIdsResult };
   payload_scheme: { args: PayloadSchemeArgs; result: PayloadScheme };
   remaining_budget: { args: RemainingBudgetArgs; result: RemainingBudgetResult };
+  task_unit: { args: TaskUnitArgs; result: TaskUnitResult };
   version: { args: VersionArgs; result: VersionResult };
 }
 
 /** Change methods a client may call (private callbacks excluded). */
 export interface PurserCalls {
   add_delegate: { args: AddDelegateArgs; result: void };
+  attest_external: { args: AttestExternalArgs; result: void };
+  cache_derived_key: { args: CacheDerivedKeyArgs; result: PromiseOrValueBoolean };
+  confirm_release: { args: ConfirmReleaseArgs; result: void };
   create_task: { args: CreateTaskArgs; result: void };
+  enable_evm_task: { args: EnableEvmTaskArgs; result: void };
+  mark_unknown: { args: MarkUnknownArgs; result: MarkUnknownResult };
   new: { args: NewArgs; result: void };
   propose_payment: { args: ProposePaymentArgs; result: PromiseOrValueuint64 };
   reconcile: { args: ReconcileArgs; result: void };
   remove_recipient_allowlist: { args: RemoveRecipientAllowlistArgs; result: void };
+  request_cancel: { args: RequestCancelArgs; result: PromiseOrValueuint64 };
   revoke_delegate: { args: RevokeDelegateArgs; result: RevokeDelegateResult };
+  seed_evm_nonce: { args: SeedEvmNonceArgs; result: void };
+  set_evm_cfg: { args: SetEvmCfgArgs; result: void };
   set_recipient_allowlist: { args: SetRecipientAllowlistArgs; result: void };
+  set_relayer: { args: SetRelayerArgs; result: void };
 }
 
-export const VIEW_METHODS = ["contract_source_metadata", "get_commitment", "get_config", "get_idempotency", "get_task", "invariant", "is_delegate_authorized", "is_recipient_allowed", "list_commitments", "list_delegates", "list_task_ids", "payload_scheme", "remaining_budget", "version"] as const satisfies readonly (keyof PurserViews)[];
-export const CALL_METHODS = ["add_delegate", "create_task", "new", "propose_payment", "reconcile", "remove_recipient_allowlist", "revoke_delegate", "set_recipient_allowlist"] as const satisfies readonly (keyof PurserCalls)[];
+export const VIEW_METHODS = ["contract_source_metadata", "evm_lane", "evm_payload_scheme", "get_commitment", "get_config", "get_evm_cfg", "get_idempotency", "get_relayer", "get_signed_tx", "get_task", "invariant", "is_delegate_authorized", "is_recipient_allowed", "list_commitments", "list_delegates", "list_task_ids", "payload_scheme", "remaining_budget", "task_unit", "version"] as const satisfies readonly (keyof PurserViews)[];
+export const CALL_METHODS = ["add_delegate", "attest_external", "cache_derived_key", "confirm_release", "create_task", "enable_evm_task", "mark_unknown", "new", "propose_payment", "reconcile", "remove_recipient_allowlist", "request_cancel", "revoke_delegate", "seed_evm_nonce", "set_evm_cfg", "set_recipient_allowlist", "set_relayer"] as const satisfies readonly (keyof PurserCalls)[];
 
 /** u64 fields typed `bigint`: parse view JSON with a reviver keyed on these names. */
 export const U64_BIGINT_FIELDS = ["added_at", "created_at", "updated_at"] as const;

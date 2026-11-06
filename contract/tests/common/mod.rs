@@ -81,6 +81,19 @@ static DRIVER: Artifact = Artifact {
     cell: OnceCell::const_new(),
 };
 
+/// The mock MPC signer fixture (TEST-ONLY; see tests/fixtures/mock-signer/README.md). Own target dir, the same
+/// one the README command uses (`CARGO_TARGET_DIR=$PWD/target/mock-signer`), built `--locked --no-abi`.
+static MOCK_SIGNER: Artifact = Artifact {
+    env: "PURSER_WASM_MOCK_SIGNER",
+    manifest: "tests/fixtures/mock-signer/Cargo.toml",
+    features: None,
+    target_subdir: Some("mock-signer"),
+    cell: OnceCell::const_new(),
+};
+
+pub async fn mock_signer_wasm() -> &'static [u8] {
+    MOCK_SIGNER.get().await
+}
 pub async fn prod_wasm() -> &'static [u8] {
     PROD.get().await
 }
@@ -175,7 +188,7 @@ pub async fn setup(
     for d in delegates {
         batch = batch.call(
             Function::new("add_delegate")
-                .args_json(json!({ "task_id": TASK, "account_id": d, "derivation_path": "m/0" }))
+                .args_json(json!({ "task_id": TASK, "account_id": d, "derivation_path": format!("m/{d}") }))
                 .gas(Gas::from_tgas(20)),
         );
     }
@@ -425,4 +438,278 @@ pub async fn race_proof(
         proof.raced()
     );
     Ok(proof)
+}
+
+// ---- EVM path (mock signer) ---------------------------------------------------------------------
+
+/// Sepolia (the only chain id the contract accepts).
+pub const SEPOLIA: u64 = 11_155_111;
+/// Fee ceilings the EVM tests configure (wei per gas): an original is priced AT these.
+pub const MAX_FEE: u128 = 100_000_000_000;
+pub const MAX_TIP: u128 = 2_000_000_000;
+/// The EVM test task's cap, in wei (5e15), and the value of a typical payment (1e15).
+pub const EVM_CAP: u128 = 5_000_000_000_000_000;
+pub const EVM_VALUE: u128 = 1_000_000_000_000_000;
+/// A recipient that is not the lane's own address.
+pub const EVM_TO: &str = "0x1111111111111111111111111111111111111111";
+
+/// How far `evm_setup` takes the lane.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Stage {
+    /// cfg, EVM task, delegate and relayer only: no cached key.
+    Bare,
+    /// ... plus the derived key cached (lane exists, unseeded).
+    Cached,
+    /// ... plus `seed_evm_nonce(path, 7)`.
+    Seeded,
+}
+
+pub const SEED_NONCE: u64 = 7;
+
+pub struct EvmCrew {
+    pub worker: Worker<Sandbox>,
+    pub purser: Contract,
+    pub signer: Contract,
+    pub owner: Account,
+    pub relayer: Account,
+    pub delegate: Account,
+    pub path: String,
+}
+
+/// Deploy the mock signer (its own account is its owner) and Purser pointed at it, then configure one EVM
+/// task `t1` (cap [`EVM_CAP`] wei) with one delegate on `path` and a relayer. All account names come from
+/// the same `dev_create_account` sequence, so identical setups cost identical gas (A/B measurements).
+pub async fn evm_setup(
+    worker: Worker<Sandbox>,
+    path: &str,
+    min_unknown_age_ns: u64,
+    stage: Stage,
+) -> anyhow::Result<EvmCrew> {
+    let signer = worker.dev_deploy(mock_signer_wasm().await).await?;
+    signer.call("new").transact().await?.into_result()?;
+    let purser = worker.dev_deploy(prod_wasm().await).await?;
+    let owner = worker.dev_create_account().await?;
+    let relayer = worker.dev_create_account().await?;
+    let delegate = worker.dev_create_account().await?;
+    purser
+        .call("new")
+        .args_json(json!({ "owner": owner.id(), "signer_id": signer.id() }))
+        .transact()
+        .await?
+        .into_result()?;
+    let tgas = |n| Gas::from_tgas(n);
+    owner
+        .batch(purser.id())
+        .call(
+            Function::new("create_task")
+                .args_json(json!({
+                    "task_id": TASK, "cap": EVM_CAP.to_string(), "token": "NearNative", "crew_cap": CREW_CAP,
+                }))
+                .gas(tgas(20)),
+        )
+        .call(
+            Function::new("set_evm_cfg")
+                .args_json(json!({
+                    "chain_id": SEPOLIA.to_string(),
+                    "max_fee_ceiling": MAX_FEE.to_string(),
+                    "max_priority_ceiling": MAX_TIP.to_string(),
+                    "min_value": "1000000000",
+                    "min_unknown_age_ns": min_unknown_age_ns.to_string(),
+                }))
+                .gas(tgas(20)),
+        )
+        .call(
+            Function::new("enable_evm_task")
+                .args_json(json!({ "task_id": TASK }))
+                .gas(tgas(20)),
+        )
+        .call(
+            Function::new("add_delegate")
+                .args_json(json!({ "task_id": TASK, "account_id": delegate.id(), "derivation_path": path }))
+                .gas(tgas(20)),
+        )
+        .call(
+            Function::new("set_relayer")
+                .args_json(json!({ "relayer": relayer.id() }))
+                .gas(tgas(20)),
+        )
+        .transact()
+        .await?
+        .into_result()?;
+    let crew = EvmCrew {
+        worker,
+        purser,
+        signer,
+        owner,
+        relayer,
+        delegate,
+        path: path.to_string(),
+    };
+    if stage != Stage::Bare {
+        let _ = crew.cache_key().await?;
+    }
+    if stage == Stage::Seeded {
+        crew.owner
+            .call(crew.purser.id(), "seed_evm_nonce")
+            .args_json(json!({ "path": path, "nonce": SEED_NONCE.to_string() }))
+            .transact()
+            .await?
+            .into_result()?;
+    }
+    Ok(crew)
+}
+
+impl EvmCrew {
+    /// Owner caches the derived key (a real promise to the mock signer's view).
+    pub async fn cache_key(&self) -> anyhow::Result<ExecutionFinalResult> {
+        let res = self.cache_key_raw().await?;
+        assert!(res.is_success(), "cache_derived_key: {:?}", res.failures());
+        Ok(res)
+    }
+
+    /// `cache_derived_key` without asserting success (for refusal tests).
+    pub async fn cache_key_raw(&self) -> anyhow::Result<ExecutionFinalResult> {
+        Ok(self
+            .owner
+            .call(self.purser.id(), "cache_derived_key")
+            .args_json(json!({ "task_id": TASK, "account_id": self.delegate.id() }))
+            .max_gas()
+            .transact()
+            .await?)
+    }
+
+    pub async fn set_mode(&self, mode: &str) -> anyhow::Result<()> {
+        self.signer
+            .call("set_mode")
+            .args_json(json!({ "mode": mode }))
+            .transact()
+            .await?
+            .into_result()?;
+        Ok(())
+    }
+
+    pub async fn view(&self, method: &str, args: Value) -> anyhow::Result<Value> {
+        Ok(self.purser.view(method).args_json(args).await?.json()?)
+    }
+
+    /// `invariant` view; `holds` must be true unless the task is frozen. Returns `(completed, outstanding, frozen)`.
+    pub async fn inv(&self) -> anyhow::Result<(u128, u128, bool)> {
+        let v = self.view("invariant", json!({ "task_id": TASK })).await?;
+        let n = |k: &str| v[k].as_str().unwrap().parse::<u128>().unwrap();
+        let frozen = v["frozen"].as_bool().unwrap();
+        assert!(
+            v["holds"].as_bool().unwrap() || frozen,
+            "INVARIANT (I) VIOLATED without a freeze: {v}"
+        );
+        Ok((n("completed"), n("outstanding"), frozen))
+    }
+
+    pub fn intent(&self, value: u128) -> Value {
+        json!({
+            "chain": { "Evm": { "chain_id": SEPOLIA } },
+            "recipient": EVM_TO,
+            "amount": value.to_string(),
+            "token": "NearNative",
+            "memo": null,
+        })
+    }
+
+    /// The delegate's `propose_payment` with `gas_tgas` prepaid (300 = max).
+    pub async fn propose(
+        &self,
+        value: u128,
+        request_id: &str,
+        gas_tgas: u64,
+    ) -> anyhow::Result<ExecutionFinalResult> {
+        Ok(self
+            .delegate
+            .call(self.purser.id(), "propose_payment")
+            .args_json(
+                json!({ "task": TASK, "request_id": request_id, "intent": self.intent(value) }),
+            )
+            .gas(Gas::from_tgas(gas_tgas))
+            .transact()
+            .await?)
+    }
+
+    /// Propose with max gas and require the whole receipt tree to succeed; returns the commitment id.
+    pub async fn propose_ok(
+        &self,
+        value: u128,
+        request_id: &str,
+    ) -> anyhow::Result<(u64, ExecutionFinalResult)> {
+        let res = self.propose(value, request_id, 300).await?;
+        assert!(res.is_success(), "propose failed: {:?}", res.failures());
+        let cid: u64 = res.clone().json()?;
+        Ok((cid, res))
+    }
+
+    pub async fn commitment(&self, cid: u64) -> anyhow::Result<Value> {
+        self.view("get_commitment", json!({ "commitment_id": cid }))
+            .await
+    }
+
+    pub async fn state(&self, cid: u64) -> anyhow::Result<String> {
+        Ok(self.commitment(cid).await?["state"]
+            .as_str()
+            .unwrap()
+            .to_string())
+    }
+
+    pub async fn signed_tx(&self, cid: u64) -> anyhow::Result<Value> {
+        self.view("get_signed_tx", json!({ "commitment_id": cid }))
+            .await
+    }
+
+    pub async fn lane(&self) -> anyhow::Result<Value> {
+        self.view("evm_lane", json!({ "path": self.path })).await
+    }
+
+    /// A call from `who` (not yet awaited past `transact`).
+    pub async fn call(
+        &self,
+        who: &Account,
+        method: &str,
+        args: Value,
+    ) -> anyhow::Result<ExecutionFinalResult> {
+        Ok(who
+            .call(self.purser.id(), method)
+            .args_json(args)
+            .max_gas()
+            .transact()
+            .await?)
+    }
+
+    /// `attest_external` for `tx_hash` from `who`.
+    pub async fn attest(
+        &self,
+        who: &Account,
+        cid: u64,
+        tx_hash: &str,
+        success: bool,
+        finality: &str,
+    ) -> anyhow::Result<ExecutionFinalResult> {
+        self.call(
+            who,
+            "attest_external",
+            json!({
+                "commitment_id": cid,
+                "tx_hash": tx_hash,
+                "outcome": { "Landed": {
+                    "success": success,
+                    "finality": finality,
+                    "block_number": "123",
+                    "block_hash": format!("0x{}", "ab".repeat(32)),
+                    "signature": null,
+                }},
+            }),
+        )
+        .await
+    }
+
+    /// Advance the sandbox by `blocks` blocks and return the new block timestamp (ns).
+    pub async fn fast_forward(&self, blocks: u64) -> anyhow::Result<u64> {
+        self.worker.fast_forward(blocks).await?;
+        Ok(self.worker.view_block().await?.timestamp())
+    }
 }

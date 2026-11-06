@@ -66,6 +66,35 @@ pub const MSG_REQUEST_ID_REUSED: &str = "request_id reused with a different requ
 // A task frozen by a contradicted reconcile accepts no new proposal.
 pub const MSG_TASK_FROZEN: &str = "task frozen";
 
+// EVM payment path (Prompt 12). Same rules as above: bare literals, no numeric state, pinned by value in
+// `msg_constants_are_frozen`. The relayer and `packages/types` (`classifyRefusal`) branch on them.
+pub const MSG_EVM_VALUE_TOO_LOW: &str = "evm value below minimum";
+pub const MSG_EVM_INVALID_FEE: &str = "invalid evm fee";
+pub const MSG_EVM_SIGHASH_RANGE: &str = "sighash out of range";
+pub const MSG_EVM_LANE_UNSEEDED: &str = "evm lane not seeded";
+pub const MSG_EVM_LANE_BUSY: &str = "evm lane busy";
+pub const MSG_EVM_NONCE_REFUSED: &str = "nonce seed refused";
+pub const MSG_EVM_NOT_CONFIGURED: &str = "evm not configured";
+pub const MSG_EVM_BAD_CFG: &str = "invalid evm config";
+pub const MSG_EVM_TASK_NOT_EMPTY: &str = "task must have no delegates";
+pub const MSG_NOT_EVM_TASK: &str = "not an evm task";
+pub const MSG_EVM_KEY_NOT_CACHED: &str = "derived key not cached";
+pub const MSG_EVM_KEY_CACHED: &str = "derived key already cached";
+pub const MSG_EVM_LOW_GAS: &str = "insufficient prepaid gas";
+pub const MSG_EVM_LOW_BALANCE: &str = "insufficient contract balance";
+pub const MSG_PATH_IN_USE: &str = "derivation path in use";
+pub const MSG_ONLY_OWNER_OR_RELAYER: &str = "only owner or relayer";
+pub const MSG_NOT_EVM_COMMITMENT: &str = "not an evm commitment";
+pub const MSG_RECONCILE_EVM: &str = "reconcile not allowed for evm";
+pub const MSG_RELAYER_IS_OWNER: &str = "relayer must not be owner";
+pub const MSG_RELAYER_BUSY: &str = "relayer change blocked";
+pub const MSG_TOO_EARLY_UNKNOWN: &str = "too early to mark unknown";
+pub const MSG_UNKNOWN_TX_HASH: &str = "unknown tx hash";
+pub const MSG_INVALID_TX_HASH: &str = "invalid tx hash";
+pub const MSG_CANCEL_EXISTS: &str = "cancel already requested";
+pub const MSG_NOT_CANCELLABLE: &str = "not cancellable";
+pub const MSG_NO_RELEASE_EVIDENCE: &str = "no release evidence";
+
 /// Why an accounting, state-machine, or payload-validation operation refused.
 ///
 /// Variants are intentionally distinct: tests assert the *specific* refusal (e.g.
@@ -100,6 +129,18 @@ pub enum PurserError {
     InvalidRecipient,
     /// Payload validation: `intent.memo` exceeds the max length.
     MemoTooLong,
+    /// EVM tx builder: `value` is below `EvmCfg.min_value` (or zero).
+    EvmValueTooLow,
+    /// EVM tx builder: fee fields violate `tip <= max_fee <= ceiling` (or a cancel bump rule).
+    EvmInvalidFee,
+    /// EVM tx builder: the digest is not a valid secp256k1 scalar (zero, or `>= n`).
+    EvmSighashRange,
+    /// Lane: no `next_nonce` has been seeded yet.
+    EvmLaneUnseeded,
+    /// Lane: another commitment is already in flight on this derived address.
+    EvmLaneBusy,
+    /// Lane: a re-seed that would lower the nonce, or seed a non-empty lane.
+    EvmNonceRefused,
 }
 
 impl core::fmt::Display for PurserError {
@@ -114,6 +155,12 @@ impl core::fmt::Display for PurserError {
             PurserError::UnsupportedToken => MSG_UNSUPPORTED_TOKEN,
             PurserError::InvalidRecipient => MSG_INVALID_RECIPIENT,
             PurserError::MemoTooLong => MSG_MEMO_TOO_LONG,
+            PurserError::EvmValueTooLow => MSG_EVM_VALUE_TOO_LOW,
+            PurserError::EvmInvalidFee => MSG_EVM_INVALID_FEE,
+            PurserError::EvmSighashRange => MSG_EVM_SIGHASH_RANGE,
+            PurserError::EvmLaneUnseeded => MSG_EVM_LANE_UNSEEDED,
+            PurserError::EvmLaneBusy => MSG_EVM_LANE_BUSY,
+            PurserError::EvmNonceRefused => MSG_EVM_NONCE_REFUSED,
         };
         f.write_str(s)
     }
@@ -164,5 +211,32 @@ mod tests {
             "request_id reused with a different request"
         );
         assert_eq!(MSG_TASK_FROZEN, "task frozen");
+        // EVM payment path
+        assert_eq!(MSG_EVM_VALUE_TOO_LOW, "evm value below minimum");
+        assert_eq!(MSG_EVM_INVALID_FEE, "invalid evm fee");
+        assert_eq!(MSG_EVM_SIGHASH_RANGE, "sighash out of range");
+        assert_eq!(MSG_EVM_LANE_UNSEEDED, "evm lane not seeded");
+        assert_eq!(MSG_EVM_LANE_BUSY, "evm lane busy");
+        assert_eq!(MSG_EVM_NONCE_REFUSED, "nonce seed refused");
+        assert_eq!(MSG_EVM_NOT_CONFIGURED, "evm not configured");
+        assert_eq!(MSG_EVM_BAD_CFG, "invalid evm config");
+        assert_eq!(MSG_EVM_TASK_NOT_EMPTY, "task must have no delegates");
+        assert_eq!(MSG_NOT_EVM_TASK, "not an evm task");
+        assert_eq!(MSG_EVM_KEY_NOT_CACHED, "derived key not cached");
+        assert_eq!(MSG_EVM_KEY_CACHED, "derived key already cached");
+        assert_eq!(MSG_EVM_LOW_GAS, "insufficient prepaid gas");
+        assert_eq!(MSG_EVM_LOW_BALANCE, "insufficient contract balance");
+        assert_eq!(MSG_PATH_IN_USE, "derivation path in use");
+        assert_eq!(MSG_ONLY_OWNER_OR_RELAYER, "only owner or relayer");
+        assert_eq!(MSG_NOT_EVM_COMMITMENT, "not an evm commitment");
+        assert_eq!(MSG_RECONCILE_EVM, "reconcile not allowed for evm");
+        assert_eq!(MSG_RELAYER_IS_OWNER, "relayer must not be owner");
+        assert_eq!(MSG_RELAYER_BUSY, "relayer change blocked");
+        assert_eq!(MSG_TOO_EARLY_UNKNOWN, "too early to mark unknown");
+        assert_eq!(MSG_UNKNOWN_TX_HASH, "unknown tx hash");
+        assert_eq!(MSG_INVALID_TX_HASH, "invalid tx hash");
+        assert_eq!(MSG_CANCEL_EXISTS, "cancel already requested");
+        assert_eq!(MSG_NOT_CANCELLABLE, "not cancellable");
+        assert_eq!(MSG_NO_RELEASE_EVIDENCE, "no release evidence");
     }
 }

@@ -147,8 +147,8 @@ pub fn canonical_payload_bytes(
 /// - an empty memo is the same as no memo;
 /// - chain, token and amount must match exactly.
 ///
-/// EVM (Prompt 12) plugs its own recipient normalizer into the `Chain::Evm` arm (checksum
-/// casing: `0xAbC…` and `0xabc…` are one payee); until then it compares the raw string.
+/// - EVM recipients are compared as parsed 20-byte addresses (checksum casing: `0xAbC…` and `0xabc…`
+///   are one payee); an unparseable one falls back to the raw string, like the NEAR arm.
 pub fn same_request(prior: &PaymentIntent, intent: &PaymentIntent) -> bool {
     fn memo(i: &PaymentIntent) -> &str {
         i.memo.as_deref().unwrap_or("")
@@ -163,7 +163,15 @@ pub fn same_request(prior: &PaymentIntent, intent: &PaymentIntent) -> bool {
                 _ => prior.recipient == intent.recipient,
             }
         }
-        Chain::Evm { .. } => prior.recipient == intent.recipient,
+        Chain::Evm { .. } => {
+            match (
+                crate::evm_tx::parse_address(&prior.recipient),
+                crate::evm_tx::parse_address(&intent.recipient),
+            ) {
+                (Some(a), Some(b)) => a == b,
+                _ => prior.recipient == intent.recipient,
+            }
+        }
     };
     prior.chain == intent.chain
         && prior.token == intent.token
@@ -426,5 +434,28 @@ mod tests {
                 "{other:?} is a different request"
             );
         }
+    }
+
+    #[test]
+    fn same_request_normalizes_evm_checksum_casing_but_not_the_payee() {
+        let evm = Chain::Evm { chain_id: 11155111 };
+        let a = "0x52908400098527886E0F7030069857D2E4169EE7";
+        let base = intent(evm, TokenSpec::NearNative, a, None);
+        let lower = intent(evm, TokenSpec::NearNative, &a.to_lowercase(), None);
+        assert!(same_request(&base, &lower), "one payee, two spellings");
+        assert!(same_request(&lower, &base));
+        let other = intent(
+            evm,
+            TokenSpec::NearNative,
+            "0x52908400098527886e0f7030069857d2e4169ee8",
+            None,
+        );
+        assert!(!same_request(&base, &other), "a different address");
+        let other_chain = intent(Chain::Evm { chain_id: 1 }, TokenSpec::NearNative, a, None);
+        assert!(!same_request(&base, &other_chain));
+        // unparseable spellings fall back to byte equality
+        let junk = intent(evm, TokenSpec::NearNative, "0xZZ", None);
+        assert!(same_request(&junk, &junk.clone()));
+        assert!(!same_request(&junk, &base));
     }
 }

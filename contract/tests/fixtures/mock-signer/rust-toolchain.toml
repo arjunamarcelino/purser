@@ -1,0 +1,6 @@
+# Lock-step with contract/rust-toolchain.toml (builds run with this dir as cwd, so rustup reads this file).
+[toolchain]
+channel = "1.95.0"
+components = ["rustfmt", "clippy"]
+targets = ["wasm32-unknown-unknown"]
+profile = "minimal"

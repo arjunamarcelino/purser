@@ -15,12 +15,14 @@ crate-type = ["cdylib", "rlib"]   # cdylib -> wasm; rlib -> in-crate integration
 # PURSER_ALLOW_FAULT_INJECTION=1 (see README "Develop").
 fault-injection = []
 # EVM sighash FEASIBILITY SPIKE (docs/plans/2026-11-05-feat-evm-sighash-feasibility-spike-plan.md): MEASUREMENT
-# ONLY. Adds two raw wasm exports (not #[near], so not in the ABI) and nothing else. build.rs refuses it
+# ONLY. Adds two raw wasm exports (not #[near], so not in the ABI) over the shared `evm_tx` encoder. build.rs refuses it
 # without PURSER_ALLOW_EVM_SPIKE=1; scripts/check-wasm-clean.sh refuses any wasm that contains it.
 evm-spike = []
 
 [dependencies]
-near-sdk = "=5.30.0"
+# `unstable` exposes `env::ecrecover` (verify the MPC signature against the cached derived key). Nothing else
+# from that feature is used; the pin is unchanged.
+near-sdk = { version = "=5.30.0", features = ["unstable"] }
 
 [dev-dependencies]
 near-sdk = { version = "=5.30.0", features = ["unit-testing"] }
@@ -37,6 +39,9 @@ sha2 = "0.11"
 # `sha3`). Exact pins; never normal dependencies, so they cannot reach the wasm.
 rlp = "=0.6.1"
 sha3 = "=0.10.9"
+# TEST-ONLY secp256k1 signer for the EVM path's host tests (sign a contract-built sighash, then let the contract's
+# own `env::ecrecover` check it). Never a normal dependency: no k256 in the wasm.
+k256 = { version = "=0.13.4", features = ["ecdsa"] }
 
 # REQUIRED: near-sdk 5.27+ expands cfg(near)-gated code into this crate. Plain
 # `cargo clippy`/`cargo test` (no --cfg near) would otherwise raise unexpected_cfgs,

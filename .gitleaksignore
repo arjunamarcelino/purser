@@ -1,3 +1,8 @@
 # Fake fixture strings for the scrubber test (hunter2pw, SUPERSECRET123, a 20-char hex path segment).
 # They are inert test inputs, not credentials. Scoped to this one finding (commit:file:rule:line).
 337ac7a0de10148b8dacb926e85043a4a2c332dc:proposer/test/unit/demo-lib.test.ts:generic-api-key:91
+
+# Fake canary strings for the EVM scrubber self-tests (inert inputs that prove scrub() and the relayer logger
+# remove them; not credentials). Scoped to these two findings (commit:file:rule:line).
+bfbe893d2f7baf60e9de3430ad255c40631f2862:scripts/evm-testnet.sh:generic-api-key:38
+cbb4efed1bde43efacda52df90c287a928128f71:relayer/test/unit/scrub.test.ts:generic-api-key:8

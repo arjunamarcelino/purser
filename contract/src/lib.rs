@@ -8,7 +8,7 @@
 //! reserve-before-sign path lands in Prompt 4. See the per-module banners for details.
 
 use near_sdk::json_types::U64;
-use near_sdk::store::{IterableMap, LookupMap};
+use near_sdk::store::{IterableMap, LookupMap, LookupSet};
 use near_sdk::{
     env, near, require, AccountId, BorshStorageKey, Gas, NearToken, PanicOnDefault, Promise,
     PromiseError, PromiseOrValue,
@@ -18,14 +18,17 @@ mod budget;
 mod delegates;
 mod error;
 mod events;
+mod evm_api;
+mod evm_tx;
 mod idempotency;
 mod payload;
 mod reservation;
 mod types;
 
 pub use budget::{
-    assert_invariant, authorize, cancel, invariant_report, mark_unknown, record_contradicted_spend,
-    release_failed, remaining, settle_confirmed, try_reserve, InvariantReport,
+    assert_invariant, authorize, cancel, contradict_cancelled, invariant_report, mark_ambiguous,
+    mark_unknown, record_contradicted_spend, release_failed, remaining, settle_confirmed,
+    try_reserve, InvariantReport,
 };
 pub use error::{
     PurserError, MSG_ALREADY_FAILED, MSG_CAP_POSITIVE, MSG_CREW_CAP_MIN, MSG_CREW_CAP_REACHED,
@@ -36,7 +39,21 @@ pub use error::{
     MSG_RECIPIENT_NOT_ALLOWED, MSG_RECONCILE_TOO_EARLY, MSG_REQUEST_ID_REUSED, MSG_TASK_EXISTS,
     MSG_TASK_FROZEN, MSG_UNSUPPORTED_CHAIN, MSG_UNSUPPORTED_TOKEN, MSG_ZERO_AMOUNT,
 };
+pub use error::{
+    MSG_CANCEL_EXISTS, MSG_EVM_BAD_CFG, MSG_EVM_INVALID_FEE, MSG_EVM_KEY_CACHED,
+    MSG_EVM_KEY_NOT_CACHED, MSG_EVM_LANE_BUSY, MSG_EVM_LANE_UNSEEDED, MSG_EVM_LOW_BALANCE,
+    MSG_EVM_LOW_GAS, MSG_EVM_NONCE_REFUSED, MSG_EVM_NOT_CONFIGURED, MSG_EVM_SIGHASH_RANGE,
+    MSG_EVM_TASK_NOT_EMPTY, MSG_EVM_VALUE_TOO_LOW, MSG_INVALID_TX_HASH, MSG_NOT_CANCELLABLE,
+    MSG_NOT_EVM_COMMITMENT, MSG_NOT_EVM_TASK, MSG_NO_RELEASE_EVIDENCE, MSG_ONLY_OWNER_OR_RELAYER,
+    MSG_PATH_IN_USE, MSG_RECONCILE_EVM, MSG_RELAYER_BUSY, MSG_RELAYER_IS_OWNER,
+    MSG_TOO_EARLY_UNKNOWN, MSG_UNKNOWN_TX_HASH,
+};
 pub use events::PurserEvent;
+pub use evm_api::{
+    EvmCfgView, EvmPayloadScheme, EvmTxView, ExternalOutcome, Finality, LaneView, SignatureInput,
+    SignedTxView, EVM_MIN_PREPAID, KEY_CALLBACK_GAS, KEY_VIEW_GAS, ON_SIGNED_GAS, SIGN_GAS,
+};
+pub use evm_tx::{bump_fee, encode_signed, encode_unsigned, Eip1559Unsigned, EVM_PAYLOAD_VERSION};
 pub use idempotency::{classify, IdemDecision};
 pub use payload::{
     build_near_payload, canonical_payload_bytes, same_request, NearPayload, PAYLOAD_CHAIN_TAG,
@@ -44,8 +61,9 @@ pub use payload::{
 };
 pub use reservation::{transition, Event};
 pub use types::{
-    Chain, Commitment, CommitmentId, Delegate, IdemState, PaymentIntent, RequestId,
-    ReservationState, TaskBudget, TaskId, TokenSpec,
+    CancelMeta, Chain, Commitment, CommitmentId, Delegate, EvmCfg, EvmMeta, EvmSig, IdemState,
+    Lane, PaymentIntent, ReleaseEvidence, RequestId, ReservationState, TaskBudget, TaskId,
+    TokenSpec,
 };
 
 /// Max byte length of an owner-chosen `task_id` (mirrors NEAR's account-id max); an
@@ -87,6 +105,13 @@ fn fault_lost_callback() {
 #[cfg(not(feature = "fault-injection"))]
 fn fault_lost_callback() {}
 
+/// What an `open_reservation` hashes into `Commitment.payload_hash`: the NEAR-native recipient (hashed here
+/// with the domain-separated preimage) or the EVM sighash the in-contract builder already computed.
+pub(crate) enum PayloadAnchor<'a> {
+    Near(&'a AccountId),
+    Evm([u8; 32]),
+}
+
 /// Abort the call (rolling it back) with a core error's canonical message.
 fn core_panic<T>(e: PurserError) -> T {
     env::panic_str(&e.to_string())
@@ -122,6 +147,11 @@ enum StorageKey {
     Commitments,
     TaskCommitments,
     Idempotency,
+    // EVM payment path (Prompt 12), appended after `Idempotency`.
+    EvmTasks,
+    EvmLanes,
+    PathIndex,
+    EvmMeta,
 }
 
 /// Purser — an on-chain spending controller for crews of AI agents.
@@ -150,6 +180,21 @@ pub struct Purser {
     // secondary index — D-6). `allowlist` is owner-managed via `set_recipient_allowlist`.
     delegates: IterableMap<(TaskId, AccountId), Delegate>,
     allowlist: LookupMap<(TaskId, AccountId), bool>,
+    // EVM payment path (Prompt 12; appended — Borsh layout is append-only). The contract has not been
+    // stateful-deployed with these absent: the EVM path ships to a FRESH account, so no migration is owed.
+    // Owner-set config; `None` until `set_evm_cfg`.
+    evm_cfg: Option<EvmCfg>,
+    // Tasks denominated in wei (see `enable_evm_task`); every other task is yocto.
+    evm_tasks: LookupSet<TaskId>,
+    // One lane per derivation path (derived address, cached key, nonce, in-flight commitment).
+    evm_lanes: LookupMap<String, Lane>,
+    // Derivation path -> (task, delegate). Paths are GLOBALLY unique, which is what makes "one in-flight
+    // commitment per derived address" hold across tasks; `add_delegate` enforces it and a revoke never frees it.
+    path_index: LookupMap<String, (TaskId, AccountId)>,
+    // Everything EVM about a commitment (`Commitment` itself keeps its layout).
+    evm_meta: LookupMap<CommitmentId, EvmMeta>,
+    // The single relayer: the only party (besides the owner) that may report EVM outcomes.
+    relayer_id: Option<AccountId>,
 }
 
 /// The NEAR-native `payload_hash` scheme, surfaced by [`Purser::payload_scheme`] so a NON-Rust
@@ -227,6 +272,12 @@ impl Purser {
             signer_id,
             delegates: IterableMap::new(StorageKey::Delegates),
             allowlist: LookupMap::new(StorageKey::Allowlist),
+            evm_cfg: None,
+            evm_tasks: LookupSet::new(StorageKey::EvmTasks),
+            evm_lanes: LookupMap::new(StorageKey::EvmLanes),
+            path_index: LookupMap::new(StorageKey::PathIndex),
+            evm_meta: LookupMap::new(StorageKey::EvmMeta),
+            relayer_id: None,
         }
     }
 
@@ -332,6 +383,17 @@ impl Purser {
         require!(
             (active_crew as usize) < (crew_cap as usize),
             MSG_CREW_CAP_REACHED
+        );
+        // A derivation path maps to ONE derived address, so it may belong to one delegate on one task for
+        // all time (a revoke never frees it): two lanes on one address would break the single in-flight
+        // commitment per address.
+        require!(
+            !self.path_index.contains_key(&derivation_path),
+            MSG_PATH_IN_USE
+        );
+        self.path_index.insert(
+            derivation_path.clone(),
+            (task_id.clone(), account_id.clone()),
         );
 
         self.delegates.insert(
@@ -515,6 +577,9 @@ impl Purser {
             (t.token.clone(), t.frozen)
         };
         require!(!frozen, MSG_TASK_FROZEN);
+        if self.evm_tasks.contains(&task) {
+            return self.propose_evm(task, intent, request_id, caller);
+        }
         let payload = build_near_payload(&task_token, &intent, MAX_MEMO_LEN)
             .unwrap_or_else(|e| env::panic_str(&e.to_string())); // recipient parsed here, reused in (d)+(e)
         self.assert_allowlisted(&task, &payload.recipient); // fail-closed: deny-by-default
@@ -526,7 +591,7 @@ impl Purser {
             caller.clone(),
             &intent,
             &request_id,
-            &payload.recipient,
+            PayloadAnchor::Near(&payload.recipient),
             now,
         );
         self.idempotency.insert(idem_key, IdemState::Pending);
@@ -724,6 +789,13 @@ impl Purser {
                 c.created_at,
             )
         };
+        // An EVM commitment is NEVER reconcilable: `Err` is not proof that no signature exists, and
+        // the owner's attestation cannot stand in for the chain. Its releases go through the attested
+        // cancel path (`attest_external` evidence, then the owner's `confirm_release`).
+        require!(
+            !self.evm_meta.contains_key(&commitment_id),
+            MSG_RECONCILE_EVM
+        );
         require!(state == ReservationState::Reserved, MSG_NOT_RECONCILABLE);
         require!(
             now >= created_at.saturating_add(RECONCILE_MIN_AGE_NS),
@@ -796,13 +868,13 @@ impl Purser {
     /// Returns `(cid, payload_hash, payload_version)` so the caller can resolve the commitment and
     /// emit the hash + its scheme version on the `PaymentReserved` event (event-only indexers
     /// hydrate both without a view call).
-    fn open_reservation(
+    pub(crate) fn open_reservation(
         &mut self,
         task: &TaskId,
         delegate: AccountId,
         intent: &PaymentIntent,
         request_id: &RequestId,
-        recipient: &AccountId,
+        anchor: PayloadAnchor,
         now: u64,
     ) -> (CommitmentId, [u8; 32], u16) {
         let cid = self.next_commitment_id;
@@ -823,15 +895,19 @@ impl Purser {
         assert_invariant(b); // defense-in-depth backstop (try_reserve already guarantees it)
 
         // Scheme selection is LOCAL to the hash site (the single `env` boundary): the NEAR-native
-        // arm hashes here; the EVM arm (Prompt 12) must add its own digest, not inherit this one.
-        // Unreachable today — `build_near_payload` rejects non-`NearNative` before reserve.
-        let (payload_hash, payload_version) = match intent.chain {
-            Chain::NearNative => {
+        // arm hashes here; the EVM arm records the digest the in-contract builder already computed (the
+        // real un-prefixed `keccak256(0x02 || rlp(tx))`, i.e. exactly what the MPC signer is asked to
+        // sign). A chain/anchor mismatch is unreachable — both builders run before reserve.
+        let (payload_hash, payload_version) = match (intent.chain, anchor) {
+            (Chain::NearNative, PayloadAnchor::Near(recipient)) => {
                 let bytes =
                     canonical_payload_bytes(task, cid, recipient, intent.amount.as_yoctonear());
                 (env::sha256_array(&bytes), PAYLOAD_VERSION)
             }
-            Chain::Evm { .. } => env::panic_str(MSG_UNSUPPORTED_CHAIN),
+            (Chain::Evm { .. }, PayloadAnchor::Evm(sighash)) => {
+                (sighash, evm_tx::EVM_PAYLOAD_VERSION)
+            }
+            _ => env::panic_str(MSG_UNSUPPORTED_CHAIN),
         };
         // Record the digest AND the scheme version it was computed under, so the anchor stays
         // re-derivable across a future PAYLOAD_VERSION bump (`Some` together, by construction).
@@ -974,8 +1050,8 @@ impl Purser {
     }
 }
 
-// EVM sighash feasibility spike (measurement only; see the module docs). Declared LAST on purpose: a module line
-// anywhere above would shift every later line number, and panic locations embed line numbers in the wasm, so the
-// default build would stop being byte-identical to the pre-spike build.
+// EVM sighash feasibility spike (measurement only; see the module docs). Declared LAST on purpose, so the
+// feature-gated module can never shift a line number in the code above it (panic locations embed them).
+// The default wasm is no longer byte-identical to the pre-spike build: the EVM path ships in it.
 #[cfg(feature = "evm-spike")]
 mod evm_spike;

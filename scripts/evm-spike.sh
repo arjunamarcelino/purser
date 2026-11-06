@@ -5,6 +5,13 @@
 #   make evm-spike
 #
 # Builds use `--no-abi` and isolated target dirs so nothing here can touch target/near/purser_contract*.
+#
+# Since Prompt 12 the default build CARRIES the EVM payment path, so it is deliberately NOT byte-identical to the
+# spike-era wasm any more (that claim in docs/EVM-SPIKE.md is retired). What this script still measures:
+#   - the spike harness's own cost, as the delta of the spike build over the (EVM-carrying) default build;
+#   - the EVM path's cost, as the delta of the default build over the PRE-EVM tree (a temporary git worktree of
+#     $PURSER_EVM_BASELINE_REF, default 8c4107b = the merge of the spike, built with the identical command);
+#   - that the wasm gate keeps refusing the spike build.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -28,7 +35,8 @@ build() {
   rm -f "$log"
 }
 
-echo "== 1. host tests: 36 chainsig.js/viem vectors, rlp-crate + sha3 oracles, 2000 random transactions"
+echo "== 1. host tests: 36 chainsig.js/viem vectors, rlp-crate + sha3 oracles, 2000 random transactions (evm_tx), spike harness (evm_spike)"
+cargo test --features evm-spike --lib evm_tx
 cargo test --features evm-spike --lib evm_spike
 
 echo
@@ -41,14 +49,36 @@ base="$base_dir/near/purser_contract.wasm"
 spike="$spike_dir/near/purser_contract.wasm"
 b=$(wc -c < "$base"); s=$(wc -c < "$spike")
 bz=$(gzip -9 -c "$base" | wc -c); sz=$(gzip -9 -c "$spike" | wc -c)
-printf '%-22s raw %8d  gz %8d  sha256 %s\n' "default (no ABI)" "$b" "$bz" "$(shasum -a 256 "$base" | cut -c1-16)"
-printf '%-22s raw %8d  gz %8d  sha256 %s\n' "evm-spike (no ABI)" "$s" "$sz" "$(shasum -a 256 "$spike" | cut -c1-16)"
+printf '%-26s raw %8d  gz %8d  sha256 %s\n' "default (EVM path, no ABI)" "$b" "$bz" "$(shasum -a 256 "$base" | cut -c1-16)"
+printf '%-26s raw %8d  gz %8d  sha256 %s\n' "evm-spike (no ABI)" "$s" "$sz" "$(shasum -a 256 "$spike" | cut -c1-16)"
 # Single-quoted awk program with -v: an unquoted BEGIN{...,...} is brace-expanded by bash and awk then hangs on stdin.
 pct="$(awk -v s="$s" -v b="$b" 'BEGIN { printf "%.2f", (s - b) * 100 / b }')"
-printf 'delta                  raw %+8d  gz %+8d  (%s%% raw)\n' "$((s - b))" "$((sz - bz))" "$pct"
+printf 'spike harness delta        raw %+8d  gz %+8d  (%s%% raw)\n' "$((s - b))" "$((sz - bz))" "$pct"
+
+# The EVM path's own cost: the default build vs the pre-EVM tree, built with the identical command. Skipped (loudly)
+# if the ref is not in this clone.
+ref="${PURSER_EVM_BASELINE_REF:-8c4107b}"
+if git -C "$ROOT" rev-parse --verify --quiet "$ref^{commit}" >/dev/null; then
+  wt="$ROOT/target/evm-baseline-worktree"
+  cleanup_wt() { git -C "$ROOT" worktree remove --force "$wt" >/dev/null 2>&1 || true; }
+  cleanup_wt
+  git -C "$ROOT" worktree add --detach "$wt" "$ref" >/dev/null 2>&1 || { echo "FAIL: cannot create a worktree of $ref" >&2; exit 1; }
+  trap cleanup_wt EXIT
+  pre_dir="$ROOT/target/pre-evm-noabi"
+  ( cd "$wt/contract" && build "$pre_dir" )
+  pre="$pre_dir/near/purser_contract.wasm"
+  p=$(wc -c < "$pre"); pz=$(gzip -9 -c "$pre" | wc -c)
+  printf '%-26s raw %8d  gz %8d  sha256 %s\n' "pre-EVM $ref (no ABI)" "$p" "$pz" "$(shasum -a 256 "$pre" | cut -c1-16)"
+  ppct="$(awk -v s="$b" -v b="$p" 'BEGIN { printf "%.2f", (s - b) * 100 / b }')"
+  printf 'EVM path delta             raw %+8d  gz %+8d  (%s%% raw)\n' "$((b - p))" "$((bz - pz))" "$ppct"
+  cleanup_wt
+  trap - EXIT
+else
+  echo "SKIP: baseline ref $ref not found in this clone; set PURSER_EVM_BASELINE_REF to a pre-EVM commit"
+fi
 
 echo
-echo "== 3. wasm gate: the default build is clean, the spike build must be refused"
+echo "== 3. wasm gate: the default (EVM-carrying) build is clean, the spike build must be refused"
 ../scripts/check-wasm-clean.sh "$base"
 gate_rc=0
 ../scripts/check-wasm-clean.sh "$spike" || gate_rc=$?

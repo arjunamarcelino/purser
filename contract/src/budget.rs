@@ -249,7 +249,47 @@ pub fn record_contradicted_spend(
     spent: NearToken,
     now: u64,
 ) -> Result<bool, PurserError> {
-    let next = transition(c.state, Event::Contradict)?; // only Failed -> Confirmed
+    if c.state != ReservationState::Failed {
+        return Err(PurserError::IllegalTransition {
+            from: c.state,
+            event: "Contradict",
+        });
+    }
+    record_landed_after_release(b, c, spent, now)
+}
+
+/// `Cancelled -> Confirmed` (EVM path): an original the owner released through `confirm_release`
+/// (cancel attested) landed anyway. Same accounting as [`record_contradicted_spend`]: `completed +=
+/// spent`, `outstanding` untouched (Cancelled already released it), and the spend is recorded even if
+/// it breaks (I). Unlike that function it FREEZES the task itself when `completed + outstanding > cap`
+/// (permanent per task; there is no unfreeze), because the EVM path has no later callback that could
+/// do it. Returns whether the task is now over cap.
+pub fn contradict_cancelled(
+    b: &mut TaskBudget,
+    c: &mut Commitment,
+    spent: NearToken,
+    now: u64,
+) -> Result<bool, PurserError> {
+    if c.state != ReservationState::Cancelled {
+        return Err(PurserError::IllegalTransition {
+            from: c.state,
+            event: "Contradict",
+        });
+    }
+    let over_cap = record_landed_after_release(b, c, spent, now)?;
+    b.frozen |= over_cap;
+    Ok(over_cap)
+}
+
+/// Shared tail of the two contradiction edges. The caller has already pinned which terminal state it
+/// accepts; [`transition`] still validates the edge, so the legal set stays in one place.
+fn record_landed_after_release(
+    b: &mut TaskBudget,
+    c: &mut Commitment,
+    spent: NearToken,
+    now: u64,
+) -> Result<bool, PurserError> {
+    let next = transition(c.state, Event::Contradict)?; // Failed | Cancelled -> Confirmed
     if spent > c.reserved_amount {
         return Err(PurserError::SpentExceedsReserved {
             spent,
@@ -268,6 +308,17 @@ pub fn record_contradicted_spend(
     c.state = next;
     c.updated_at = now;
     Ok(used > b.cap)
+}
+
+/// `Reserved -> Unknown` (EVM path). Pre: `state == Reserved`. Effect: `state = Unknown`; NO
+/// accounting change. A failed or unverifiable `sign` is not proof that no signature exists (the MPC
+/// nodes' `respond` carries it in public args), so the reservation stays held until a cancel or an
+/// attested outcome proves otherwise.
+pub fn mark_ambiguous(c: &mut Commitment, now: u64) -> Result<(), PurserError> {
+    let next = transition(c.state, Event::Ambiguous)?; // Reserved -> Unknown ONLY
+    c.state = next;
+    c.updated_at = now;
+    Ok(())
 }
 
 /// §1.3 `cancel` (stretch nonce-burn). Pre: `state == Unknown` (cancel attested).
@@ -895,5 +946,92 @@ mod tests {
             Err(PurserError::IllegalTransition { .. })
         ));
         assert_eq!((l.budget.clone(), l.commitments[j].clone()), (bb, cc));
+    }
+
+    #[test]
+    fn mark_ambiguous_holds_the_reservation_and_only_from_reserved() {
+        let mut l = TestLedger::new(100);
+        let a = l.reserve(60).unwrap();
+        let before = l.budget.clone();
+        let i = l.index_of(a);
+        mark_ambiguous(&mut l.commitments[i], 5).unwrap();
+        l.check(); // aggregates still match the ledger: Unknown counts as outstanding
+        assert_eq!(l.state(a), ReservationState::Unknown);
+        assert_eq!(l.budget, before, "no accounting change");
+        // not from Unknown, Signed or any terminal state
+        for st in [
+            ReservationState::Unknown,
+            ReservationState::Signed,
+            ReservationState::Confirmed,
+            ReservationState::Failed,
+            ReservationState::Cancelled,
+        ] {
+            let mut c = l.commitments[i].clone();
+            c.state = st;
+            assert!(matches!(
+                mark_ambiguous(&mut c, 6),
+                Err(PurserError::IllegalTransition { .. })
+            ));
+            assert_eq!(c.state, st);
+        }
+    }
+
+    #[test]
+    fn contradict_cancelled_records_the_spend_without_touching_outstanding_and_freezes_over_cap() {
+        let mut l = TestLedger::new(100);
+        let a = l.reserve(60).unwrap();
+        l.timeout(a).unwrap_err(); // Reserved cannot time out
+        let i = l.index_of(a);
+        mark_ambiguous(&mut l.commitments[i], 1).unwrap();
+        l.cancel(a).unwrap(); // released
+        let b = l.reserve(60).unwrap(); // the freed headroom is re-spent
+        let i = l.index_of(a);
+        let outstanding = l.budget.outstanding;
+        let over = contradict_cancelled(&mut l.budget, &mut l.commitments[i], yocto(60), 9);
+        assert_eq!(over, Ok(true), "60 landed + 60 held > 100");
+        assert!(l.budget.frozen, "over cap freezes the task");
+        assert_eq!(
+            l.budget.outstanding, outstanding,
+            "Cancelled already released it"
+        );
+        assert_eq!(l.budget.completed, yocto(60));
+        assert_eq!(l.state(a), ReservationState::Confirmed);
+        assert_eq!(l.budget.outstanding, l.recompute_outstanding());
+        assert_eq!(l.budget.completed, l.recompute_completed());
+        // only Cancelled can be contradicted this way, and Failed only by the NEAR function
+        let j = l.index_of(b);
+        for f in [contradict_cancelled, record_contradicted_spend] {
+            let (bb, cc) = (l.budget.clone(), l.commitments[j].clone());
+            assert!(matches!(
+                f(&mut l.budget, &mut l.commitments[j], yocto(60), 9),
+                Err(PurserError::IllegalTransition { .. })
+            ));
+            assert_eq!((l.budget.clone(), l.commitments[j].clone()), (bb, cc));
+        }
+    }
+
+    #[test]
+    fn contradict_cancelled_within_cap_does_not_freeze() {
+        let mut l = TestLedger::new(100);
+        let a = l.reserve(40).unwrap();
+        let i = l.index_of(a);
+        mark_ambiguous(&mut l.commitments[i], 1).unwrap();
+        l.cancel(a).unwrap();
+        let over = contradict_cancelled(&mut l.budget, &mut l.commitments[i], yocto(40), 9);
+        assert_eq!(over, Ok(false));
+        assert!(!l.budget.frozen);
+        l.check(); // (I) still holds and the ledger agrees
+                   // spent above the reservation is refused and leaves everything untouched
+        let mut l2 = TestLedger::new(100);
+        let a = l2.reserve(40).unwrap();
+        let i = l2.index_of(a);
+        mark_ambiguous(&mut l2.commitments[i], 1).unwrap();
+        l2.cancel(a).unwrap();
+        let snap = (l2.budget.clone(), l2.commitments[i].clone());
+        assert!(matches!(
+            contradict_cancelled(&mut l2.budget, &mut l2.commitments[i], yocto(41), 9),
+            Err(PurserError::SpentExceedsReserved { .. })
+        ));
+        assert_eq!((l2.budget.clone(), l2.commitments[i].clone()), snap);
     }
 }
