@@ -200,10 +200,27 @@ Contract `purser2.arjuna-purser.testnet`, relayer `relayer2.arjuna-purser.testne
 | Payment 2: cancel (0-value self-send, nonce 1, block 12073381) | [Sepolia tx](https://sepolia.etherscan.io/tx/0x4455c91e7861588aa5663d25ca729fb277cdded585fcb11cd952a5723e34aa46) |
 | Payment 2: owner `confirm_release` (Unknown to Cancelled) | [testnet tx](https://testnet.nearblocks.io/txns/J36miiF5cmmPpUiQGNZucdi62L7dWgTmqoBCEZzTUFDV) |
 
-Final state: commitment 0 Confirmed, commitment 1 Cancelled; completed 1e12, outstanding 0, the invariant
-holds, lane nonce 2. Not captured: the NEAR transaction hashes of the `mark_unknown` and `request_cancel`
-calls (the state transitions are visible in the contract's views and events, but there is no hash to cite).
-The cancel receipt reports `gasUsed` 12000 with status success; that figure is unexplained and is reported
+Payments 1 and 2 ran on the first deployed wasm (code hash `398d9ed6…364dd`). Code review then changed the
+contract (a retryable cancel slot, idempotency set on `mark_unknown` from `Reserved`, tests), so `purser2` was
+upgraded in place to code hash `9d46e69d…a44b` (state kept; no storage layout change) and the stuck-cancel-release
+path was run again as payment 3. The `mark_unknown` and `request_cancel` hashes of payment 2 were not captured.
+
+| Step (payment 3, on the fixed code) | Reference |
+|---|---|
+| `set_evm_cfg`, fee ceiling set to 1 wei | [testnet tx](https://testnet.nearblocks.io/txns/3XkG41Zu23DiT5K1rSHperxBW5mxnbNYPQqqc6HivoGs) |
+| `propose_payment` (commitment 2, nonce 2, unminable, rejected by both RPCs on every retry, never mined) | [testnet tx](https://testnet.nearblocks.io/txns/7q9VXWcMUDSeMqUUNJ7wkU9623SaPT2zB1PkuaCHcj91) |
+| Original hash (never on Sepolia) | `0x5d8f4b3c2c4ea28339639bd76fc030b5e6c86df552ae2dfaf899eb3335105e2e` |
+| Relayer `mark_unknown` (Signed to Unknown; reservation held) | [testnet tx](https://testnet.nearblocks.io/txns/ZJmD1LkfbMPHpbQkzQ1NAxkVu35T8G3PTUcVZY8fRtK) |
+| `set_evm_cfg`, fee ceiling raised to 2 gwei / 1 gwei | [testnet tx](https://testnet.nearblocks.io/txns/GJ4MsCu8APedg8dKbeBVKH1tEiSTajATAa6cm3Qo52xe) |
+| `request_cancel` | [testnet tx](https://testnet.nearblocks.io/txns/5JA75B9unGETX6pVSLiqbdAi5sZGg6XqNFVmnUME2bHG) |
+| Cancel (0-value self-send, nonce 2, block 12074022) | [Sepolia tx](https://sepolia.etherscan.io/tx/0x4ab1bca17946f38ada9f9c277414b203447e8982f3e9d432ad512fc56ee96b35) |
+| Relayer `attest_external` (cancel landed, finalized; evidence only, nothing released) | [testnet tx](https://testnet.nearblocks.io/txns/BkB7V6Z5pAb8k8iz7kTw2CD7NojWXH8tkFr7yNkywEdH) |
+| Owner `confirm_release` (Unknown to Cancelled) | [testnet tx](https://testnet.nearblocks.io/txns/1RmTRskeFaeQFhK1hU5Hhv7MvVSSAeFoW4szz1ymd8B) |
+
+Final state: commitment 0 Confirmed, commitments 1 and 2 Cancelled; completed 1e12, outstanding 0, the
+invariant holds, lane nonce 3. While each stuck payment waited, the contract kept its reservation
+(`outstanding` 1e12) and the cancel attestation released nothing; only the owner's `confirm_release` did.
+Both cancel receipts report `gasUsed` 12000 with status success; that figure is unexplained and is reported
 as observed (a plain 21000-gas self-send would normally report 21000).
 
 To reproduce: `scripts/evm-testnet.sh deploy`, fund the printed Sepolia address from a faucet by hand,
