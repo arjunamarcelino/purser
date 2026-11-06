@@ -295,6 +295,14 @@ impl World {
     }
 }
 
+fn sig_input(s: &EvmSig) -> SignatureInput {
+    SignatureInput {
+        r: evm_tx::to_hex(&s.r),
+        s: evm_tx::to_hex(&s.s),
+        y_parity: s.y_parity,
+    }
+}
+
 fn panics_with(msg: &str, f: impl FnOnce()) {
     let err = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f))
         .expect_err(&format!("expected a refusal: {msg}"));
@@ -1377,7 +1385,11 @@ fn on_cancel_signed_totality_valid_invalid_err_by_state() {
         let before = (w.task(), w.lane());
         w.arrive_cancel(cid, how);
         assert_eq!(w.state(cid), Unknown, "{how:?}");
-        assert_eq!(w.meta(cid).cancel.unwrap().sig.is_some(), signed, "{how:?}");
+        // a failed answer frees the slot (retryable); a verified one keeps it
+        assert_eq!(w.meta(cid).cancel.is_some(), signed, "{how:?}");
+        if signed {
+            assert!(w.meta(cid).cancel.unwrap().sig.is_some(), "{how:?}");
+        }
         if let Some(e) = event {
             assert!(logs_have(e), "{how:?}: {e}");
         }
@@ -1395,15 +1407,102 @@ fn on_cancel_signed_totality_valid_invalid_err_by_state() {
     let h = w.original_hash(cid);
     w.attest(cid, h, true, Finality::Finalized); // original wins -> Confirmed
     assert_eq!(w.state(cid), Confirmed);
+    let digest = w.meta(cid).cancel.unwrap().sighash;
     w.arrive_cancel(cid, Arrival::Err);
     assert!(
         !logs_have("payment_unknown"),
-        "Err on a settled state is a no-op"
+        "Err on a settled state emits nothing (it only frees the unsigned slot)"
     );
+    assert!(w.meta(cid).cancel.is_none());
+    assert_eq!(w.state(cid), Confirmed);
+    // the same late answer arriving valid is recorded instead (a separate world: one callback per request)
+    let mut w = World::new();
+    let cid = w.reach(Unknown, "r1");
+    w.request_cancel(cid);
+    assert_eq!(w.meta(cid).cancel.unwrap().sighash, digest);
+    w.arrive(cid, "r1", Arrival::Valid);
+    let h = w.original_hash(cid);
+    w.attest(cid, h, true, Finality::Finalized);
     w.arrive_cancel(cid, Arrival::Valid);
     assert!(w.meta(cid).cancel.unwrap().sig.is_some());
     assert!(logs_have("cancel_signed"));
     assert_eq!(w.state(cid), Confirmed);
+}
+
+#[test]
+fn a_failed_cancel_signature_frees_the_slot_and_the_retry_reaches_release() {
+    use ReservationState::*;
+    for fail in [Arrival::Err, Arrival::WrongKey] {
+        let mut w = World::new();
+        let cid = w.reach(Unknown, "r1");
+        w.request_cancel(cid);
+        // in flight (callback pending): the slot is occupied, a second request is refused
+        assert!(w.meta(cid).cancel.is_some());
+        w.at(OWNER, 1);
+        panics_with(MSG_CANCEL_EXISTS, || {
+            let _ = w.p.request_cancel(cid, U128(CANCEL_FEE), U128(CANCEL_TIP));
+        });
+        let digest_before = w.meta(cid).cancel.unwrap().sighash;
+        let (task, lane) = (w.task(), w.lane());
+        w.arrive_cancel(cid, fail);
+        assert!(w.meta(cid).cancel.is_none(), "{fail:?}: slot freed");
+        assert_eq!(
+            (w.task(), w.lane()),
+            (task, lane),
+            "{fail:?}: no accounting"
+        );
+        assert_eq!(w.state(cid), Unknown);
+        // retry with the same fees: same digest, new request
+        w.at(OWNER, 1);
+        let _ = w.p.request_cancel(cid, U128(CANCEL_FEE), U128(CANCEL_TIP));
+        assert_eq!(w.meta(cid).cancel.unwrap().sighash, digest_before);
+        w.arrive_cancel(cid, Arrival::Valid);
+        let h = w.meta(cid).cancel.unwrap().tx_hash.unwrap();
+        w.attest(cid, h, true, Finality::Finalized);
+        assert_eq!(w.meta(cid).evidence, Some(ReleaseEvidence::CancelLanded));
+        w.at(OWNER, 1);
+        w.p.confirm_release(cid);
+        assert_eq!(w.state(cid), Cancelled, "{fail:?}");
+        assert_eq!(w.task().outstanding, yocto(0));
+    }
+}
+
+#[test]
+fn a_cancel_with_a_recorded_signature_refuses_a_second_request_and_is_never_cleared() {
+    let mut w = World::new();
+    let cid = w.reach(ReservationState::Unknown, "r1");
+    w.request_cancel(cid);
+    w.arrive_cancel(cid, Arrival::Valid);
+    let cm = w.meta(cid).cancel.unwrap();
+    w.at(OWNER, 1);
+    panics_with(MSG_CANCEL_EXISTS, || {
+        let _ = w.p.request_cancel(cid, U128(CANCEL_FEE), U128(CANCEL_TIP));
+    });
+    // a duplicate failing callback (cannot happen on chain; defence in depth) leaves a verified cancel alone
+    w.arrive_cancel(cid, Arrival::Err);
+    w.arrive_cancel(cid, Arrival::WrongKey);
+    assert_eq!(w.meta(cid).cancel.unwrap(), cm);
+}
+
+#[test]
+fn a_cancel_signature_recovered_by_attestation_survives_a_late_failed_callback() {
+    // The signer failed to answer us, but the cancel was signed and mined: the relayer recovers the
+    // signature through attest_external while the slot is still occupied; the (late) Err callback must
+    // not wipe it.
+    let mut w = World::new();
+    let cid = w.reach(ReservationState::Unknown, "r1");
+    w.request_cancel(cid);
+    let cm = w.meta(cid).cancel.unwrap();
+    let sig = w.key.sign(&cm.sighash);
+    let tx = cancel_tx(&w.meta(cid), &cm);
+    let hash = evm_tx::tx_hash(&tx, &sig, keccak);
+    let o = w.landed(true, Finality::Finalized, Some(sig_input(&sig)));
+    w.at(RELAYER, 1);
+    w.p.attest_external(cid, evm_tx::to_hex0x(&hash), o);
+    assert_eq!(w.meta(cid).cancel.unwrap().sig, Some(sig));
+    w.arrive_cancel(cid, Arrival::Err);
+    assert_eq!(w.meta(cid).cancel.unwrap().tx_hash, Some(hash));
+    assert_eq!(w.meta(cid).evidence, Some(ReleaseEvidence::CancelLanded));
 }
 
 #[test]
@@ -1528,7 +1627,11 @@ fn a_signed_cancel_signature_can_also_be_recovered_through_an_attestation() {
     let mut w = World::new();
     let cid = w.reach(ReservationState::Unknown, "r1");
     w.request_cancel(cid);
-    w.arrive_cancel(cid, Arrival::Err); // the cancel's signature never came back
+    w.arrive_cancel(cid, Arrival::Err); // the cancel's signature never came back; the slot is freed
+    assert!(w.meta(cid).cancel.is_none());
+    // the retry (same fees, so the same digest) is in flight when the first attempt's signature is recovered
+    w.at(OWNER, 1);
+    let _ = w.p.request_cancel(cid, U128(CANCEL_FEE), U128(CANCEL_TIP));
     let (m, cm) = (w.meta(cid), w.meta(cid).cancel.unwrap());
     let sig = w.key.sign(&cm.sighash);
     let hash = evm_tx::tx_hash(&cancel_tx(&m, &cm), &sig, keccak);
@@ -1627,11 +1730,30 @@ fn mark_unknown_reserved_needs_an_hour() {
     panics_with(MSG_TOO_EARLY_UNKNOWN, || {
         let _ = w.p.mark_unknown(cid);
     });
+    assert_eq!(
+        w.idem("r1"),
+        Some(IdemState::Pending),
+        "a refused call changes nothing"
+    );
     as_(OWNER, created + evm_tx::RESERVED_AMBIGUOUS_MIN_AGE_NS);
     assert!(w.p.mark_unknown(cid));
     assert_eq!(w.state(cid), ReservationState::Unknown);
     assert!(reason_logged("ambiguous"));
     assert_eq!(w.task().outstanding, yocto(10_000));
+    assert_eq!(
+        w.idem("r1"),
+        Some(IdemState::Committed { commitment_id: cid }),
+        "Reserved -> Unknown moves idempotency like on_signed's ambiguous path"
+    );
+    // the delegate's retry replays the cid instead of hitting MSG_IN_FLIGHT
+    w.at(DELEGATE, 1);
+    match w
+        .p
+        .propose_payment(TASK.into(), intent(10_000), "r1".into())
+    {
+        PromiseOrValue::Value(again) => assert_eq!(again, cid),
+        PromiseOrValue::Promise(_) => panic!("a replay must not sign again"),
+    }
     // a late valid signature after that is recorded (not lost)
     w.arrive(cid, "r1", Arrival::Valid);
     assert!(w.meta(cid).sig.is_some());
@@ -1710,13 +1832,48 @@ fn the_only_sign_call_site_is_the_in_contract_builder() {
             "pure cores never create promises"
         );
     }
-    // the wrapped args shape
+    // the args actually sent: decode the created receipt's function call under the mocked VM
     let digest = [0xabu8; 32];
     as_(DELEGATE, 1);
     let w = World::new();
-    let _ = w.p.sign_promise("some/path", &digest); // constructs under the mocked VM
-    assert!(api.contains("\"payload_v2\": { \"Ecdsa\": evm_tx::to_hex(digest) }"));
-    assert!(api.contains("\"domain_id\": SIGNER_DOMAIN_ID"));
+    let before = near_sdk::test_utils::get_created_receipts().len();
+    let _ = w.p.sign_promise("some/path", &digest);
+    let receipts = near_sdk::test_utils::get_created_receipts();
+    let new_receipts = &receipts[before..];
+    assert_eq!(new_receipts.len(), 1, "one receipt");
+    assert_eq!(new_receipts[0].receiver_id.as_str(), SIGNER);
+    let calls: Vec<_> = new_receipts[0]
+        .actions
+        .iter()
+        .filter(|a| matches!(a, near_sdk::mock::MockAction::FunctionCallWeight { .. }))
+        .collect();
+    assert_eq!(calls.len(), 1, "one function call");
+    match calls[0] {
+        near_sdk::mock::MockAction::FunctionCallWeight {
+            method_name,
+            args,
+            attached_deposit,
+            prepaid_gas,
+            ..
+        } => {
+            assert_eq!(method_name, b"sign");
+            assert_eq!(attached_deposit.as_yoctonear(), 1);
+            assert_eq!(*prepaid_gas, SIGN_GAS);
+            let got: Value = serde_json::from_slice(args).unwrap();
+            assert_eq!(
+                got,
+                json!({"request": {
+                    "path": "some/path",
+                    "payload_v2": {"Ecdsa": "ab".repeat(32)},
+                    "domain_id": 0,
+                }}),
+                "exactly the signer's request shape"
+            );
+        }
+        _ => unreachable!(),
+    }
+    // bonus tripwire: the request shape is still built in exactly one place
+    assert_eq!(api.matches("\"payload_v2\"").count(), 1);
 }
 
 // ==== Layer C: the real EVM composition under random interleavings ==============================

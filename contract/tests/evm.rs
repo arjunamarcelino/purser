@@ -958,6 +958,196 @@ async fn every_preflight_refusal_happens_before_any_reservation() -> anyhow::Res
     Ok(())
 }
 
+// ---- cancel recovery after a signer failure (todos 034/041) ---------------------------------------
+
+#[tokio::test]
+async fn a_cancel_that_failed_to_sign_is_retried_and_reaches_release() -> anyhow::Result<()> {
+    for fail in ["Err", "WrongKey", "Garbled"] {
+        let c = fresh(&format!("evm/cancel-retry-{fail}"), Stage::Seeded).await?;
+        // The original never got a signature (signer down): Unknown, nothing can land.
+        c.set_mode("Err").await?;
+        let (cid, _) = c.propose_ok(EVM_VALUE, "cr-1").await?;
+        assert_eq!(c.state(cid).await?, "Unknown");
+        raise_ceilings(&c).await?;
+        let (fee, tip) = (MAX_FEE * 3 / 2, MAX_TIP * 3 / 2);
+        let args =
+            json!({ "commitment_id": cid, "max_fee": fee.to_string(), "tip": tip.to_string() });
+        // the signer is still failing: the cancel does not sign, the slot is freed
+        c.set_mode(fail).await?;
+        let res = c.call(&c.relayer, "request_cancel", args.clone()).await?;
+        assert!(res.is_success(), "{fail}: {:?}", res.failures());
+        assert!(!logged(&res, "\"event\":\"cancel_signed\""), "{fail}");
+        let v = c.signed_tx(cid).await?;
+        assert!(
+            v["cancel"].is_null(),
+            "{fail}: a failed cancel leaves no slot behind"
+        );
+        assert_eq!(c.inv().await?, (0, EVM_VALUE, false), "{fail}");
+        assert_eq!(c.state(cid).await?, "Unknown", "{fail}");
+        // the signer recovers: the retry succeeds, the cancel lands, the owner releases
+        c.set_mode("Ok").await?;
+        let res = c.call(&c.relayer, "request_cancel", args.clone()).await?;
+        assert!(res.is_success(), "{fail}: {:?}", res.failures());
+        assert!(logged(&res, "\"event\":\"cancel_signed\""), "{fail}");
+        let v = c.signed_tx(cid).await?;
+        let hash = v["cancel"]["tx_hash"].as_str().unwrap().to_string();
+        assert_eq!(c.inv().await?, (0, EVM_VALUE, false), "{fail}");
+        // a verified cancel refuses a second request (compare-and-set)
+        refused(
+            c.call(&c.relayer, "request_cancel", args).await?,
+            MSG_CANCEL_EXISTS,
+        );
+        let res = c.attest(&c.relayer, cid, &hash, true, "Finalized").await?;
+        assert!(res.is_success(), "{fail}: {:?}", res.failures());
+        assert_eq!(
+            c.inv().await?,
+            (0, EVM_VALUE, false),
+            "{fail}: evidence only"
+        );
+        let res = c
+            .call(&c.owner, "confirm_release", json!({ "commitment_id": cid }))
+            .await?;
+        assert!(res.is_success(), "{fail}: {:?}", res.failures());
+        assert_eq!(c.state(cid).await?, "Cancelled", "{fail}");
+        assert_eq!(c.inv().await?, (0, 0, false), "{fail}: budget released");
+        assert!(c.lane().await?["in_flight"].is_null(), "{fail}: lane free");
+    }
+    Ok(())
+}
+
+// ---- malformed recovery signatures through attest_external (todo 045) -----------------------------
+
+#[tokio::test]
+async fn attest_external_refuses_a_bad_y_parity_and_a_high_s_signature() -> anyhow::Result<()> {
+    let c = fresh("evm/bad-sig", Stage::Seeded).await?;
+    c.set_mode("Err").await?;
+    let (cid, _) = c.propose_ok(EVM_VALUE, "bs-1").await?;
+    let v = c.signed_tx(cid).await?;
+    let tx = expect_original(&v, EVM_VALUE, SEED_NONCE);
+    let (r, s, y) = mock_sign(c.purser.id().as_str(), &c.path, &tx.sighash());
+    let attempt = |hash: [u8; 32], r: [u8; 32], s: [u8; 32], y: u8| {
+        json!({ "commitment_id": cid, "tx_hash": format!("0x{}", hex(&hash)), "outcome": { "Landed": {
+            "success": true, "finality": "Finalized", "block_number": "5",
+            "block_hash": format!("0x{}", "ab".repeat(32)),
+            "signature": { "r": hex(&r), "s": hex(&s), "y_parity": y } } } })
+    };
+    // y_parity outside {0, 1}: refused even with the otherwise genuine (r, s) and its true hash for y
+    for bad_y in [2u8, 3, 27, 255] {
+        let hash = keccak(&tx.signed_raw(&r, &s, y));
+        refused(
+            c.call(&c.relayer, "attest_external", attempt(hash, r, s, bad_y))
+                .await?,
+            MSG_UNKNOWN_TX_HASH,
+        );
+    }
+    // the malleated twin (n - s, flipped parity) recovers to the same key but is high-s: refused
+    let neg = -Option::<Scalar>::from(Scalar::from_repr(FieldBytes::from(s))).unwrap();
+    let high_s: [u8; 32] = neg.to_bytes().into();
+    let hash = keccak(&tx.signed_raw(&r, &high_s, y ^ 1));
+    refused(
+        c.call(
+            &c.relayer,
+            "attest_external",
+            attempt(hash, r, high_s, y ^ 1),
+        )
+        .await?,
+        MSG_UNKNOWN_TX_HASH,
+    );
+    assert_eq!(c.state(cid).await?, "Unknown");
+    assert!(c.signed_tx(cid).await?["original"]["raw_tx"].is_null());
+    assert_eq!(c.inv().await?, (0, EVM_VALUE, false));
+    // control: the genuine signature is accepted
+    let hash = keccak(&tx.signed_raw(&r, &s, y));
+    let res = c
+        .call(&c.relayer, "attest_external", attempt(hash, r, s, y))
+        .await?;
+    assert!(res.is_success(), "{:?}", res.failures());
+    assert_eq!(c.state(cid).await?, "Confirmed");
+    Ok(())
+}
+
+// ---- governance refusals that the mocked VM only sees with hand-set accounting (todo 045) ---------
+
+#[tokio::test]
+async fn enabling_a_task_with_a_delegate_and_reusing_a_path_are_refused() -> anyhow::Result<()> {
+    let c = fresh("evm/gov", Stage::Bare).await?;
+    let extra = c.worker.dev_create_account().await?;
+    for t in ["t2", "t3"] {
+        let res = c
+            .call(
+                &c.owner,
+                "create_task",
+                json!({ "task_id": t, "cap": "1000000", "token": "NearNative", "crew_cap": 3 }),
+            )
+            .await?;
+        assert!(res.is_success(), "{:?}", res.failures());
+    }
+    // t2 gets a delegate first, so it can no longer become an EVM task
+    let res = c
+        .call(
+            &c.owner,
+            "add_delegate",
+            json!({ "task_id": "t2", "account_id": extra.id(), "derivation_path": "evm/gov-t2" }),
+        )
+        .await?;
+    assert!(res.is_success(), "{:?}", res.failures());
+    refused(
+        c.call(&c.owner, "enable_evm_task", json!({ "task_id": "t2" }))
+            .await?,
+        MSG_EVM_TASK_NOT_EMPTY,
+    );
+    // a derivation path belongs to one delegate for all time (here: the one `evm_setup` registered)
+    refused(
+        c.call(
+            &c.owner,
+            "add_delegate",
+            json!({ "task_id": "t3", "account_id": extra.id(), "derivation_path": c.path }),
+        )
+        .await?,
+        MSG_PATH_IN_USE,
+    );
+    // an empty task still enables
+    let res = c
+        .call(&c.owner, "enable_evm_task", json!({ "task_id": "t3" }))
+        .await?;
+    assert!(res.is_success(), "{:?}", res.failures());
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_contract_without_spare_balance_refuses_before_reserving_anything() -> anyhow::Result<()>
+{
+    let c = fresh("evm/low-balance", Stage::Seeded).await?;
+    // Drain the contract's free balance down to well under the storage-stake headroom the preflight keeps
+    // (3000 bytes of stake) using the real account accounting, not a hand-set mock.
+    let acct = c.purser.view_account().await?;
+    let staked = acct.storage_usage as u128 * 10u128.pow(19);
+    let keep = 10u128.pow(21); // 0.001 NEAR spendable, far below 3000 bytes x 1e19 = 0.03 NEAR
+    let drain = acct.balance.as_yoctonear() - staked - keep;
+    c.purser
+        .as_account()
+        .transfer_near(
+            c.owner.id(),
+            near_workspaces::types::NearToken::from_yoctonear(drain),
+        )
+        .await?
+        .into_result()?;
+    refused(
+        c.propose(EVM_VALUE, "lb-1", 300).await?,
+        MSG_EVM_LOW_BALANCE,
+    );
+    assert_eq!(c.inv().await?, (0, 0, false));
+    assert!(c.lane().await?["in_flight"].is_null());
+    let listed = c
+        .view(
+            "list_commitments",
+            json!({ "task_id": TASK, "from_index": 0, "limit": 10 }),
+        )
+        .await?;
+    assert!(listed.as_array().unwrap().is_empty(), "nothing reserved");
+    Ok(())
+}
+
 // ---- gas: measured at receipt level, and the budgets are enforced ---------------------------------
 
 use near_workspaces::result::ExecutionOutcome;
@@ -1038,6 +1228,41 @@ async fn the_gas_budgets_hold_with_headroom_and_are_measured() -> anyhow::Result
     });
     assert_eq!(b.inv().await?, (0, EVM_VALUE, false));
 
+    // C: cache_derived_key -> signer view -> on_derived_key
+    let cc = fresh("evm/gas-c", Stage::Bare).await?;
+    let cache_res = cc.cache_key().await?;
+    let (cc_purser, cc_signer) = (cc.purser.id().clone(), cc.signer.id().clone());
+    let cache_sync = burnt(&cache_res, "cache_derived_key", |o| {
+        o.executor_id == cc_purser && !has_log(o, "derived_key_cached")
+    });
+    let derived_view = burnt(&cache_res, "derived_public_key", |o| {
+        o.executor_id == cc_signer
+    });
+    let on_derived = burnt(&cache_res, "on_derived_key", |o| {
+        has_log(o, "derived_key_cached")
+    });
+
+    // D: attest that carries a recovery signature (two ecrecover + tx hashing)
+    let d = fresh("evm/gas-d", Stage::Seeded).await?;
+    d.set_mode("Err").await?;
+    let (cid_d, _) = d.propose_ok(EVM_VALUE, "g-3").await?;
+    let vd = d.signed_tx(cid_d).await?;
+    let txd = expect_original(&vd, EVM_VALUE, SEED_NONCE);
+    let (r, s, y) = mock_sign(d.purser.id().as_str(), &d.path, &txd.sighash());
+    let hash_d = keccak(&txd.signed_raw(&r, &s, y));
+    let recover_res = d
+        .call(&d.relayer, "attest_external", json!({
+            "commitment_id": cid_d, "tx_hash": format!("0x{}", hex(&hash_d)), "outcome": { "Landed": {
+                "success": true, "finality": "Finalized", "block_number": "5",
+                "block_hash": format!("0x{}", "ab".repeat(32)),
+                "signature": { "r": hex(&r), "s": hex(&s), "y_parity": y } } } }))
+        .await?;
+    assert!(recover_res.is_success(), "{:?}", recover_res.failures());
+    let attest_recover = burnt(&recover_res, "attest_external(recovery)", |o| {
+        has_log(o, "external_attested")
+    });
+    assert_eq!(d.inv().await?, (EVM_VALUE, 0, false));
+
     let rows = [
         ("propose_payment (EVM arm, sync part)", propose_sync),
         ("mock signer sign (synchronous mock)", sign),
@@ -1047,6 +1272,13 @@ async fn the_gas_budgets_hold_with_headroom_and_are_measured() -> anyhow::Result
         ("mock signer sign (cancel)", cancel_sign),
         ("on_cancel_signed (Ok)", on_cancel_signed),
         ("attest_external (Original, success, Finalized)", attest),
+        (
+            "attest_external (recovery signature, 2 ecrecover)",
+            attest_recover,
+        ),
+        ("cache_derived_key (sync part)", cache_sync),
+        ("signer derived_public_key (mock view)", derived_view),
+        ("on_derived_key (parse + cache + lane)", on_derived),
     ];
     println!("\n== EVM receipt-level gas_burnt (sandbox, mock signer) ==");
     for (name, g) in rows {
@@ -1058,6 +1290,20 @@ async fn the_gas_budgets_hold_with_headroom_and_are_measured() -> anyhow::Result
         ON_SIGNED_GAS.as_tgas(),
         EVM_MIN_PREPAID.as_tgas()
     );
+
+    println!(
+        "constants: KEY_VIEW_GAS {} | KEY_CALLBACK_GAS {} Tgas",
+        KEY_VIEW_GAS.as_tgas(),
+        KEY_CALLBACK_GAS.as_tgas()
+    );
+    assert!(
+        on_derived * 2 <= KEY_CALLBACK_GAS.as_gas(),
+        "on_derived_key under 2x headroom"
+    );
+    // `derived_view` is the MOCK signer's cost (printed only): the real signer's is in docs/EVM-PROBES.md.
+    assert!(derived_view > 0);
+    // a recovery attest runs in the relayer's own call: it must fit far inside a normal 300 Tgas call
+    assert!(attest_recover * 2 <= 300 * 10u64.pow(12) && cache_sync > 0);
 
     // The callbacks must fit their static budgets with >= 2x headroom (a real, heavier state or a repriced
     // host function must not tip an on_signed into a gas failure after the signer already answered).
@@ -1083,8 +1329,18 @@ async fn the_gas_budgets_hold_with_headroom_and_are_measured() -> anyhow::Result
     );
     // The real signer yields and reserves 7 + 2 Tgas of the 15 Tgas minimum itself, so SIGN_GAS must leave
     // room above that floor for its own execution (the mock under-measures its cost).
+    // Measured on the LIVE signer (docs/EVM-PROBES.md, "Real signer gas, from live txs"; propose tx 523rR74z...):
+    // sign 4.273 + return_signature_and_clean_state_on_success 3.463 Tgas, on_signed 3.144, derived_public_key
+    // 5.372, on_derived_key 1.966. Each constant keeps >= 2x headroom over the real number.
+    const LIVE_SIGN_BURNT: u64 = 4_273_000_000_000 + 3_463_000_000_000;
+    const LIVE_ON_SIGNED_BURNT: u64 = 3_144_000_000_000;
+    const LIVE_KEY_VIEW_BURNT: u64 = 5_372_000_000_000;
+    const LIVE_ON_DERIVED_BURNT: u64 = 1_966_000_000_000;
+    assert!(SIGN_GAS.as_gas() >= 2 * LIVE_SIGN_BURNT.max(15_000_000_000));
     assert!(
-        SIGN_GAS.as_tgas() >= 2 * 15 && ON_SIGNED_GAS.as_gas() > on_signed.max(on_cancel_signed)
+        ON_SIGNED_GAS.as_gas() >= 2 * LIVE_ON_SIGNED_BURNT.max(on_signed).max(on_cancel_signed)
     );
+    assert!(KEY_VIEW_GAS.as_gas() >= 2 * LIVE_KEY_VIEW_BURNT);
+    assert!(KEY_CALLBACK_GAS.as_gas() >= 2 * LIVE_ON_DERIVED_BURNT.max(on_derived));
     Ok(())
 }

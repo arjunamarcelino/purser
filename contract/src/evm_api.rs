@@ -30,16 +30,21 @@ use crate::evm_tx::{self, Eip1559Unsigned};
 use crate::types::*;
 use crate::{assert_invariant_unless_frozen, core_panic, Purser, PurserExt, MAX_MEMO_LEN};
 
-/// Gas attached to the signer's `sign` call. PROVISIONAL (plan: measure in Phase 3 on the real signer, then
-/// set; a test fails if exceeded).
+/// Gas attached to the signer's `sign` call. Measured on testnet 2026-11-06 (v1.signer-prod.testnet, txs in
+/// docs/EVM-PROBES.md): `sign` 4.27 + `return_signature_and_clean_state_on_success` 3.46 = 7.74 Tgas burnt,
+/// so 50 leaves 6.5x headroom (the signer itself requires at least 15 attached).
 pub const SIGN_GAS: Gas = Gas::from_tgas(50);
 /// Static gas of `on_signed` / `on_cancel_signed`: verify a signature (one `ecrecover`), a few `store`
-/// writes and one event. PROVISIONAL.
+/// writes and one event. Measured on testnet 2026-11-06: `on_signed` 3.15 Tgas (9.5x headroom).
 pub const ON_SIGNED_GAS: Gas = Gas::from_tgas(30);
 /// Minimum prepaid gas a proposal (or cancel request) must arrive with, checked BEFORE anything is
-/// reserved: the sign and callback gas above plus this call's own execution, with headroom. PROVISIONAL.
+/// reserved: the sign and callback gas above plus this call's own execution, with headroom. Measured on
+/// testnet 2026-11-06: the synchronous part of `propose_payment` burnt 3.94 Tgas, so 2 x 3.94 + 50 + 30 = 88
+/// fits in 100.
 pub const EVM_MIN_PREPAID: Gas = Gas::from_tgas(100);
-/// Gas for the signer's `derived_public_key` view call and for its `on_derived_key` callback. PROVISIONAL.
+/// Gas for the signer's `derived_public_key` view call and for its `on_derived_key` callback. Measured on
+/// testnet 2026-11-06: the signer's `derived_public_key` 5.37 Tgas (2.8x headroom), `on_derived_key` 1.97
+/// Tgas (5.1x).
 pub const KEY_VIEW_GAS: Gas = Gas::from_tgas(15);
 pub const KEY_CALLBACK_GAS: Gas = Gas::from_tgas(10);
 /// Storage a proposal may add (the `EvmMeta`, the commitment, the idempotency key), as a byte budget the
@@ -847,15 +852,21 @@ impl Purser {
                     .emit();
                 }
             }
-            SignOutcome::Invalid => PurserEvent::PaymentUnknown {
-                task_id,
-                commitment_id: cid,
-                request_id,
-                reason: "cancel_invalid_signature".to_string(),
-                state,
+            SignOutcome::Invalid => {
+                Self::free_unsigned_cancel_slot(&mut meta, &cm);
+                self.evm_meta.insert(cid, meta);
+                PurserEvent::PaymentUnknown {
+                    task_id,
+                    commitment_id: cid,
+                    request_id,
+                    reason: "cancel_invalid_signature".to_string(),
+                    state,
+                }
+                .emit()
             }
-            .emit(),
             SignOutcome::Err => {
+                Self::free_unsigned_cancel_slot(&mut meta, &cm);
+                self.evm_meta.insert(cid, meta);
                 if state == ReservationState::Unknown {
                     PurserEvent::PaymentUnknown {
                         task_id,
@@ -869,6 +880,20 @@ impl Purser {
             }
         }
         cid
+    }
+
+    /// A cancel whose `sign` answer failed (Err or unverifiable) and that holds NO verified signature
+    /// never produced a transaction, so its slot is freed and `request_cancel` can be retried. This is
+    /// the only place the slot is cleared, and each request has exactly one callback, so the
+    /// compare-and-set holds: while the callback is pending the slot is occupied (a second request is
+    /// refused), and a verified signature (callback or attested recovery) is never cleared. A signature
+    /// recovered through `attest_external` for the cleared attempt is still matched if the retry used
+    /// the same fees (identical digest); a different-fee retry replaces the digest, which is safe because
+    /// only one cancel digest is ever eligible at a time.
+    fn free_unsigned_cancel_slot(meta: &mut EvmMeta, cm: &CancelMeta) {
+        if cm.sig.is_none() {
+            meta.cancel = None;
+        }
     }
 
     // ---- relayer / owner flow --------------------------------------------------------------------
@@ -911,6 +936,12 @@ impl Purser {
                     MSG_TOO_EARLY_UNKNOWN
                 );
                 mark_ambiguous(c, now).unwrap_or_else(core_panic);
+                // Same as `on_signed`'s ambiguous path: the first of Reserved->Signed / Reserved->Unknown
+                // moves idempotency to Committed, so a retried request_id replays the cid.
+                self.idempotency.insert(
+                    (c.delegate.clone(), request_id.clone()),
+                    IdemState::Committed { commitment_id },
+                );
                 "ambiguous"
             }
             _ => return false,
@@ -1145,7 +1176,8 @@ impl Purser {
     /// bump cannot unstick a transaction priced below the base fee, so the caller may go up to the
     /// ceiling). The slot is claimed synchronously BEFORE the sign promise, which is the compare-and-set: a
     /// duplicate request simply fails. There is one cancel in v1 (no escalation): a cancel that is itself
-    /// stuck leaves the commitment `Unknown` with its budget locked, which is safe. Allowed on a frozen
+    /// stuck leaves the commitment `Unknown` with its budget locked, which is safe. A cancel whose `sign`
+    /// failed with no verified signature frees the slot in `on_cancel_signed`, so it can be requested again. Allowed on a frozen
     /// task (it is the way out).
     pub fn request_cancel(
         &mut self,

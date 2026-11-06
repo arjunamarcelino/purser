@@ -51,7 +51,7 @@ pub use error::{
 pub use events::PurserEvent;
 pub use evm_api::{
     EvmCfgView, EvmPayloadScheme, EvmTxView, ExternalOutcome, Finality, LaneView, SignatureInput,
-    SignedTxView, EVM_MIN_PREPAID, ON_SIGNED_GAS, SIGN_GAS,
+    SignedTxView, EVM_MIN_PREPAID, KEY_CALLBACK_GAS, KEY_VIEW_GAS, ON_SIGNED_GAS, SIGN_GAS,
 };
 pub use evm_tx::{bump_fee, encode_signed, encode_unsigned, Eip1559Unsigned, EVM_PAYLOAD_VERSION};
 pub use idempotency::{classify, IdemDecision};
