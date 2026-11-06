@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { aggregate, median, p95 } from "./metrics-report.mjs";
+import { aggregate, median, p95, parseMetrics } from "./metrics-report.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const fx = (n) => path.join(here, "metrics-fixtures", n);
@@ -32,7 +32,10 @@ test("good fixtures produce a report with expected medians", () => {
   assert.match(md, /case_1_three_delegates_legit_purchases_succeed` \| 3\/3 \| core/);
   assert.match(md, /case_2b_external_parallel_dispatch_races` \| 3\/3/);
   assert.doesNotMatch(md, /QUICK run/);
-  assert.deepEqual(fs.readdirSync(path.dirname(out)), ["METRICS.test.md"]); // no temp file left
+  assert.deepEqual(fs.readdirSync(path.dirname(out)).sort(), ["METRICS.test.json", "METRICS.test.md"]); // md + json, no temp file left
+  const json = JSON.parse(fs.readFileSync(out.replace(/\.md$/, ".json"), "utf8"));
+  assert.equal(json.counters.overrun.total, 0);
+  assert.equal(json.latency.added_wall_ms, 200);
 });
 
 test("nonzero overrun exits nonzero and writes nothing", () => {
@@ -78,4 +81,12 @@ test("a failed core case blocks output", () => {
   assert.notEqual(r.status, 0);
   assert.match(r.stderr, /case_5.* passed 2\/3/);
   assert.deepEqual(fs.readdirSync(d), []);
+});
+
+test("a METRIC behind libtest's 'test <name> ... ' prefix is parsed, a lookalike is not", () => {
+  const got = parseMetrics(
+    "test overruns ... METRIC count.overrun 0 runs=5\nMETRIC count.duplicate 0 pairs=15\n" +
+      "test other ... not a METRIC count.overrun 7\n",
+  );
+  assert.deepEqual(got.map((m) => [m.name, Number(m.value)]), [["count.overrun", 0], ["count.duplicate", 0]]);
 });

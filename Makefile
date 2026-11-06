@@ -65,5 +65,5 @@ demo: ; scripts/demo.sh
 metrics: ; scripts/metrics.sh
 
 # Static security audit (TRD S1-S4, S7, S8) over contract/src, plus its seeded-violation self-test.
-audit: ; scripts/audit-security.sh && scripts/audit-security-selftest.sh
+audit: ; scripts/audit-security.sh && scripts/audit-security-selftest.sh && node scripts/check-readme.mjs
 hooks: ; cp scripts/pre-commit .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit && echo "pre-commit hook installed"

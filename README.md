@@ -2,17 +2,111 @@
 
 **One budget. Many agents. Nothing overspent.**
 
-A NEAR smart contract that lets a crew of AI agents draw from one shared, capped
-budget and enforces `completed + outstanding ≤ cap` across concurrency, retries,
-timeouts, and revocation. The AI only proposes; the contract enforces.
+Tracks: security (primary), swarms, agents
 
-**Tracks:** security (primary) · swarms · agents
+## What it is
 
-**Status:** contract (NEAR-native core, property + attack suites), the untrusted AI proposer crew
-(`proposer/`) and the operator board (`app/`) are built and running on testnet; the indexer and the
-recorded demo are next. A stretch EVM payment path (MPC-signed Sepolia transfers, a named relayer trust
-assumption, nonce-burn reclaim) is built and was exercised end to end on NEAR testnet + Sepolia; see
-**EVM path (stretch)**. `./scripts/deploy-testnet.sh && ./scripts/demo.sh` reproduces the demo on testnet (see **Try it**). Specs live in `docs/`.
+A NEAR smart contract that lets multiple AI agents draw from one shared, capped task budget and
+enforces `completed + outstanding ≤ budget` across concurrency, retries, timeouts, and revocation.
+The AI only proposes; the contract enforces. The AI is outside the trust boundary: safety is a
+property of the contract code, provable by the tests below, not of the agent's behavior.
+
+## The invariant
+
+**Safety invariant (I):** `completed + outstanding ≤ B` at every observable state of every task that is not **frozen** (a task is frozen only when the chain proves a wrong owner `reconcile`; it then authorizes nothing — see §4).
+
+`completed` is the sum of actual spend over confirmed commitments; `outstanding` is the sum of
+reserved amounts over reserved, signed and unknown ones (`docs/PURSER-TECHNICAL.md` §2, §4). The
+claim rests on two mechanisms: atomic *reserve-before-sign* and tri-state idempotency.
+
+## Try it (do X → see Y)
+
+Prerequisites: Rust 1.95 with the `wasm32-unknown-unknown` target, [`cargo-near`](https://github.com/near/cargo-near),
+Node 26, pnpm 10 (`corepack enable`), `near-cli-rs` 0.30.1. Testnet steps need a funded testnet account in
+the near-cli keychain. The sandbox binary (nearcore 2.14.0, sha256-pinned) downloads on first test run.
+
+| # | Do | See |
+|---|---|---|
+| 1 | `OPERATOR_ACCOUNT_ID=<you>.testnet ./scripts/deploy-testnet.sh` | accounts `purser/scout/forge/buyer/...<you>.testnet`; `PURSER_CONTRACT_ID=purser.<you>.testnet` written to `.env.testnet`. Testnet only: it refuses any other network. |
+| 2 | `./scripts/demo.sh` | a fresh task `demo-<RUN_ID>` with 100 units, then the seven outcomes below, each with a tx ref the script already re-read from the chain |
+| 2a | outcome 1, legit purchases | remaining budget 100 → 70 → 40 |
+| 2b | outcome 2, three agents fire 30 each at 40 left | one admitted (40 → 10); two **refused** `exceeds task budget`, with the block heights |
+| 2c | outcome 3, the same `request_id` again | the original result, **no duplicate authorization** |
+| 2d | outcome 4, a non-allowlisted recipient; a reused `request_id` with another recipient | both **refused** (`recipient not allowlisted`, `request_id reused with a different request`) |
+| 2e | outcome 5, Revoke Buyer, then Buyer proposes | **BLOCKED** (`delegate not authorized`) |
+| 2f | outcome 6, the contract's own verdict | `completed + outstanding ≤ cap ✓` |
+| 2g | outcome 7, timeout on an issued payment | **sandbox replay** (not a testnet tx, labeled so): the reservation is **retained** through silence, retry and revoke; an early `reconcile` is refused |
+| 3 | `make test` (contract: `cd contract && cargo test`) | unit, property (10,000 + 2,000 generated sequences) and sandbox suites green |
+| 4 | `make prove` | the property tests plus the named attack cases, with the race-proof block heights printed |
+| 5 | `make metrics` (`QUICK=1 make metrics` for a short run) | regenerates `docs/METRICS.md` from real runs; fails closed if a run or a metric is missing |
+| 6 | `make audit` | the static security audit (S1-S4, S7, S8) passes, and its seeded-violation self-test proves it can fail |
+| 7 | `make ts-test-sandbox` | the AI proposer on a local chain: the concurrent over-budget case through the AI path, rogue proposals, key scope |
+| 8 | `make board` | the operator board at http://127.0.0.1:5173 (see [`app/README.md`](app/README.md)) |
+
+Every demo run uses a new task (revocation is permanent), so `demo.sh` can be repeated; a failed run is
+just re-run (a public-RPC `429` is rate limiting, not a code failure). `RUN_ID` and `DEMO_CAP_NEAR`
+(default `1`; `0.5` suits a thin wallet) are the only knobs. A run pays out 90 of the cap's 100 units to
+the operator's own merchant sub-accounts, so the contract needs about `0.9 × DEMO_CAP_NEAR + 0.05` NEAR
+**spendable** (its wasm locks ~2.6 NEAR as storage stake); `demo.sh` stops early with the exact top-up
+command if it is short. A brand-new operator needs testnet NEAR first (about `3 × CAP_NEAR + 6`).
+
+**Outcome 7 is a replay, not a testnet transaction.** The shipped wasm cannot be made to lose a settlement
+callback, and the test-only `fault-injection` build is refused by `build.rs` and `scripts/check-wasm-clean.sh`.
+The summary reads **6 live on testnet + 1 sandbox replay**.
+
+## Evidence
+
+[`docs/METRICS.md`](docs/METRICS.md) is generated by `make metrics` and labeled "measured on our harness":
+a local near-workspaces sandbox, the production wasm, N repeats of the attack suite plus a dedicated
+measuring test. The safety counters use oracles independent of the contract's own accounting (the
+merchant's balance, receipt events). Headline rows are quoted below from that file; nothing is typed by hand.
+
+<!-- metrics:begin -->
+| Metric | Measured on our harness |
+|---|---|
+| Budget overruns | **0** across 50 concurrent race runs (target 0) |
+| Duplicate authorizations | **0** across 150 `(delegate, request_id)` pairs (target 0) |
+| Valid requests wrongly blocked | **0** of 400 (target 0) |
+| Attack suite | 8 core cases, each passing 10/10, plus the racing variants and the fault-build guard |
+| Property tests | invariant held over 10,000 + 2,000 generated sequences |
+| Timeouts and retries | 0 releases on silence, 0 duplicates on retry, reservation retained in 10/10 runs |
+| Added latency per authorization | +254 ms wall (sandbox, not testnet); 2 blocks from admission to settlement |
+| Gas per authorization | 3.51 Tgas (propose) + 2.22 Tgas (settlement callback) = 5.74 Tgas |
+| Storage per commitment | 375 bytes |
+
+Run: N=10, commit `62c406c866e1` (dirty tree), wasm sha256 `55d40b073e6b5a0f…`. Reproduce with `make metrics`.
+<!-- metrics:end -->
+
+## Architecture
+
+See [`docs/PURSER-TECHNICAL.md`](docs/PURSER-TECHNICAL.md) §3. Contract in `contract/` (near-sdk 5.30.0,
+pinned), the untrusted AI proposer crew in `proposer/`, the operator board in `app/`, the derived
+off-chain cache in `indexer/`, the EVM relayer in `relayer/`. The AI proposer holds one function-call key per
+persona that can call only `propose_payment`, and does no client-side policy: every limit is the contract's
+([`proposer/README.md`](proposer/README.md)).
+
+## Honest limits
+
+- **Revocation blocks new authorizations; it cannot un-issue signatures or transactions already produced.**
+  It also does not release the delegate's already-reserved budget.
+- **Cross-chain confirmation relies on a named relayer attestation.** The contract cannot read Sepolia;
+  absent proof, reservations stay locked (conservative accounting), and only the owner's `confirm_release`
+  frees them. See the trust table under **EVM path**.
+- **MVP scope: one token, no USD oracle, a NEAR-native core, and one optional EVM path** (Sepolia only).
+- **near-sdk 5.30.0 is very fresh.** It is pinned exactly and the whole suite runs against it.
+- **A signer error is not proof that no signature exists.** The MPC nodes' `respond` transaction carries the
+  signature in public args even when the caller's yield timed out, so a failed signer callback keeps the
+  reservation (`Unknown`), never releases it.
+- **State growth is bounded, not zero.** Commitments and their idempotency entries are never pruned. Each
+  task may create at most `DEFAULT_MAX_COMMITMENTS` (1000) commitments unless the owner sets another limit with
+  `set_task_limits`; the cap counts every commitment ever created, including failed ones. The storage stake
+  (about 0.00375 NEAR per commitment, measured) is paid from the contract's own balance.
+- **Measurements are sandbox measurements.** Latency and gas in `docs/METRICS.md` come from a local nearcore
+  sandbox, EVM gas from a mock signer. They are not testnet or mainnet figures.
+- **Outcome 7 of the demo is a sandbox replay**, because the shipped wasm cannot lose a callback.
+- **The owner is trusted.** Owner-gated calls (`reconcile`, `confirm_release`, limits, allowlists) are
+  not constrained by the contract; a wrong owner attestation can overspend by up to one in-flight value per
+  lane and then freezes the task.
 
 ## Authorization & honest revocation
 
@@ -23,6 +117,10 @@ the budget guarantee is a property of the contract code, never of key mechanics.
 function-call-key path is a documented, deferred option; see the operator gate in
 `docs/BUILD-START-VERIFICATION.md`.)
 
+**State-growth limits (S8).** The owner bounds what a registered delegate can make the contract store with
+`set_task_limits(task_id, min_payment, max_commitments)`; the contract also refuses any attached deposit on
+`propose_payment`. Tasks that never call it get no minimum and a default of 1000 commitments.
+
 **Revocation is honest.** `revoke_delegate` marks a crew member inactive, which blocks all
 **future** authorizations immediately (the next proposal is refused) and reports whether it
 actually changed state. It **cannot** un-issue or recall a signature/transaction already
@@ -30,84 +128,6 @@ produced — no on-chain mechanism can — and it does **not** release that dele
 already-reserved (`outstanding`) budget, which stays reserved until settled or failed by the
 normal lifecycle (no reclaim on silence). The dashboard greys out a revoked agent and marks
 new proposals BLOCKED, with a caption noting already-issued signatures cannot be recalled.
-
-## Develop
-
-| Command | What it does |
-|---|---|
-| `make build` | `cargo near build` → wasm + ABI in `contract/target/near/` |
-| `make test`  | contract unit + integration tests, TS unit tests |
-| `make lint`  | `cargo clippy --all-targets -- -D warnings`, `tsc` typecheck of the TS workspace |
-| `make fmt`   | `cargo fmt` |
-| `make hooks` | install the pre-commit secret-scan hook |
-| `make prove` | the security evidence: property tests + the named attack cases |
-| `make evm-spike` | the stretch EVM go/no-go spike (feature-gated, local + sandbox only): sizes, the wasm gate, per-hash gas and the load tax. Verdict: **GO** |
-| `make relayer` | the stateless Sepolia relayer loop (needs the `EVM_*` and `RELAYER_*` env names in `.env.example`; see [`relayer/README.md`](relayer/README.md)) |
-| `scripts/evm-testnet.sh deploy\|status\|propose\|set-ceiling\|confirm-release` | stand up and drive the EVM path on a fresh `purser2.<operator>` contract beside the demo one (NEAR testnet + Sepolia only; spends testnet NEAR and Sepolia ETH) |
-| `make ts-test-sandbox` | the AI proposer on a local chain: attack case 2 through the AI path, rogue proposals, key scope, exactly-once retries, model-independence property |
-| `make crew` | run Scout, Forge and Buyer against Purser (`NETWORK=sandbox\|testnet`, `SCENARIO=demo\|legit\|race\|rogue`) |
-| `make board` | the operator board at http://127.0.0.1:5173: live invariant, manifest, Revoke, demo buttons (see [`app/README.md`](app/README.md)) |
-| `make types-gen` | regenerate `@purser/types` from the contract ABI |
-| `make deploy-testnet` | deploy to testnet and provision the crew (`OPERATOR_ACCOUNT_ID=<you>.testnet`) |
-| `make demo` | replay the 7 enforcement outcomes: 1-6 live on testnet with tx refs, 7 as a labeled sandbox replay |
-
-## Try it
-
-```sh
-OPERATOR_ACCOUNT_ID=<you>.testnet ./scripts/deploy-testnet.sh && ./scripts/demo.sh
-```
-
-Testnet only: both scripts refuse any other network and check that the RPC itself reports `testnet`.
-
-| Do | See |
-|---|---|
-| Install Node 26, pnpm 10, `near-cli-rs` 0.30.1, `cargo-near`, then `make ts-install build` | the toolchain check passes (a missing tool prints its install command) |
-| Have a funded testnet account in the near-cli keychain. In this session: `! near account import-account ...` | `deploy-testnet.sh` finds the operator and its balance |
-| `OPERATOR_ACCOUNT_ID=<you>.testnet ./scripts/deploy-testnet.sh` (safe to re-run) | accounts `purser/scout/forge/buyer/...<you>.testnet`, then `PURSER_CONTRACT_ID=purser.<you>.testnet`, written to `.env.testnet` |
-| `./scripts/demo.sh` | a fresh task `demo-<RUN_ID>` with 100 units, then **1.** Remaining 100→70→40; **2.** three agents fire 30 each at 40 left: one admitted (40→10), two refused `exceeds_task_budget`, with the block heights; **3.** the same `request_id` again returns the original result, no new spend; **4.** a non-allowlisted recipient and a reused `request_id` with another recipient are refused; **5.** after Revoke, Buyer is `delegate_not_authorized`; **6.** `completed + outstanding ≤ cap ✓` from the contract's own verdict |
-| open any printed `https://testnet.nearblocks.io/txns/<hash>` | the same transaction; the script already re-read each one from the chain and checked its signer, receiver and method |
-
-Every run uses a new task (revocation is permanent), so `demo.sh` can be repeated; a failed run is just
-re-run. `RUN_ID` and `DEMO_CAP_NEAR` (default `1`; `0.5` suits a thin wallet) are the only knobs.
-A run pays out 90 of the cap's 100 units to the operator's own merchant sub-accounts, so it needs about
-`0.9 × DEMO_CAP_NEAR + 0.05` NEAR **spendable** on the contract; its wasm locks ~2.6 NEAR as storage stake,
-and `demo.sh` stops early with the exact top-up command if it is short.
-
-**Outcome 7 is a replay, not a testnet transaction.** The shipped wasm cannot be made to lose a settlement
-callback, and the test-only fault build is refused by `build.rs` and `scripts/check-wasm-clean.sh`.
-`demo.sh` therefore runs attack-suite case 7 on a local sandbox under a `SANDBOX (not testnet)` banner
-(reservation retained through silence, retry and revoke; an early `reconcile` refused). The summary
-reads **6 live on testnet + 1 sandbox replay**.
-
-**Fresh account.** A brand-new operator needs testnet NEAR first (about `3 × CAP_NEAR + 6`, default 12).
-near-cli-rs 0.30.1 offers `near account create-account sponsor-by-faucet-service <you>.testnet
-autogenerate-new-keypair save-to-keychain network-config testnet create` (helper
-`https://helper.nearprotocol.com/account`); its limits and granted amount are not published and the
-route has not been exercised here, so if it fails, fund the account from another testnet account with
-`near tokens <funded>.testnet send-near <you>.testnet '12 NEAR' network-config testnet sign-with-keychain send`.
-
-The AI proposer is untrusted by design: it holds one function-call key per persona that can call
-only `propose_payment`, and does no client-side policy — every limit is the contract's. See
-[`proposer/README.md`](proposer/README.md).
-
-The test-only `fault-injection` feature never builds by accident: `build.rs` refuses it unless
-`PURSER_ALLOW_FAULT_INJECTION=1` is set (so `--all-features` fails loudly), and
-`scripts/check-wasm-clean.sh <wasm>` refuses a fault build (CI and `make build-release` run it).
-
-## Security evidence
-
-`make prove` runs, over thousands of generated interleavings and on a real sandbox chain:
-
-- **Property tests** (`contract/tests/properties.rs`). Thousands of random operation sequences over
-  the pure accounting core and over the real contract entrypoints (callbacks delivered out of
-  order or lost, retries, revocation, owner reconcile). After **every** step they check the
-  contract against an independent model: `completed + outstanding ≤ cap`, one authorization per
-  request, the money that left never exceeds what is accounted, and nothing is released
-  without proof.
-- **Attack suite** (`contract/tests/attacks.rs`). One named test per demo case (legit spend,
-  concurrent over-budget, retry, in-flight retry, tampered recipient, revocation, timeout).
-  The concurrency cases put every proposal into **one block** and prove from on-chain receipt
-  heights that each admission ran before the first settlement, so the race was actually exercised.
 
 **Operational notes.** A commitment whose settlement callback was lost stays reserved until the
 owner reconciles it with the transfer's **observed final outcome** (never on silence), and
@@ -182,53 +202,29 @@ Sepolia evidence.
 - Gas figures (`docs/EVM-PROBES.md`) come from a sandbox with a mock signer; the real signer's yield/resume
   cost is not in that table.
 
-### Live evidence (NEAR testnet + Sepolia)
+Live transaction references for both stuck-payment runs are in [`docs/EVM-EVIDENCE.md`](docs/EVM-EVIDENCE.md).
 
-Contract `purser2.arjuna-purser.testnet`, relayer `relayer2.arjuna-purser.testnet`, delegate
-`evmscout.arjuna-purser.testnet`, lane address `0x7f6f3d4b8c67acd84e05df8fc74bb115154e64ac`.
+## Develop
 
-| Step | Reference |
+| Command | What it does |
 |---|---|
-| Payment 1 (settled): NEAR `propose_payment` | [testnet tx](https://testnet.nearblocks.io/txns/523rR74zoyjFDKCKeeWNXUPTvKKmw8SBbunVoPuCj915) |
-| Payment 1: Sepolia transfer (nonce 0, block 12071752) | [Sepolia tx](https://sepolia.etherscan.io/tx/0xbf264ff1f43e37336d09f92304785047f67af9f9bedefc32e5ed93e9b818eb12) |
-| Payment 1: `attest_external` (Confirmed) | [testnet tx](https://testnet.nearblocks.io/txns/6G9HeGbTD4LGyYDBtTj7uhcMCquJzhgpacX2GraxC91y) |
-| Payment 2 (stuck, cancelled, released): `set_evm_cfg`, fee ceiling set to 1 wei | [testnet tx](https://testnet.nearblocks.io/txns/5qx3BdfwR2LTKQFYcVLvphGp8f33EVhvZh4tntHizb2b) |
-| Payment 2: `propose_payment` (nonce 1, unminable at that fee, rejected by both RPCs, never mined) | [testnet tx](https://testnet.nearblocks.io/txns/2n8eifrbKzgahkxK5yoWwK6TzgEHEejqbgY2yu6NR5iE) |
-| Payment 2: original hash (never on Sepolia) | `0x8434936e9abcadb5d36aad62156c58589dc49ad6f7d3851321d6a0cfa1203b84` |
-| Payment 2: `set_evm_cfg`, fee ceiling raised to 2 gwei | [testnet tx](https://testnet.nearblocks.io/txns/2kiFJK6yvSMbLWgYSLXQq5sW4zYaEtaCvrfifJPAbiPy) |
-| Payment 2: cancel (0-value self-send, nonce 1, block 12073381) | [Sepolia tx](https://sepolia.etherscan.io/tx/0x4455c91e7861588aa5663d25ca729fb277cdded585fcb11cd952a5723e34aa46) |
-| Payment 2: owner `confirm_release` (Unknown to Cancelled) | [testnet tx](https://testnet.nearblocks.io/txns/J36miiF5cmmPpUiQGNZucdi62L7dWgTmqoBCEZzTUFDV) |
-
-Payments 1 and 2 ran on the first deployed wasm (code hash `398d9ed6…364dd`). Code review then changed the
-contract (a retryable cancel slot, idempotency set on `mark_unknown` from `Reserved`, tests), so `purser2` was
-upgraded in place to code hash `9d46e69d…a44b` (state kept; no storage layout change) and the stuck-cancel-release
-path was run again as payment 3. The `mark_unknown` and `request_cancel` hashes of payment 2 were not captured.
-
-| Step (payment 3, on the fixed code) | Reference |
-|---|---|
-| `set_evm_cfg`, fee ceiling set to 1 wei | [testnet tx](https://testnet.nearblocks.io/txns/3XkG41Zu23DiT5K1rSHperxBW5mxnbNYPQqqc6HivoGs) |
-| `propose_payment` (commitment 2, nonce 2, unminable, rejected by both RPCs on every retry, never mined) | [testnet tx](https://testnet.nearblocks.io/txns/7q9VXWcMUDSeMqUUNJ7wkU9623SaPT2zB1PkuaCHcj91) |
-| Original hash (never on Sepolia) | `0x5d8f4b3c2c4ea28339639bd76fc030b5e6c86df552ae2dfaf899eb3335105e2e` |
-| Relayer `mark_unknown` (Signed to Unknown; reservation held) | [testnet tx](https://testnet.nearblocks.io/txns/ZJmD1LkfbMPHpbQkzQ1NAxkVu35T8G3PTUcVZY8fRtK) |
-| `set_evm_cfg`, fee ceiling raised to 2 gwei / 1 gwei | [testnet tx](https://testnet.nearblocks.io/txns/GJ4MsCu8APedg8dKbeBVKH1tEiSTajATAa6cm3Qo52xe) |
-| `request_cancel` | [testnet tx](https://testnet.nearblocks.io/txns/5JA75B9unGETX6pVSLiqbdAi5sZGg6XqNFVmnUME2bHG) |
-| Cancel (0-value self-send, nonce 2, block 12074022) | [Sepolia tx](https://sepolia.etherscan.io/tx/0x4ab1bca17946f38ada9f9c277414b203447e8982f3e9d432ad512fc56ee96b35) |
-| Relayer `attest_external` (cancel landed, finalized; evidence only, nothing released) | [testnet tx](https://testnet.nearblocks.io/txns/BkB7V6Z5pAb8k8iz7kTw2CD7NojWXH8tkFr7yNkywEdH) |
-| Owner `confirm_release` (Unknown to Cancelled) | [testnet tx](https://testnet.nearblocks.io/txns/1RmTRskeFaeQFhK1hU5Hhv7MvVSSAeFoW4szz1ymd8B) |
-
-Final state: commitment 0 Confirmed, commitments 1 and 2 Cancelled; completed 1e12, outstanding 0, the
-invariant holds, lane nonce 3. While each stuck payment waited, the contract kept its reservation
-(`outstanding` 1e12) and the cancel attestation released nothing; only the owner's `confirm_release` did.
-Both cancel receipts report `gasUsed` 12000 with status success; that figure is unexplained and is reported
-as observed (a plain 21000-gas self-send would normally report 21000).
-
-To reproduce: `scripts/evm-testnet.sh deploy`, fund the printed Sepolia address from a faucet by hand,
-`status`, `make relayer`, then `propose`. For the stuck path use `set-ceiling` to set a ceiling below the base
-fee, `propose`, then raise the ceiling, ask the relayer for the cancel (`pnpm --filter @purser/relayer run cli
-cancel <cid> ...`) and finish with `confirm-release <cid>`. The relayer needs `EVM_RPC_URL` (https; for
-example `https://rpc.example.invalid`, a placeholder), optionally `EVM_RPC_URL_2`, `EVM_PURSER_CONTRACT_ID`,
-`RELAYER_ACCOUNT_ID` and `RELAYER_PRIVATE_KEY`. The deploy script writes the last three into the gitignored
-`.env.testnet`. Details: [`relayer/README.md`](relayer/README.md), `.env.example`.
+| `make build` | `cargo near build` → wasm + ABI in `contract/target/near/` |
+| `make test`  | contract unit + integration tests, TS unit tests |
+| `make lint`  | `cargo clippy --all-targets -- -D warnings`, `tsc` typecheck of the TS workspace |
+| `make fmt`   | `cargo fmt` |
+| `make hooks` | install the pre-commit secret-scan hook |
+| `make prove` | the security evidence: property tests + the named attack cases |
+| `make metrics` | the measured evidence package: repeats the attack suite and the measuring harness, writes `docs/METRICS.md` (`QUICK=1` writes `docs/METRICS.quick.md` instead) |
+| `make audit` | static security audit of `contract/src` (S1-S4, S7, S8) plus its seeded-violation self-test; also part of `make lint` |
+| `make evm-spike` | the stretch EVM go/no-go spike (feature-gated, local + sandbox only): sizes, the wasm gate, per-hash gas and the load tax. Verdict: **GO** |
+| `make relayer` | the stateless Sepolia relayer loop (needs the `EVM_*` and `RELAYER_*` env names in `.env.example`; see [`relayer/README.md`](relayer/README.md)) |
+| `scripts/evm-testnet.sh deploy\|status\|propose\|set-ceiling\|confirm-release` | stand up and drive the EVM path on a fresh `purser2.<operator>` contract beside the demo one (NEAR testnet + Sepolia only; spends testnet NEAR and Sepolia ETH) |
+| `make ts-test-sandbox` | the AI proposer on a local chain: attack case 2 through the AI path, rogue proposals, key scope, exactly-once retries, model-independence property |
+| `make crew` | run Scout, Forge and Buyer against Purser (`NETWORK=sandbox\|testnet`, `SCENARIO=demo\|legit\|race\|rogue`) |
+| `make board` | the operator board at http://127.0.0.1:5173: live invariant, manifest, Revoke, demo buttons (see [`app/README.md`](app/README.md)) |
+| `make types-gen` | regenerate `@purser/types` from the contract ABI |
+| `make deploy-testnet` | deploy to testnet and provision the crew (`OPERATOR_ACCOUNT_ID=<you>.testnet`) |
+| `make demo` | replay the 7 enforcement outcomes: 1-6 live on testnet with tx refs, 7 as a labeled sandbox replay |
 
 ## Toolchain
 

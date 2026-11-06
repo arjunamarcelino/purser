@@ -114,12 +114,14 @@ while [ "$i" -le "$N" ]; do
     [ -n "$name" ] || continue
     LOG="$WORK/attack-$i-$name.log"
     rc=0
-    run_with_timeout "$PHASE_TIMEOUT" cargo test --test attacks -- --exact "$name" > "$LOG" 2>&1 || rc=$?
+    run_with_timeout "$PHASE_TIMEOUT" cargo test --test attacks -- --exact "$name" --nocapture > "$LOG" 2>&1 || rc=$?
     if [ "$rc" -eq 0 ]; then
       # fail closed: exactly one test must have actually run
       grep -q '^running 1 test$' "$LOG" || die "case $name: running != 1 (filtered or renamed)"
     fi
     printf '%s\t%s\n' "$name" "$rc" >> "$TSV"
+    # a case's own METRIC lines (race attempts) ride along with the metrics log of the same repeat
+    { grep -h 'METRIC ' "$LOG" || true; } | sed 's/^.*METRIC /METRIC /' >> "$RUNS/attack-metrics-$i.log"
   done < "$CASES"
   RAN="$(wc -l < "$TSV" | tr -d ' ')"
   [ "$RAN" = "$EXPECTED" ] || die "attacks run $i recorded $RAN cases, expected $EXPECTED"
@@ -132,6 +134,7 @@ i=1
 while [ "$i" -le "$N" ]; do
   run_with_timeout "$PHASE_TIMEOUT" cargo test --test metrics -- --nocapture --test-threads=1 \
     > "$RUNS/metrics-$i.log" 2>&1 || die "metrics test failed in repeat $i (see $RUNS/metrics-$i.log)"
+  if [ -f "$RUNS/attack-metrics-$i.log" ]; then cat "$RUNS/attack-metrics-$i.log" >> "$RUNS/metrics-$i.log"; fi
   echo "metrics: metrics repeat $i/$N done"
   i=$((i + 1))
 done
@@ -146,17 +149,18 @@ cd "$ROOT"
 # --- meta --------------------------------------------------------------------------
 GIT_SHA="$(git rev-parse HEAD)"
 if [ -n "$(git status --porcelain --untracked-files=no)" ]; then DIRTY=true; else DIRTY=false; fi
-NEARCORE="$(grep -A1 '^name = "near-workspaces"' contract/Cargo.lock 2>/dev/null | sed -n 's/^version = "\(.*\)"$/\1/p' | head -n 1 || true)"
+NEARCORE="$(sed -n 's/^VERSION=\(.*\)$/\1/p' scripts/sandbox-bin.sh | head -n 1 || true)"
+WORKSPACES="$(grep -A1 '^name = "near-workspaces"' contract/Cargo.lock 2>/dev/null | sed -n 's/^version = "\(.*\)"$/\1/p' | head -n 1 || true)"
 TOOLCHAIN="$(rustc --version 2>/dev/null || echo unknown); $(cargo near --version 2>/dev/null | head -n 1 || echo cargo-near unknown); node $(node -v)"
 QUICK_JSON=false
 if [ "$QUICK" = "1" ]; then QUICK_JSON=true; fi
-GIT_SHA="$GIT_SHA" DIRTY="$DIRTY" WASM_SHA="$WASM_SHA" NEARCORE="${NEARCORE:-unknown}" \
+GIT_SHA="$GIT_SHA" DIRTY="$DIRTY" WASM_SHA="$WASM_SHA" NEARCORE="${NEARCORE:-unknown}" WORKSPACES="${WORKSPACES:-unknown}" \
 TOOLCHAIN="$TOOLCHAIN" N="$N" QUICK_JSON="$QUICK_JSON" META="$RUNS/meta.json" \
 node -e '
 const e = process.env;
 require("node:fs").writeFileSync(e.META, JSON.stringify({
   git_sha: e.GIT_SHA, dirty: e.DIRTY === "true", wasm_sha256: e.WASM_SHA,
-  nearcore_version: "near-workspaces " + e.NEARCORE, toolchain: e.TOOLCHAIN,
+  nearcore_version: "nearcore " + e.NEARCORE + " sandbox (near-workspaces " + e.WORKSPACES + ")", toolchain: e.TOOLCHAIN,
   date: new Date().toISOString(), n: Number(e.N), quick: e.QUICK_JSON === "true",
 }, null, 2));
 '
@@ -164,3 +168,6 @@ require("node:fs").writeFileSync(e.META, JSON.stringify({
 # --- aggregate (atomic write, only if every check passes) ------------------------------
 node scripts/metrics-report.mjs --in "$WORK" --out "$OUT" || die "aggregation failed; $OUT not written (raw logs in $WORK)"
 echo "metrics: wrote $OUT (raw logs kept in $WORK)"
+if [ "$QUICK" != "1" ]; then
+  node scripts/readme-evidence.mjs || die "README evidence table not updated"
+fi

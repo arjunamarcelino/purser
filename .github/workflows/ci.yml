@@ -37,6 +37,8 @@ jobs:
       - run: cargo clippy --all-targets -- -D warnings
       - name: Static security audit (TRD S1-S4, S7, S8) and its seeded-violation self-test
         run: ../scripts/audit-security.sh && ../scripts/audit-security-selftest.sh
+      - name: README names only things that exist (make targets, scripts, relative links)
+        run: node ../scripts/check-readme.mjs
       - run: PURSER_ALLOW_FAULT_INJECTION=1 cargo clippy --all-targets --features fault-injection -- -D warnings   # the test-only fault build must lint too
       - name: Lint the race-driver test fixture (not a member of any workspace)
         run: |
