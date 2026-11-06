@@ -79,8 +79,8 @@ const MAX_REQUEST_ID_LEN: usize = 64;
 /// Max byte length of an `intent.memo` (stored inside the `Commitment`). Same griefing rationale.
 const MAX_MEMO_LEN: usize = 256;
 /// Default most commitments a task may ever create when the owner has not called `set_task_limits`
-/// (S8). Each commitment plus its idempotency entry costs the contract roughly 0.004-0.005 NEAR of
-/// storage stake, so this bounds what a hostile delegate can lock per task; the owner raises it
+/// (S8). Each commitment plus its idempotency entry costs the contract about 0.004 NEAR
+/// (measured 0.00375) of storage stake, so this bounds what a hostile delegate can lock per task; the owner raises it
 /// for a long-running task.
 pub const DEFAULT_MAX_COMMITMENTS: u32 = 1000;
 /// Static gas for the `on_near_settled` callback: a few `store` writes + one event `log!`.
@@ -532,7 +532,10 @@ impl Purser {
     /// smallest NEAR-native payment admitted (`0` = none; EVM tasks ignore it), `max_commitments`
     /// the most commitments the task may ever create. Lowering `max_commitments` below the number
     /// already created simply stops new admissions; history is never touched. The running
-    /// `created_count` is preserved.
+    /// `created_count` is preserved. `max_commitments = 0` admits nothing (the check is
+    /// `created_count < max_commitments`), which is the intended way to pause a task's new
+    /// admissions until the owner raises it again. No event is emitted: limit changes are not
+    /// visible to the indexer.
     pub fn set_task_limits(
         &mut self,
         task_id: TaskId,

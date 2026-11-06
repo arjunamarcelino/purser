@@ -2,7 +2,17 @@
 //! release with NO migration (the per-task limits live in a separate map under an appended storage
 //! prefix, never in a struct field).
 //!
-//! Needs the previous release's wasm, so it is `#[ignore]`d and run by hand:
+//! Needs the previous release's wasm, so it is `#[ignore]`d. Reproduce it with one command, which
+//! builds the previous release (default: merge-base with origin/main) in a temporary git worktree
+//! and runs this test against it (~5 min; CI runs it as the `upgrade-check` job):
+//!
+//! ```text
+//! make upgrade-check            # or: scripts/upgrade-check.sh [GIT_REF]
+//! ```
+//!
+//! Scope: history written before the upgrade is NOT counted toward `created_count`. A task that
+//! predates the limits reads 0 after the upgrade and gets a fresh allowance beyond its existing
+//! commitments (asserted below). By hand, with a wasm you built yourself:
 //!
 //! ```text
 //! PURSER_WASM_PREV=/path/to/previous/purser_contract.wasm cargo test --test upgrade -- --ignored
@@ -54,7 +64,8 @@ async fn the_new_wasm_reads_state_written_by_the_previous_release() -> anyhow::R
         json!(true)
     );
 
-    // A task that predates the limits reports the defaults; the history is not counted.
+    // A task that predates the limits reports the defaults; the history is NOT counted toward
+    // created_count (documented limitation: old tasks get a fresh allowance).
     let limits = view(&crew, "get_task_limits", json!({ "task_id": TASK })).await?;
     assert_eq!(limits["created_count"], 0);
     assert_eq!(

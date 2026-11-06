@@ -1,2 +1,3 @@
-METRIC proptest.cases 256 test=contract_properties
-test result: ok. 3 passed; 0 failed; 0 ignored
+METRIC proptest.cases 256 test=core
+METRIC proptest.cases 256 test=contract
+test result: ok. 2 passed; 0 failed; 0 ignored

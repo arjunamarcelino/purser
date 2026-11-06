@@ -164,6 +164,26 @@ jobs:
       - name: Metrics harness (single-threaded: its latency samples are wall-clock)
         run: cargo test --test metrics -- --test-threads=1
 
+  # In-place upgrade: the previous release (merge-base with main) writes state, this tree's wasm reads it.
+  upgrade-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0     # the previous release is built from git history
+      - uses: dtolnay/rust-toolchain@035fceb3c12fb0c6a9461b52775e16473133e591 # 1.95.0
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        with:
+          workspaces: contract -> target
+          cache-on-failure: true
+      - name: Install cargo-near (official prebuilt binary)
+        run: curl --proto '=https' --tlsv1.2 -LsSf https://github.com/near/cargo-near/releases/download/cargo-near-v0.22.0/cargo-near-installer.sh | sh
+      - run: |
+          git fetch origin main
+          scripts/upgrade-check.sh
+
   # TS workspace: typecheck + unit tests against the COMMITTED generated types (no wasm needed).
   ts:
     runs-on: ubuntu-latest

@@ -235,6 +235,9 @@ Because safety is a contract property, we prove it reproducibly. Evidence, not a
 | 5 | Tampered recipient vs. constructed payload | rejected |
 | 6 | Revoke a delegate, then new request | blocked |
 | 7 | Timeout on a signed payment | reservation **retained**, not released |
+| 8 | Owner reconcile racing the live settlement callback | refused; the transfer is counted as spent, never released into headroom |
+
+The racing variants 2b and 4b fire the same cases as external parallel dispatches, and a guard test asserts the fault hook is absent from the production wasm.
 
 **How the race is proven (realized, Prompt 6).** NEAR applies the receipts for one account one
 after another, so "concurrent" means several `propose_payment` receipts execute while earlier
@@ -316,7 +319,7 @@ purser/
 | **Days 1–2** | Threat model; minimal contract; **NEAR-native payment path working**; **EVM payload spike** (RLP+keccak within gas?) | If EVM spike fails → external path dropped from core now. |
 | **Days 3–5** | Shared budgets, atomic reserve-before-sign, tri-state idempotency, revocation | Invariant holds in unit tests. |
 | **Days 6–8** | Useful agent workflow (NEAR AI Cloud proposer); **one external (EVM) path** incl. nonce-burn + relayer attestation *if feasible* | **Day-8 cut gate:** external not enforceable → remove from core claim; ship NEAR-native. |
-| **Days 9–11** | Concurrency / replay / mutation / timeout tests; property-based invariant suite; metrics harness | All 7 attack cases pass; metrics measured. |
+| **Days 9–11** | Concurrency / replay / mutation / timeout tests; property-based invariant suite; metrics harness | All 8 core attack cases (plus racing variants 2b/4b and the fault-build guard) pass; metrics measured. |
 | **Days 12–14** | Dashboard, docs, deployment verification, demo recording | Reproducible `demo.sh`; README done. |
 
 ---
@@ -342,7 +345,7 @@ concurrency, retries, timeouts, and revocation.
 5. Tamper a recipient → see REJECTED (payload mismatch).
 6. Revoke a delegate → see new requests BLOCKED.
 7. Inject a timeout → see the reservation RETAINED (not released).
-8. `cargo test` → property-based invariant + 7 attack cases, all green.
+8. `cargo test` → property-based invariant + 8 core attack cases (plus racing variants 2b/4b and a fault-build guard), all green.
 
 ## Architecture
 See PURSER-TECHNICAL.md §3. The AI is outside the trust boundary; safety is a

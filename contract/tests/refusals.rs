@@ -5,7 +5,9 @@
 //! string the function under test produced) and then proves the refusal changed nothing: task
 //! accounting, the commitment ledger and the idempotency entry are identical before and after.
 //!
-//! `every_refusal_message_has_a_test` derives the constant list by scanning `src/error.rs`, so a new
+//! `every_refusal_message_has_a_test` requires each constant to appear in an asserting statement
+//! (`refused(..)`, `assert!`/`assert_eq!`, `.contains(..)`, `matches!`, `==`), not merely be imported or
+//! mentioned; `coverage_rule_rejects_bare_imports_and_non_assertions` proves the rule. It derives the constant list by scanning `src/error.rs`, so a new
 //! `pub const MSG_*` without a test (or a justified `UNIT_COVERED` entry) fails the build.
 
 mod common;
@@ -427,12 +429,101 @@ fn mentions(text: &str, name: &str) -> bool {
     })
 }
 
-/// Strip `//` comments so a constant named only in prose does not count as covered.
+/// Strip `//` comments, honouring string literals (a `//` inside "..." is not a comment), so a
+/// constant named only in prose does not count as covered and a URL in a string does not truncate.
 fn code_only(text: &str) -> String {
-    text.lines()
-        .map(|l| l.split("//").next().unwrap_or(""))
-        .collect::<Vec<_>>()
-        .join("\n")
+    let mut out = String::with_capacity(text.len());
+    for line in text.lines() {
+        let (mut in_str, mut esc) = (false, false);
+        let b = line.as_bytes();
+        let mut end = b.len();
+        for (i, &c) in b.iter().enumerate() {
+            if in_str {
+                if esc {
+                    esc = false;
+                } else if c == b'\\' {
+                    esc = true;
+                } else if c == b'"' {
+                    in_str = false;
+                }
+            } else if c == b'"' {
+                in_str = true;
+            } else if c == b'/' && b.get(i + 1) == Some(&b'/') {
+                end = i;
+                break;
+            }
+        }
+        out.push_str(&line[..end]);
+        out.push('\n');
+    }
+    out
+}
+
+/// Index just past the delimiter that closes the one opened at `code[open]`.
+fn close_of(code: &str, open: usize) -> Option<usize> {
+    let b = code.as_bytes();
+    let (o, c) = match b[open] {
+        b'[' => (b'[', b']'),
+        b'{' => (b'{', b'}'),
+        _ => return None,
+    };
+    let mut depth = 0usize;
+    for (i, &x) in b.iter().enumerate().skip(open) {
+        if x == o {
+            depth += 1;
+        } else if x == c {
+            depth -= 1;
+            if depth == 0 {
+                return Some(i + 1);
+            }
+        }
+    }
+    None
+}
+
+const MARKERS: &[&str] = &[
+    "assert!",
+    "assert_eq!",
+    "refused(",
+    ".contains(",
+    "matches!",
+    "==",
+];
+
+/// True when `name` is used in an ASSERTING position somewhere in `code` (comments already stripped).
+///
+/// Rule, fail-closed. Either:
+///  1. a `;`-terminated statement mentions the identifier, is not a `use` item, and contains an
+///     assertion marker: `assert!`, `assert_eq!`, `refused(`, `.contains(`, `matches!` or `==`; or
+///  2. a table loop `for .. in [ .. NAME .. ] { body }` lists it and the loop body contains a marker.
+///
+/// `assert_ne!`, a bare import, and a `let` binding alone satisfy neither.
+fn asserts_on(code: &str, name: &str) -> bool {
+    let stmt_rule = code.split(';').any(|stmt| {
+        let t = stmt.trim_start();
+        let is_use = t.starts_with("use ") || t.starts_with("pub use ") || t.contains("\nuse ");
+        !is_use && mentions(stmt, name) && MARKERS.iter().any(|m| stmt.contains(m))
+    });
+    stmt_rule
+        || code.match_indices("for ").any(|(i, _)| {
+            let rest = &code[i..];
+            let Some(br) = rest.find(" in [").map(|k| i + k + 4) else {
+                return false;
+            };
+            let Some(arr_end) = close_of(code, br) else {
+                return false;
+            };
+            let Some(body) = code[arr_end..].find('{').map(|k| arr_end + k) else {
+                return false;
+            };
+            let Some(body_end) = close_of(code, body) else {
+                return false;
+            };
+            // the header must be only `for <pattern> in [..]`: nothing but whitespace between `]` and `{`
+            code[arr_end..body].trim().is_empty()
+                && mentions(&code[br..arr_end], name)
+                && MARKERS.iter().any(|m| code[body..body_end].contains(m))
+        })
 }
 
 fn rs_files(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
@@ -484,7 +575,7 @@ fn every_refusal_message_has_a_test() {
     let table: Vec<&str> = UNIT_COVERED.iter().map(|(c, _)| *c).collect();
     let mut uncovered = vec![];
     for c in &consts {
-        if !mentions(&corpus, c) && !table.contains(&c.as_str()) {
+        if !asserts_on(&corpus, c) && !table.contains(&c.as_str()) {
             uncovered.push(c.clone());
         }
     }
@@ -527,4 +618,35 @@ fn const_name(rest: &str) -> String {
         .find(|c: char| !is_ident(c as u8))
         .unwrap_or(rest.len());
     format!("MSG_{}", &rest[..end])
+}
+
+/// The coverage rule must not be satisfiable by an import or a non-assertion mention.
+#[test]
+fn coverage_rule_rejects_bare_imports_and_non_assertions() {
+    let synthetic = code_only(
+        r#"
+use purser_contract::{MSG_IMPORTED, MSG_BOUND, MSG_NEQ, MSG_PROSE};
+// refused(res, MSG_PROSE);
+fn t() {
+    let url = "http://x"; let _unused = MSG_BOUND;
+    assert_ne!(e, MSG_NEQ);
+    refused(res, MSG_REAL);
+    assert!(e.contains(MSG_SECOND));
+    for (a, m) in [(1, MSG_LOOPED)] { assert!(e.contains(m)); }
+    for (a, m) in [(1, MSG_LOOP_NOASSERT)] { let _ = m; }
+}
+"#,
+    );
+    for c in [
+        "MSG_IMPORTED",
+        "MSG_BOUND",
+        "MSG_NEQ",
+        "MSG_PROSE",
+        "MSG_LOOP_NOASSERT",
+    ] {
+        assert!(!asserts_on(&synthetic, c), "{c} must not count as covered");
+    }
+    for c in ["MSG_REAL", "MSG_SECOND", "MSG_LOOPED"] {
+        assert!(asserts_on(&synthetic, c), "{c} must count as covered");
+    }
 }

@@ -90,3 +90,34 @@ test("a METRIC behind libtest's 'test <name> ... ' prefix is parsed, a lookalike
   );
   assert.deepEqual(got.map((m) => [m.name, Number(m.value)]), [["count.overrun", 0], ["count.duplicate", 0]]);
 });
+
+test("a zero denominator fails closed (0 over 0 runs)", () => {
+  assert.throws(() => aggregate(fx("zerodenom")), /denominator 'runs' sums to 0/);
+  const d = tmp();
+  const r = run(fx("zerodenom"), path.join(d, "out.md"));
+  assert.notEqual(r.status, 0);
+  assert.deepEqual(fs.readdirSync(d), []);
+});
+
+test("a non-integer denominator tag is rejected", () => {
+  assert.throws(() => aggregate(fx("badtag")), /'runs' must be a non-negative integer, got '4\.5'/);
+});
+
+test("a missing denominator tag is an error, not zero", () => {
+  const q = tmp();
+  fs.cpSync(fx("good"), q, { recursive: true });
+  for (const i of [1, 2, 3]) {
+    const f = path.join(q, "runs", `metrics-${i}.log`);
+    fs.writeFileSync(f, fs.readFileSync(f, "utf8").replace(" runs=40", ""));
+  }
+  assert.throws(() => aggregate(q), /missing the 'runs' denominator tag/);
+});
+
+test("a per-run metric emitted twice in one run fails", () => {
+  const r = aggregate(fx("dup"));
+  assert.ok(r.failures.some((f) => /count\.overrun: 4 sample\(s\) for 3 run\(s\)/.test(f)), r.failures.join("\n"));
+});
+
+test("a property block that ran zero cases is rejected", () => {
+  assert.throws(() => aggregate(fx("proptest0")), /test=core is 0/);
+});

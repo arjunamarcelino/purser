@@ -205,3 +205,16 @@ async fn lowering_then_raising_the_limit_only_gates_new_admissions() -> anyhow::
     assert_eq!(limits(&crew).await?["created_count"], 3);
     Ok(())
 }
+
+/// `max_commitments = 0` is the documented way to pause a task: nothing is admitted until it is raised.
+#[tokio::test]
+async fn zero_max_commitments_admits_nothing() -> anyhow::Result<()> {
+    let (crew, delegate) = one_delegate_crew(100).await?;
+    set_limits(&crew, "0", 0).await?;
+    let refused = propose(&delegate, &crew, 1, "z-0").await?;
+    assert!(err_string(refused).contains(MSG_COMMITMENT_LIMIT));
+    assert_eq!(limits(&crew).await?["created_count"], 0);
+    set_limits(&crew, "0", 1).await?;
+    assert!(propose(&delegate, &crew, 1, "z-0").await?.is_success());
+    Ok(())
+}

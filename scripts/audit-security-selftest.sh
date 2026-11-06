@@ -24,6 +24,11 @@ check_fails extra_sign_site S1
 check_fails extra_sign_call S1
 check_fails payable S8
 check_fails secret_literal S7
+check_fails near_bindgen_ungated S2
+check_fails qualified_payable S8
+check_fails dead_gate S2
+check_fails promise_between_reserves S4
+check_fails zero_near_impl S2
 
 if "$AUDIT" "$FIX/clean" >/dev/null 2>&1; then echo "ok   clean passes"
 else echo "FAIL clean: audit rejected the clean fixture"; "$AUDIT" "$FIX/clean" || true; fail=1; fi

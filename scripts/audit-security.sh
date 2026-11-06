@@ -3,11 +3,15 @@
 # Usage: scripts/audit-security.sh [ROOT]   (default: <repo>/contract/src)
 # Rules (each violation prints "VIOLATION <rule>: <file>:<line> <why>"; exit 1 if any):
 #   S1  the string literal "sign" appears exactly once; sign_promise has exactly 2 call sites
-#   S2  every `pub fn ... &mut self` in a #[near] impl is #[private] or owner/relayer/delegate gated
+#   S2  every `pub fn ... &mut self` in a #[near]/#[near_bindgen] impl is #[private] or owner/relayer/delegate
+#       gated; the gate must sit at the top level of the fn body (not in a nested block such as `if false {}`).
+#       A tree with zero such impl blocks fails.
 #   S3  every `pub fn on_*` is #[private]
-#   S4  propose_payment / propose_evm: no Promise::new( / ::ext( / sign_promise( before open_reservation(
+#   S4  propose_payment / propose_evm: no Promise::new( / ::ext( / sign_promise( before the LAST open_reservation(
 #   S7  no 64-hex literal and no ed25519:<80+ base58> literal
-#   S8  no #[payable] except the allowlist below
+#   S8  no #[payable] / #[near_sdk::payable] except the allowlist below
+# Heuristic limits: S2 is textual (a top-level gate call/comparison is trusted, its logic is not evaluated);
+# S4 is intra-function (a promise built by a helper called before open_reservation( is not seen).
 # Everything from the first `#[cfg(test)]` in a file onward, and files named tests.rs, are ignored.
 set -euo pipefail
 
@@ -75,6 +79,17 @@ function match(s, open, idx) { // idx at opening bracket; returns index of its c
   return -1;
 }
 
+// Body text with every nested {...} block blanked, so only depth-1 statements remain (dead-code gates drop out).
+function topLevel(body) {
+  let o = "", d = 0;
+  for (const c of body) {
+    if (c === "{") { d++; o += d === 1 ? c : " "; }
+    else if (c === "}") { o += d === 1 ? c : " "; d--; }
+    else o += d > 1 && c !== "\n" ? " " : c;
+  }
+  return o;
+}
+
 const files = walk(root).map((f) => {
   let raw = fs.readFileSync(f, "utf8");
   const t = raw.search(/^[ \t]*#\[cfg\(test\)\]/m);
@@ -102,10 +117,12 @@ if (promiseCalls.length !== 2) {
 }
 
 const gate = /assert_owner\s*\(|assert_owner_or_relayer\s*\(|assert_delegate_authorized\s*\(|predecessor_account_id\s*\(\s*\)\s*==\s*self\.owner|\b(caller|predecessor|sender)\s*==\s*self\.owner|self\.owner\s*==\s*(caller|predecessor|sender|\&)/;
+let nearImpls = 0;
 const fnRe = /\bpub\s+fn\s+(\w+)\s*(<[^>(]*>)?\s*\(/g;
 for (const { f, code } of files) {
   // #[near] impl blocks
-  for (const im of code.matchAll(/#\[near\s*\]\s*impl\b[^{]*\{/g)) {
+  for (const im of code.matchAll(/#\[\s*(?:near_sdk\s*::\s*)?(?:near_bindgen|near)\s*(?:\([^)]*\))?\s*\]\s*impl\b[^{]*\{/g)) {
+    nearImpls++;
     const bo = im.index + im[0].length - 1, bc = match(code, "{", bo);
     if (bc < 0) continue;
     const block = code.slice(bo, bc + 1);
@@ -124,19 +141,20 @@ for (const { f, code } of files) {
       const attrs = code.slice(k + 1, at);
       const priv = /#\[\s*private\s*\]/.test(attrs);
       const line = lineOf(code, at);
-      if (/&\s*mut\s+self\b/.test(params) && !priv && !gate.test(body) && !s2Exc.has(name))
+      if (/&\s*mut\s+self\b/.test(params) && !priv && !gate.test(topLevel(body)) && !s2Exc.has(name))
         v("S2", f, line, `pub fn ${name}(&mut self) is not #[private] and has no owner/relayer/delegate gate`);
       if (/^on_/.test(name) && !priv) v("S3", f, line, `callback ${name} lacks #[private]`);
     }
   }
   // on_* callbacks anywhere (outside #[near] impl too)
   // S8 payable
-  for (const pm of code.matchAll(/#\[\s*payable\s*\]/g)) {
+  for (const pm of code.matchAll(/#\[\s*(?:near_sdk\s*::\s*)?payable\s*\]/g)) {
     const rest = code.slice(pm.index + pm[0].length);
     const fn = (rest.match(/\bfn\s+(\w+)/) || [])[1] || "?";
     if (!payAllow.has(fn)) v("S8", f, lineOf(code, pm.index), `#[payable] on ${fn} is not in the allowlist`);
   }
 }
+if (!nearImpls) v("S2", root, 0, "zero #[near] / #[near_bindgen] impl blocks found (S2/S3 scanned nothing; attribute renamed?)");
 // S3 for pub fn on_* outside #[near] impl blocks is not meaningful (not callable), skipped.
 
 // S4
@@ -152,11 +170,11 @@ for (const target of ["propose_payment", "propose_evm"]) {
       if (pc < 0 || bs < 0 || be < 0) continue;
       found = true;
       const body = code.slice(bs, be + 1);
-      const r = body.indexOf("open_reservation(");
+      const r = body.lastIndexOf("open_reservation(");
       const line = lineOf(code, m.index);
       if (r < 0) { v("S4", f, line, `${target} never calls open_reservation(`); continue; }
       const bad = /Promise::new\s*\(|::ext\s*\(|\bsign_promise\s*\(/.exec(body.slice(0, r));
-      if (bad) v("S4", f, lineOf(code, bs + bad.index), `${target}: "${bad[0]}" appears before open_reservation(`);
+      if (bad) v("S4", f, lineOf(code, bs + bad.index), `${target}: "${bad[0]}" appears before the last open_reservation(`);
     }
   }
   if (!found) v("S4", root, 0, `function ${target} not found (renamed? update the audit)`);

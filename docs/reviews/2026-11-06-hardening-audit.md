@@ -37,6 +37,18 @@ refused, failed transfers still consume the limit, deposit refused, owner-only s
 Residual, documented in the README: growth is bounded per task, not zero; the owner can raise the limit; the storage
 stake is paid from the contract's own balance; `set_recipient_allowlist` takes an unbounded list but is owner-only.
 
+Further residuals found in review (todo 062), all verified against the code:
+- The cap is per task and shared by the whole crew: one registered delegate can burn every slot with cheap
+  failing or minimum transfers and block the task's other delegates until the owner raises `max_commitments`.
+- `min_payment` applies to NEAR-native payments only; EVM tasks have no minimum.
+- `set_relayer` is **not** fixed: it still scans every commitment. The limit bounds growth per task only, and the
+  number of tasks is owner-controlled, so the scan is O(all commitments) and may still exceed the gas limit.
+  This stays open as todo 043 (needs a stored counter, a storage layout change deferred to the next redeploy).
+- `set_task_limits` emits no event, so the board and indexer cannot see limit changes (an event would change the
+  ABI and force a types regen).
+- `max_commitments = 0` admits nothing; this is the documented way to pause a task's new admissions
+  (`tests/limits.rs`). `min_payment` above the cap is not validated; it is the owner's own setting.
+
 ## Refusal-path coverage
 
 Every `pub const MSG_*` in `contract/src/error.rs` is now referenced by a behavior test or listed with a

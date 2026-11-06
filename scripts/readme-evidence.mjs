@@ -11,6 +11,19 @@ if (m.quick) {
   console.error("readme-evidence: refusing a QUICK summary");
   process.exit(1);
 }
+const posInt = (v, what) => {
+  if (!Number.isSafeInteger(v) || v <= 0) {
+    console.error(`readme-evidence: ${what} must be a positive integer, got ${v}`);
+    process.exit(1);
+  }
+};
+for (const k of ["overrun", "duplicate", "wrongly_blocked"]) {
+  const x = m.counters?.[k];
+  if (!x || !Number.isSafeInteger(x.total) || x.total < 0) { console.error(`readme-evidence: counters.${k}.total must be a non-negative integer`); process.exit(1); }
+  posInt(x.over, `counters.${k}.over`);
+}
+posInt(m.proptest_cases?.core, "proptest_cases.core");
+posInt(m.proptest_cases?.contract, "proptest_cases.contract");
 const T = (g) => (g / 1e12).toFixed(2);
 const c = m.counters;
 const rows = [

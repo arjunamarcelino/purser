@@ -16,6 +16,10 @@ export const REQUIRED = [
   "storage.commitment_bytes",
   "timeout.release_on_silence", "timeout.duplicate_on_retry", "timeout.reservation_retained",
 ];
+const PER_RUN = [
+  "count.overrun", "count.duplicate", "count.wrongly_blocked",
+  "timeout.release_on_silence", "timeout.duplicate_on_retry", "timeout.reservation_retained",
+];
 const ZERO_CHECKS = [
   "count.overrun", "count.duplicate", "count.wrongly_blocked",
   "timeout.release_on_silence", "timeout.duplicate_on_retry",
@@ -130,6 +134,12 @@ export function aggregate(dir) {
   const by = (name, pred = () => true) => all.filter((m) => m.name === name && pred(m));
   const vals = (ms) => ms.map((m) => m.value);
 
+  // Each of these is emitted exactly once per run; a missing or doubled sample means the harness did not do what it claims.
+  for (const name of PER_RUN) {
+    const n = by(name).length;
+    if (n !== N) failures.push(`${name}: ${n} sample(s) for ${N} run(s), expected exactly one per run`);
+  }
+
   for (const name of ZERO_CHECKS) {
     const bad = by(name).filter((m) => m.value !== 0n);
     if (bad.length) failures.push(`${name} nonzero in ${bad.length} sample(s): ${bad.map((m) => m.value).join(",")}`);
@@ -143,12 +153,23 @@ export function aggregate(dir) {
   const ptText = fs.readFileSync(ptPath, "utf8");
   const pt = parseMetrics(ptText).filter((m) => m.name === "proptest.cases");
   if (!pt.length) throw new Error("required metric proptest.cases absent in proptest.log");
+  for (const t of ["core", "contract"]) {
+    const m = pt.filter((x) => x.tags.test === t);
+    if (m.length !== 1) throw new Error(`proptest.cases test=${t}: expected exactly one line, found ${m.length}`);
+    if (m[0].value <= 0n) throw new Error(`proptest.cases test=${t} is ${m[0].value}; the property ran no cases`);
+  }
   const ptResult = /test result: (\w+)\. (\d+) passed; (\d+) failed/.exec(ptText);
   if (!ptResult) throw new Error("proptest.log has no libtest result line");
   if (ptResult[1] !== "ok" || ptResult[3] !== "0") failures.push(`proptest run: ${ptResult[0]}`);
 
   // Report data.
-  const sumTag = (name, tag) => by(name).reduce((s, m) => s + BigInt(m.tags[tag] ?? 0), 0n);
+  // A denominator tag must be present on every sample as a plain non-negative integer; absence is an error, not 0.
+  const sumTag = (name, tag) => by(name).reduce((s, m) => {
+    const raw = m.tags[tag];
+    if (raw === undefined) throw new Error(`${name}: sample is missing the '${tag}' denominator tag`);
+    if (!/^\d+$/.test(raw)) throw new Error(`${name}: '${tag}' must be a non-negative integer, got '${raw}'`);
+    return s + BigInt(raw);
+  }, 0n);
   const counts = [
     ["count.overrun", "runs", "merchant balance deltas vs cap, cross-checked against payment_confirmed receipts"],
     ["count.duplicate", "pairs", "(delegate, request_id) pairs: payment_reserved events and merchant transfers vs distinct ids"],
@@ -156,6 +177,13 @@ export function aggregate(dir) {
   ].map(([name, tag, what]) => ({
     name, what, total: vals(by(name)).reduce((a, b) => a + b, 0n), denom: sumTag(name, tag), tag, samples: by(name).length,
   }));
+  for (const c of counts) {
+    if (c.denom <= 0n) throw new Error(`${c.name}: denominator '${c.tag}' sums to ${c.denom}; "0 over 0" proves nothing`);
+    if (c.total < 0n) throw new Error(`${c.name}: negative total ${c.total}`);
+    if (c.total > BigInt(Number.MAX_SAFE_INTEGER) || c.denom > BigInt(Number.MAX_SAFE_INTEGER)) {
+      throw new Error(`${c.name}: total/denominator not a safe integer`);
+    }
+  }
 
   const gasRound = (m) => m.tags.round === undefined || Number(m.tags.round) >= 3;
   const gasRows = [];
@@ -268,7 +296,7 @@ export function aggregate(dir) {
   L.push(`Added wall time = median(propose) - median(baseline) = **${fmt(added)} ms** (sandbox). Sandbox wall-clock is dominated by block time and polling, so read the block count above as the honest figure. No means are reported.`, "");
 
   L.push("## Storage", "");
-  L.push(`Bytes per admitted commitment: median ${fmt(storage.median)}, range ${fmt(storage.min)} to ${fmt(storage.max)} (n=${storage.n}). Counts the commitment record; the idempotency entry and the owner-paid stake are described in the README limits.`, "");
+  L.push(`Bytes per admitted commitment: median ${fmt(storage.median)}, range ${fmt(storage.min)} to ${fmt(storage.max)} (n=${storage.n}). This is the whole-proposal storage delta (the commitment record plus its idempotency entry); the owner-paid stake is described in the README limits.`, "");
 
   L.push("## Property tests (run once)", "");
   L.push("| Test | Cases run (emitted by the test) |", "|---|---|");

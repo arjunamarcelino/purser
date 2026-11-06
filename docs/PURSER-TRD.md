@@ -50,7 +50,7 @@ flowchart TB
 | Layer | Choice | Status | Notes |
 |---|---|---|---|
 | Contract | **Rust + near-sdk `5.30.x`** | ✅ 5.30.0 released 2026-10-27, targets nearcore 2.14 | Pin exactly; re-verify at build start (very fresh). |
-| Contract macros | `#[near(contract_state)]`, `#[init]`, `#[payable]`, `#[private]`, `#[ext_contract]` | ✅ | Modern attribute-macro API. |
+| Contract macros | `#[near(contract_state)]`, `#[init]`, `#[private]`, `#[ext_contract]` | ✅ | Modern attribute-macro API. `propose_payment` is deliberately not `#[payable]` (S8). |
 | Money/gas types | `NearToken`, `Gas` (`near-token ^0.3`, `near-gas ^0.3`) | ✅ | Used on all cross-contract calls. |
 | Storage | `near_sdk::store::{IterableMap, LookupMap, Vector, IterableSet, LazyOption, …}` | ✅ | Prefer `IterableMap`/`IterableSet`; `UnorderedMap/Set` deprecated. |
 | Cross-contract | `Promise::function_call(fn, args, amount: NearToken, gas: Gas)` + `#[private]` callback | ✅ | Callback via `Self::ext(env::current_account_id())`. |
@@ -91,7 +91,7 @@ pub struct Purser { /* stores (see backend schema) */ }
 
 #[near]
 impl Purser {
-    #[payable]
+    // Not #[payable] (S8): the runtime rejects any attached deposit.
     pub fn propose_payment(&mut self, task: TaskId, intent: PaymentIntent, request_id: RequestId) -> Promise {
         // 1) auth
         self.assert_delegate_authorized(&task, &env::predecessor_account_id());
@@ -196,7 +196,7 @@ impl Purser {
 - **S5.** Conservative settlement: no release on silence; `Unknown` retains reservation.
 - **S6.** Revocation deletes any issued function-call key and blocks new auth; documented that issued MPC signatures cannot be recalled.
 - **S7.** No secrets in repo; keys via env; testnet only; never mainnet signing.
-- **S8.** Storage-deposit / state-growth handled so a caller can't grief the contract.
+- **S8.** Storage-deposit / state-growth handled so a caller can't grief the contract. Realized: `propose_payment` is not `#[payable]` (the runtime rejects a deposit), request ids and memos are length-capped, and each task has a commitment limit counted on every commitment ever created (default 1000, owner-set via `set_task_limits`) plus an optional owner-set minimum payment for NEAR tasks; the limits live in a separate map under an appended storage prefix, so the contract state layout is unchanged.
 
 ---
 

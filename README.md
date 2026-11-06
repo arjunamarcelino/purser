@@ -101,6 +101,12 @@ persona that can call only `propose_payment`, and does no client-side policy: ev
   task may create at most `DEFAULT_MAX_COMMITMENTS` (1000) commitments unless the owner sets another limit with
   `set_task_limits`; the cap counts every commitment ever created, including failed ones. The storage stake
   (about 0.00375 NEAR per commitment, measured) is paid from the contract's own balance.
+  The cap is shared by the whole crew: one registered delegate can burn a task's slots (cheap failing or
+  minimum transfers) and block the other delegates until the owner raises the limit. `min_payment` applies to
+  NEAR-native payments only; EVM tasks have no minimum. `max_commitments = 0` admits nothing, the intended way
+  to pause a task's new admissions. `set_task_limits` emits no event, so the board and indexer cannot see limit
+  changes. `set_relayer` still scans every commitment (bounded per task by the limit, but the number of tasks is
+  owner-controlled), so it stays unbounded in total; see todos/043.
 - **Measurements are sandbox measurements.** Latency and gas in `docs/METRICS.md` come from a local nearcore
   sandbox, EVM gas from a mock signer. They are not testnet or mainnet figures.
 - **Outcome 7 of the demo is a sandbox replay**, because the shipped wasm cannot lose a callback.
