@@ -36,7 +36,7 @@ Residual: if the owner confirms a release on a false claim, the original can sti
 ## Not covered
 
 - The relayer does not watch `Cancelled` commitments for a late original. The contract handles that case (the `Cancelled -> Confirmed` edge records the spend and freezes the task if it is over cap; sandbox-tested), but nothing here looks for it, and it was not demonstrated live.
-- One in-flight payment per derived address, and attestation waits for `finalized`: about one payment per 15-19 minutes per delegate.
+- One in-flight payment per derived address, and attestation waits for `finalized`: about one payment per 15 minutes per delegate (observed 14 to 15 minutes from broadcast to attestation).
 - A single cancel. If the cancel is itself stuck, the commitment stays `Unknown` with its budget locked; escalation is roadmap.
 - A relayer that goes offline stalls reporting; it cannot release budget (only the owner's `confirm_release` does).
 - Live runs against Sepolia and the real signer, with transaction references, are in the root `README.md` ("EVM path (stretch)").
