@@ -31,6 +31,23 @@ function columnsOf(el: HTMLElement): number {
   return columns;
 }
 
+// Remembers the last position, so a resize redraws the visual where it already was.
+function liveDraw(watched: Element, paint: (p: number) => void) {
+  let progress = 1;
+  const draw = (p: number) => {
+    progress = p;
+    paint(p);
+  };
+  new ResizeObserver(() => draw(progress)).observe(watched);
+  draw(1);
+  return draw;
+}
+
+function sweep(draw: (p: number) => void, vars: gsap.TweenVars) {
+  const state = { p: 0 };
+  return gsap.to(state, { p: 1, ease: "none", onUpdate: () => draw(state.p), ...vars });
+}
+
 function setBar(completed: number, outstanding: number) {
   text("[data-bar-completed]", completed);
   text("[data-bar-outstanding]", outstanding);
@@ -40,23 +57,18 @@ function setBar(completed: number, outstanding: number) {
 
 function createRaceStage(el: HTMLElement) {
   const rows = raceFrame(1, 40).map(() => el.appendChild(document.createElement("span")));
-  let progress = 1;
-  const draw = (p: number) => {
-    progress = p;
+  const draw = liveDraw(el, (p) => {
     raceFrame(p, columnsOf(el)).forEach((row, i) => {
       rows[i]!.textContent = row.text || " ";
       rows[i]!.dataset.tone = row.tone;
     });
-  };
-  new ResizeObserver(() => draw(progress)).observe(el);
-  draw(1);
+  });
   let replay: gsap.core.Tween | undefined;
   return {
     draw,
     play() {
       replay?.kill();
-      const state = { p: 0 };
-      replay = gsap.to(state, { p: 1, duration: 3.5, ease: "none", onUpdate: () => draw(state.p) });
+      replay = sweep(draw, { duration: 3.5 });
     },
     stop: () => replay?.kill(),
   };
@@ -85,7 +97,6 @@ function decodeLayer(el: HTMLElement): HTMLElement {
 
 function decode(el: HTMLElement, duration: number, scrollTrigger?: ScrollTrigger.Vars) {
   const original = el.textContent ?? "";
-  const state = { p: 0 };
   let layer: HTMLElement | null = null;
   const finish = () => {
     layer?.remove();
@@ -93,16 +104,14 @@ function decode(el: HTMLElement, duration: number, scrollTrigger?: ScrollTrigger
     el.classList.remove("decoding");
   };
   el.classList.add("decoding");
-  gsap.to(state, {
-    p: 1,
+  const paint = (p: number) => {
+    if (layer) layer.textContent = scrambleFrame(original, p);
+  };
+  sweep(paint, {
     duration,
-    ease: "none",
     ...(scrollTrigger ? { scrollTrigger } : {}),
     onStart: () => {
       layer = decodeLayer(el);
-    },
-    onUpdate: () => {
-      if (layer) layer.textContent = scrambleFrame(original, state.p);
     },
     onComplete: finish,
   });
@@ -124,17 +133,11 @@ function initHeadings() {
 function initDiagrams() {
   return gsap.utils.toArray<HTMLElement>("[data-ascii-reveal]").map((el) => {
     const source = el.textContent ?? "";
-    const state = { p: 0 };
-    el.textContent = revealFrame(source, 0);
-    gsap.to(state, {
-      p: 1,
-      duration: 1.2,
-      ease: "none",
-      scrollTrigger: { trigger: el, start: "top 80%", once: true },
-      onUpdate: () => {
-        el.textContent = revealFrame(source, state.p);
-      },
-    });
+    const paint = (p: number) => {
+      el.textContent = revealFrame(source, p);
+    };
+    paint(0);
+    sweep(paint, { duration: 1.2, scrollTrigger: { trigger: el, start: "top 80%", once: true } });
     return () => {
       el.textContent = source;
     };
@@ -158,41 +161,26 @@ function createRail() {
   const list = $<HTMLElement>(".how-steps");
   if (!rail || !list) return () => {};
   const lineHeight = parseFloat(getComputedStyle(rail).lineHeight);
-  let progress = 1;
-  const draw = (p: number) => {
-    progress = p;
+  return liveDraw(list, (p) => {
     rail.textContent = railFrame(p, Math.floor(list.offsetHeight / lineHeight));
-  };
-  new ResizeObserver(() => draw(progress)).observe(list);
-  draw(1);
-  return draw;
+  });
 }
 
 function createChart() {
   const el = $<HTMLElement>("[data-budget-chart]");
   if (!el) return () => {};
-  let progress = 1;
-  const draw = (p: number) => {
-    progress = p;
+  return liveDraw(el, (p) => {
     el.textContent = budgetChart(p, columnsOf(el));
-  };
-  new ResizeObserver(() => draw(progress)).observe(el);
-  draw(1);
-  return draw;
+  });
 }
 
 function createDissolves() {
-  const strips = gsap.utils.toArray<HTMLElement>("[data-dissolve]").map((el) => {
-    let progress = 1;
-    const draw = (p: number) => {
-      progress = p;
+  return gsap.utils.toArray<HTMLElement>("[data-dissolve]").map((el) => ({
+    el,
+    draw: liveDraw(el, (p) => {
       el.textContent = dissolveFrame(columnsOf(el), 6, p, el.dataset.dissolve === "down");
-    };
-    new ResizeObserver(() => draw(progress)).observe(el);
-    draw(1);
-    return { el, draw };
-  });
-  return strips;
+    }),
+  }));
 }
 
 // Page scroll moves the cards, and tabbing to a card's link scrolls the page to bring that card into view.
