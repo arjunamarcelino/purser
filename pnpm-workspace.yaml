@@ -5,6 +5,7 @@ packages:
   - relayer
   - indexer
   - app
+  - landing
 
 # Supply chain: refuse versions published less than 7 days ago, and run no dependency
 # install scripts unless listed here (none are needed).

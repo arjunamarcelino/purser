@@ -1,6 +1,6 @@
 .PHONY: build build-release test fmt lint \
         contract-build contract-build-release contract-test contract-fmt contract-lint prove \
-        ts-install ts-lint ts-test ts-test-sandbox types-gen crew board \
+        ts-install ts-lint ts-test ts-test-sandbox types-gen crew board landing \
         indexer-poll indexer-serve indexer-counts \
         deploy-testnet demo metrics audit hooks evm-spike relayer upgrade-check
 
@@ -45,6 +45,9 @@ relayer: ts-install ; pnpm --filter @purser/relayer run relay
 
 # The operator board (http://127.0.0.1:5173), with the localhost companion for the demo buttons.
 board: ts-install ; pnpm --filter @purser/app dev
+
+# The product page (http://127.0.0.1:5180). Static: no testnet config needed.
+landing: ts-install ; pnpm --filter @purser/landing dev
 
 # The off-chain cache (derived, non-authoritative; reads PURSER_CONTRACT_ID/NEAR_NETWORK from .env.testnet).
 # Poller and API are separate processes: the poller is the only DB writer, the API opens it read-only.
