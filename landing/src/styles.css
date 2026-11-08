@@ -811,6 +811,7 @@ td {
   min-height: 100vh;
   min-height: 100dvh;
   overflow: hidden;
+  overflow: clip;
 }
 .js-said .said {
   display: flex;
