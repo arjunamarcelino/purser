@@ -332,6 +332,11 @@ export async function initMotion() {
   naiveBar(120);
   setBar(0, 0);
   const mm = gsap.matchMedia();
+  // Separate from the layout block below, so crossing a width or height breakpoint can't replay these.
+  mm.add("(prefers-reduced-motion: no-preference)", () => {
+    const cleanups = [initHero(), ...initHeadings(), ...initDiagrams()];
+    return () => cleanups.forEach((cleanup) => cleanup?.());
+  });
   mm.add(
     {
       pinnable: "(min-width: 900px) and (min-height: 760px) and (prefers-reduced-motion: no-preference)",
@@ -343,7 +348,6 @@ export async function initMotion() {
       const { pinnable, cards, motion, reduce } = context.conditions as { pinnable: boolean; cards: boolean; motion: boolean; reduce: boolean };
       const cleanups: ((() => void) | undefined)[] = [];
       if (motion) {
-        cleanups.push(initHero(), ...initHeadings(), ...initDiagrams());
         initNaiveCount();
         scrubbed(".how-grid", "top 70%", "bottom 70%", drawRail);
         scrubbed("[data-budget-chart]", "top 85%", "top 35%", drawChart);
