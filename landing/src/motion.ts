@@ -322,6 +322,8 @@ function scrubbed(trigger: gsap.DOMTarget, start: string, end: string, draw: (p:
 }
 
 export async function initMotion() {
+  // The headline is the first thing people read, so it doesn't wait for fonts like the measured visuals below.
+  gsap.matchMedia().add("(prefers-reduced-motion: no-preference)", () => initHero());
   await document.fonts.ready;
   const stageEl = $<HTMLElement>("[data-race-stage]");
   const stage = stageEl ? createRaceStage(stageEl) : null;
@@ -334,7 +336,7 @@ export async function initMotion() {
   const mm = gsap.matchMedia();
   // Separate from the layout block below, so crossing a width or height breakpoint can't replay these.
   mm.add("(prefers-reduced-motion: no-preference)", () => {
-    const cleanups = [initHero(), ...initHeadings(), ...initDiagrams()];
+    const cleanups = [...initHeadings(), ...initDiagrams()];
     return () => cleanups.forEach((cleanup) => cleanup?.());
   });
   mm.add(
