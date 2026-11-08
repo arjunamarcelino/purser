@@ -74,18 +74,21 @@ export function initAsciiArt(canvas: HTMLCanvasElement) {
   let hovering = false;
   const pose = { ...STILL_POSE };
   const pointer = { x: 0, y: 0 };
-  const drag = { held: false, lastX: 0, lastY: 0, spin: 0, velocity: 0, tilt: 0 };
+  const drag = { held: false, pointerId: -1, lastX: 0, lastY: 0, spin: 0, velocity: 0, tilt: 0 };
 
-  const release = () => {
+  const release = (event: PointerEvent) => {
+    if (event.pointerId !== drag.pointerId) return;
     drag.held = false;
+    drag.pointerId = -1;
     root.classList.remove("is-held");
   };
   // The hero is dragged anywhere outside its text. A card or tile only from its drawing, so its text stays selectable.
   const canGrab = (target: Element) => (isHero ? !target.closest(".hero-panel, .hero-strip, a, button") : target === canvas);
 
   root.addEventListener("pointerdown", (event) => {
-    if (calm.matches || !canGrab(event.target as Element)) return;
+    if (event.button !== 0 || drag.held || calm.matches || !canGrab(event.target as Element)) return;
     drag.held = true;
+    drag.pointerId = event.pointerId;
     drag.lastX = event.clientX;
     drag.lastY = event.clientY;
     drag.velocity = 0;
@@ -94,8 +97,10 @@ export function initAsciiArt(canvas: HTMLCanvasElement) {
   });
   root.addEventListener("pointerup", release);
   root.addEventListener("pointercancel", release);
+  root.addEventListener("lostpointercapture", release);
   root.addEventListener("pointermove", (event) => {
     if (drag.held) {
+      if (event.pointerId !== drag.pointerId) return;
       const dx = event.clientX - drag.lastX;
       const dy = event.clientY - drag.lastY;
       drag.lastX = event.clientX;
