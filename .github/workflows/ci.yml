@@ -81,7 +81,9 @@ jobs:
             contract/tests/fixtures/mock-signer -> ../../../target/mock-signer
           cache-on-failure: true
       - name: Install cargo-near (official prebuilt binary — avoids a source build of hidapi/libudev)
-        run: curl --proto '=https' --tlsv1.2 -LsSf https://github.com/near/cargo-near/releases/download/cargo-near-v0.22.0/cargo-near-installer.sh | sh
+        run: '"$GITHUB_WORKSPACE/scripts/ci-install-cargo-near.sh"'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
       - run: cargo near build non-reproducible-wasm   # the shipped wasm; also emits target/near/*_abi.json
       - run: ../scripts/check-wasm-clean.sh target/near/purser_contract.wasm      # never ship a fault-injection build
       - name: Build the test-only artifacts (fault-injection contract, race driver, mock signer)
@@ -179,7 +181,9 @@ jobs:
           workspaces: contract -> target
           cache-on-failure: true
       - name: Install cargo-near (official prebuilt binary)
-        run: curl --proto '=https' --tlsv1.2 -LsSf https://github.com/near/cargo-near/releases/download/cargo-near-v0.22.0/cargo-near-installer.sh | sh
+        run: '"$GITHUB_WORKSPACE/scripts/ci-install-cargo-near.sh"'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
       - run: |
           git fetch origin main
           scripts/upgrade-check.sh
