@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { RACE_REFUSED, RACE_RESERVED, RACE_SETTLED, budgetChart, capBar, dissolveFrame, gauge, raceFrame, railFrame, revealFrame, scrambleFrame } from "../src/ascii.ts";
+import { DRAG_GAIN, buildAnchorMesh, fieldClearance, renderAnchor, settleSpin } from "../src/anchor3d.ts";
 import { artNames, cellLuminance, charFor } from "../src/ascii-scene.ts";
 
 const root = resolve(import.meta.dirname, "..");
@@ -101,6 +102,14 @@ describe("layout", () => {
     expect(read("src/motion.ts")).toMatch(/initSaidCards/);
   });
 
+  it("links to the app only when an address exists", () => {
+    const links = html.match(/<a [^>]*data-app-link[^>]*>/g)!;
+    expect(links).toHaveLength(3);
+    for (const link of links) expect(link).toContain("hidden");
+    expect(css).toMatch(/\.btn\[hidden\]\s*\{\s*display: none/);
+    expect(read("src/main.ts")).toMatch(/import\.meta\.env\.DEV \? "http:\/\/127\.0\.0\.1:5173/);
+  });
+
   it("stops flexible canvases from growing their own tile", () => {
     expect(css).toMatch(/\.art-tall \{[^}]*contain: size/);
     expect(css).toMatch(/\.art \{[^}]*height: 12rem/);
@@ -165,6 +174,93 @@ describe("ascii scene", () => {
     let blank = 0;
     for (let col = 0; col < 100; col++) for (let row = 0; row < 40; row++) if (charFor(cellLuminance(0, col, row, 3)) === " ") blank++;
     expect(blank / 4000).toBeGreaterThan(0.6);
+  });
+});
+
+describe("3d anchor", () => {
+  const mesh = buildAnchorMesh();
+  const view = { width: 900, height: 640, cols: 100, rows: 40, cellW: 9, cellH: 16, centerX: 450, centerY: 320, shiftX: 0, shiftY: 0 };
+  const render = (yaw: number, pitch: number, v = view) => {
+    const out = new Float32Array(v.cols * v.rows);
+    renderAnchor(mesh, yaw, pitch, v, out, new Float32Array(v.cols * v.rows));
+    return out;
+  };
+  const inked = (frame: Float32Array) => frame.filter((v) => v > 0).length;
+
+  it("builds a solid surface with unit normals", () => {
+    expect(mesh.count).toBeGreaterThan(5000);
+    for (const i of [0, 1000, mesh.count - 1]) {
+      expect(Math.hypot(mesh.normals[i * 3]!, mesh.normals[i * 3 + 1]!, mesh.normals[i * 3 + 2]!)).toBeCloseTo(1, 4);
+    }
+  });
+
+  it("lands on the grid and stays within light limits", () => {
+    const frame = render(0.5, -0.1);
+    expect(inked(frame)).toBeGreaterThan(150);
+    expect(Math.max(...frame)).toBeLessThanOrEqual(1);
+  });
+
+  it("coasts after a drag, then settles facing front", () => {
+    let state = { spin: 0, velocity: 0.3 };
+    state = settleSpin(state.spin, state.velocity);
+    expect(state.spin).toBeCloseTo(0.3, 5);
+    expect(state.velocity).toBeLessThan(0.3);
+    state = { spin: 6.1, velocity: 0 };
+    for (let i = 0; i < 400; i++) state = settleSpin(state.spin, state.velocity);
+    expect(state.spin).toBeCloseTo(Math.PI * 2, 2);
+  });
+
+  it("turns far faster when dragged than when hovered", () => {
+    const hoverAcrossHero = 2 * 1.25;
+    expect(DRAG_GAIN * 1400).toBeGreaterThan(hoverAcrossHero * 5);
+    const motion = read("src/ascii-scene.ts");
+    expect(motion).toMatch(/calm\.matches \|\| .*closest\("\.hero-panel/);
+  });
+
+  it("keeps the background field off the anchor", () => {
+    expect(fieldClearance(450, 320, 450, 320, 200)).toBe(0);
+    expect(fieldClearance(600, 320, 450, 320, 200)).toBe(0);
+    expect(fieldClearance(900, 320, 450, 320, 200)).toBe(1);
+    expect(fieldClearance(720, 320, 450, 320, 200)).toBeGreaterThan(0);
+    expect(fieldClearance(720, 320, 450, 320, 200)).toBeLessThan(1);
+  });
+
+  it("centers on the vertical position it is given", () => {
+    const middleRow = (frame: Float32Array) => {
+      const rows: number[] = [];
+      frame.forEach((v, i) => {
+        if (v > 0) rows.push(Math.floor(i / view.cols));
+      });
+      return (Math.min(...rows) + Math.max(...rows)) / 2;
+    };
+    expect(Math.abs(middleRow(render(0, 0)) - 20)).toBeLessThanOrEqual(1.5);
+    expect(middleRow(render(0, 0, { ...view, centerY: 400 }))).toBeGreaterThan(middleRow(render(0, 0)));
+  });
+
+  it("really turns in depth: edge-on covers far less than face-on", () => {
+    expect(inked(render(Math.PI / 2 - 0.02, 0))).toBeLessThan(inked(render(0, 0)) * 0.5);
+  });
+
+  it("shades the tube rather than filling it flat", () => {
+    const values = new Set([...render(0.4, -0.1)].filter((v) => v > 0).map((v) => charFor(v)));
+    expect(values.size).toBeGreaterThanOrEqual(4);
+  });
+
+  it("leans toward the pointer's side when shifted", () => {
+    const left = render(0, 0, { ...view, shiftX: -120 });
+    const right = render(0, 0, { ...view, shiftX: 120 });
+    const centroid = (frame: Float32Array) => {
+      let sum = 0;
+      let n = 0;
+      frame.forEach((v, i) => {
+        if (v > 0) {
+          sum += i % view.cols;
+          n++;
+        }
+      });
+      return sum / n;
+    };
+    expect(centroid(right)).toBeGreaterThan(centroid(left));
   });
 });
 

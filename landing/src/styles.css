@@ -217,6 +217,9 @@ code {
   cursor: pointer;
   transition: background-color 120ms ease-out, color 120ms ease-out, transform 120ms var(--ease-out);
 }
+.btn[hidden] {
+  display: none;
+}
 .btn::before {
   content: "[\00a0";
 }
@@ -305,6 +308,9 @@ code {
 .menu-toggle {
   display: none;
 }
+.app-head {
+  order: 2;
+}
 
 /* The field stops above the strip and invariant bar, so the bottom of the hero stays quiet. */
 .hero {
@@ -318,6 +324,21 @@ code {
   min-height: 100dvh;
   padding: 7rem var(--gutter) calc(var(--scene-gap) + 2rem);
   overflow: hidden;
+}
+/* Horizontal drags spin the anchor on touch screens, while vertical swipes still scroll the page. */
+@media (prefers-reduced-motion: no-preference) {
+  .hero {
+    cursor: grab;
+    touch-action: pan-y;
+  }
+  .hero.is-held {
+    cursor: grabbing;
+    user-select: none;
+  }
+  .hero-panel,
+  .hero-strip {
+    cursor: auto;
+  }
 }
 .hero-scene {
   position: absolute;
@@ -878,9 +899,6 @@ td {
   gap: clamp(2rem, 6vw, 5rem);
   padding-block: clamp(3.5rem, 7vw, 6rem);
 }
-.try-head .btn {
-  margin-top: 1.75rem;
-}
 .commands {
   display: flex;
   flex-direction: column;
@@ -1008,7 +1026,11 @@ td {
   .menu-toggle {
     display: inline-flex;
   }
+  .app-head {
+    order: 0;
+  }
   .site-nav {
+    order: 1;
     flex-direction: column;
     gap: 0;
     width: 100%;

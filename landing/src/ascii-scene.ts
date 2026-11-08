@@ -1,8 +1,13 @@
-// Line art drawn as ASCII on local canvases: the hero's anchor and the page's section artwork.
+// Art drawn as ASCII on local canvases: the hero's 3D anchor and the page's section artwork.
+
+import { DRAG_GAIN, anchorScale, buildAnchorMesh, fieldClearance, renderAnchor, settleSpin } from "./anchor3d.ts";
 
 export const RAMP = " .:-=+*#%@";
 
-const FRAME_MS = 1000 / 20;
+const FRAME_MS = 1000 / 24;
+const HELD_FRAME_MS = 1000 / 40;
+const FIELD_INK = "rgb(255 255 255 / 0.2)";
+const STILL_POSE = { yaw: 0.55, pitch: -0.14 };
 
 // Every drawing is a 24-unit stroke path, sharing the look of the anchor mark.
 const ART: Record<string, string> = {
@@ -73,9 +78,100 @@ export function initAsciiArt(canvas: HTMLCanvasElement) {
   let raf = 0;
   let last = 0;
   let visible = false;
+  let width = 0;
+  let height = 0;
+
+  // The hero's anchor is a lit 3D object that sways on its own and leans toward a mouse.
+  const mesh = name === "anchor" ? buildAnchorMesh() : null;
+  let lit: Float32Array = new Float32Array(0);
+  let depth: Float32Array = new Float32Array(0);
+  const pose = { ...STILL_POSE };
+  const pointer = { x: 0, y: 0 };
+  const hero = mesh ? canvas.closest<HTMLElement>(".hero") : null;
+  const panel = hero?.querySelector<HTMLElement>(".hero-panel") ?? null;
+  let centerY = 0;
+  let ink = "#fff";
+  // Holding and dragging spins the anchor directly, much faster than the hover lean, and it coasts on release.
+  const drag = { held: false, lastX: 0, lastY: 0, spin: 0, velocity: 0, tilt: 0 };
+  const release = () => {
+    drag.held = false;
+    hero?.classList.remove("is-held");
+  };
+  hero?.addEventListener("pointerdown", (event) => {
+    if (calm.matches || (event.target as Element).closest(".hero-panel, .hero-strip, a, button")) return;
+    drag.held = true;
+    drag.lastX = event.clientX;
+    drag.lastY = event.clientY;
+    drag.velocity = 0;
+    hero.setPointerCapture(event.pointerId);
+    hero.classList.add("is-held");
+  });
+  hero?.addEventListener("pointerup", release);
+  hero?.addEventListener("pointercancel", release);
+  hero?.addEventListener("pointermove", (event) => {
+    if (drag.held) {
+      const dx = event.clientX - drag.lastX;
+      const dy = event.clientY - drag.lastY;
+      drag.lastX = event.clientX;
+      drag.lastY = event.clientY;
+      drag.velocity = dx * DRAG_GAIN;
+      drag.spin += drag.velocity;
+      drag.tilt = Math.min(0.9, Math.max(-0.9, drag.tilt + dy * DRAG_GAIN * 0.5));
+      return;
+    }
+    if (event.pointerType === "touch") return;
+    const box = hero.getBoundingClientRect();
+    pointer.x = ((event.clientX - box.left) / box.width) * 2 - 1;
+    pointer.y = ((event.clientY - box.top) / box.height) * 2 - 1;
+  });
+  hero?.addEventListener("pointerleave", () => {
+    if (drag.held) return;
+    pointer.x = 0;
+    pointer.y = 0;
+  });
+
+  const drawAnchor = (t: number) => {
+    if (calm.matches) {
+      Object.assign(pose, STILL_POSE);
+    } else {
+      if (!drag.held) {
+        Object.assign(drag, settleSpin(drag.spin, drag.velocity));
+        drag.tilt *= 0.92;
+      }
+      const follow = drag.held ? 0.4 : 0.12;
+      pose.yaw += (Math.sin(t * 0.5) * 0.75 + pointer.x * 1.25 + drag.spin - pose.yaw) * follow;
+      pose.pitch += (Math.sin(t * 0.37) * 0.12 + pointer.y * 0.6 + drag.tilt - pose.pitch) * follow;
+    }
+    const lean = calm.matches ? 0 : 1;
+    renderAnchor(mesh!, pose.yaw, pose.pitch, { width, height, cols, rows, cellW: layout.cellW, cellH: layout.cellH, centerX: layout.centerX(width), centerY, shiftX: pointer.x * 16 * lean, shiftY: pointer.y * 10 * lean }, lit, depth);
+  };
+
+  // Two passes, because the faint field and the anchor need different inks.
+  const drawHero = (t: number) => {
+    drawAnchor(t);
+    const clear = anchorScale(width, height) * 1.35;
+    const cx = layout.centerX(width);
+    ctx.fillStyle = FIELD_INK;
+    for (let row = 0; row < rows; row++) {
+      for (let col = 0; col < cols; col++) {
+        if (lit[row * cols + col]! > 0) continue;
+        const fade = fieldClearance(col * layout.cellW, row * layout.cellH, cx, centerY, clear);
+        const glyph = fade > 0 ? charFor(cellLuminance(0, col, row, t, true) * fade) : " ";
+        if (glyph !== " ") ctx.fillText(glyph, col * layout.cellW, row * layout.cellH);
+      }
+    }
+    ctx.fillStyle = ink;
+    for (let row = 0; row < rows; row++) {
+      for (let col = 0; col < cols; col++) {
+        const glyph = charFor(lit[row * cols + col]!);
+        if (glyph !== " ") ctx.fillText(glyph, col * layout.cellW, row * layout.cellH);
+      }
+    }
+  };
 
   const draw = (t: number) => {
     ctx.clearRect(0, 0, canvas.width, canvas.height);
+    if (mesh) return drawHero(t);
     for (let row = 0; row < rows; row++) {
       for (let col = 0; col < cols; col++) {
         const glyph = charFor(cellLuminance(mask[row * cols + col]!, col, row, t, layout.field));
@@ -86,7 +182,7 @@ export function initAsciiArt(canvas: HTMLCanvasElement) {
 
   const loop = (now: number) => {
     raf = requestAnimationFrame(loop);
-    if (now - last < FRAME_MS) return;
+    if (now - last < (hero?.classList.contains("is-held") ? HELD_FRAME_MS : FRAME_MS)) return;
     last = now;
     draw(now / 1000);
   };
@@ -100,7 +196,11 @@ export function initAsciiArt(canvas: HTMLCanvasElement) {
   };
 
   const resize = () => {
-    const { width, height } = canvas.getBoundingClientRect();
+    const box = canvas.getBoundingClientRect();
+    ({ width, height } = box);
+    // Level with the headline panel, because the canvas itself stops short of the hero's bottom edge.
+    const panelBox = panel?.getBoundingClientRect();
+    centerY = panelBox ? panelBox.top + panelBox.height / 2 - box.top : height / 2;
     cols = Math.ceil(width / layout.cellW);
     rows = Math.ceil(height / layout.cellH);
     if (cols === 0 || rows === 0) {
@@ -113,12 +213,20 @@ export function initAsciiArt(canvas: HTMLCanvasElement) {
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.font = `${layout.font} "IBM Plex Mono", monospace`;
     ctx.textBaseline = "top";
-    ctx.fillStyle = getComputedStyle(canvas).color;
-    mask = strokeMask(path, layout, width, height, cols, rows);
+    ink = getComputedStyle(canvas).color;
+    ctx.fillStyle = ink;
+    if (mesh) {
+      lit = new Float32Array(cols * rows);
+      depth = new Float32Array(cols * rows);
+    } else {
+      mask = strokeMask(path, layout, width, height, cols, rows);
+    }
     sync();
   };
 
-  new ResizeObserver(resize).observe(canvas);
+  const resizes = new ResizeObserver(resize);
+  resizes.observe(canvas);
+  if (panel) resizes.observe(panel);
   new IntersectionObserver(([entry]) => {
     visible = entry?.isIntersecting ?? false;
     sync();

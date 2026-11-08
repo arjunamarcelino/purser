@@ -20,6 +20,7 @@
 
     <header class="site-head band-dark">
       <a class="brand" href="#top" aria-label="Purser, back to top"><span class="wordmark">PURSER</span></a>
+      <a class="btn app-head" data-app-link href="#try" hidden>Open the app</a>
       <button class="menu-toggle btn" type="button" aria-expanded="false" aria-controls="site-nav">Menu</button>
       <nav id="site-nav" class="site-nav" aria-label="Page sections">
         <a href="#problem">The problem</a>
@@ -46,6 +47,7 @@
           <h1 class="hero-title">Give AI agents money without giving them the keys.</h1>
           <p class="lede">Purser is a spending limit AI agents can't talk their way around. It lives in a NEAR contract, and every payment has to clear it.</p>
           <div class="actions">
+            <a class="btn" data-app-link href="#try" hidden>Open the app</a>
             <a class="btn" href="#race">See the race</a>
             <a class="btn" href="#try">Run the proofs</a>
           </div>
@@ -303,7 +305,10 @@ C ---------------[ check 30 &lt;= 10 | refused ]</pre>
           <div class="rule-mark" aria-hidden="true"><i></i><span>&lt;=</span><i></i></div>
           <h2 id="try-h" class="bracket">Check our work.</h2>
           <p class="section-sub">You need Rust 1.95, <code>cargo-near</code>, Node 26 and pnpm 10. The first two commands cost nothing. Testnet steps also need near-cli-rs 0.30.1.</p>
-          <a class="btn" href="https://github.com/arjunamarcelino/purser" rel="noopener noreferrer" target="_blank">Read the source -&gt;</a>
+          <div class="actions">
+            <a class="btn" data-app-link href="#try" hidden>Open the app</a>
+            <a class="btn" href="https://github.com/arjunamarcelino/purser" rel="noopener noreferrer" target="_blank">Read the source -&gt;</a>
+          </div>
         </div>
         <ol class="commands">
           <li class="command"><div class="command-line"><code>make prove</code><button class="btn copy" type="button" data-copy="make prove">Copy</button></div><p>Attack cases and property tests, with the race's block heights.</p></li>

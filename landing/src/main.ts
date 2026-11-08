@@ -12,6 +12,17 @@ function initArt() {
   void document.fonts.ready.then(() => document.querySelectorAll<HTMLCanvasElement>("[data-ascii-art]").forEach(initAsciiArt));
 }
 
+// Set VITE_APP_URL when the board is hosted. A build without it hides these links instead of pointing at localhost.
+const APP_URL: string = import.meta.env.VITE_APP_URL || (import.meta.env.DEV ? "http://127.0.0.1:5173/?task=demo-20261108071557&units=1" : "");
+
+function initAppLinks() {
+  if (!APP_URL) return;
+  document.querySelectorAll<HTMLAnchorElement>("[data-app-link]").forEach((link) => {
+    link.href = APP_URL;
+    link.hidden = false;
+  });
+}
+
 function initMenu() {
   const button = document.querySelector<HTMLButtonElement>(".menu-toggle");
   const nav = document.querySelector<HTMLElement>(".site-nav");
@@ -55,6 +66,7 @@ function initCopy() {
   });
 }
 
+initAppLinks();
 initMenu();
 initCopy();
 initArt();
