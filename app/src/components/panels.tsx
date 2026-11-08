@@ -8,11 +8,8 @@ import { useReducedMotion } from "../theme.ts";
 import { Badge } from "./Badge.tsx";
 import { Icon } from "./Icon.tsx";
 
-/**
- * The Remaining numeral. Counts from the value currently on screen to the new one (≤300 ms, one rAF
- * loop, cancelled on change/unmount); the last frame is the exact string. Snaps (no count) on the
- * first value, on a task switch, and under prefers-reduced-motion.
- */
+/** Counts the Remaining numeral to its new value in ≤300 ms; the last frame is the exact string. */
+// Snaps with no count on the first value, on a task switch, and under prefers-reduced-motion.
 export function useCountTo(target: bigint | null, snapKey: string): bigint | null {
   const reduced = useReducedMotion();
   const [shown, setShown] = useState<bigint | null>(target);
@@ -50,7 +47,13 @@ export function useCountTo(target: bigint | null, snapKey: string): bigint | nul
 
 export function BudgetPanel({ task, cap, completed, outstanding, remaining, money = nearDisplay }: { task: string; cap: bigint; completed: bigint; outstanding: bigint; remaining: bigint; money?: AmountDisplay }) {
   const shown = useCountTo(remaining, task);
-  const pct = cap > 0n ? Number(((completed + outstanding) * 1000n) / cap) / 10 : 0;
+  const pctOf = (v: bigint) => (cap > 0n ? Number((v * 1000n) / cap) / 10 : 0);
+  const pct = pctOf(completed + outstanding);
+  const segments = [
+    { name: "remaining", width: pctOf(remaining) },
+    { name: "outstanding", width: pctOf(outstanding) },
+    { name: "completed", width: pctOf(completed) },
+  ].filter((s) => s.width > 0);
   return (
     <section className="panel budget" aria-labelledby="budget-h">
       <h2 id="budget-h" className="label">
@@ -63,11 +66,15 @@ export function BudgetPanel({ task, cap, completed, outstanding, remaining, mone
           <span className="of"> / {money.fmt(cap)}</span>
         </span>
       </div>
-      <div className="meter" role="progressbar" aria-label="Budget used" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(pct)}>
-        <div className="meter-fill" style={{ width: `${Math.min(100, pct)}%` }} />
+      <div className="meter" role="progressbar" aria-label="Budget used" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.min(100, Math.round(pct))}>
+        {segments.map((s) => (
+          <div key={s.name} className={`meter-seg seg-${s.name}`} style={{ flexBasis: `${Math.min(100, s.width)}%` }} />
+        ))}
       </div>
       <div className="breakdown mono">
-        completed {money.fmt(completed)} · outstanding {money.fmt(outstanding)} <span className="dim">{money.unit}</span>
+        <span className="swatch seg-completed" aria-hidden="true" />
+        completed {money.fmt(completed)} · <span className="swatch seg-outstanding" aria-hidden="true" />
+        outstanding {money.fmt(outstanding)} <span className="dim">{money.unit}</span>
       </div>
       {money.note && <div className="unit-note mono dim small">{money.note}</div>}
     </section>
@@ -96,7 +103,7 @@ export function CrewPanel({
       <h2 id="crew-h" className="label">
         <Icon name="key" /> Crew <span className="dim">(delegates)</span>
       </h2>
-      {delegates.length === 0 && <p className="dim">No delegates on this task.</p>}
+      {delegates.length === 0 && <p className="dim">{isOwner ? "No delegates on this task. Add one in Owner tools below." : "No delegates on this task yet. The task owner adds them."}</p>}
       <ul className="chips">
         {delegates.map((d) => {
           const pending = revoking.has(d.account_id) && d.active;
@@ -109,7 +116,7 @@ export function CrewPanel({
                 {roleOf(d.account_id) && <span className="chip-role dim small"> {roleOf(d.account_id)}</span>}
               </span>
               <span className="mono dim chip-id">{d.account_id}</span>
-              <span className={`chip-status ${d.active ? "tone-brass" : "tone-dim"}`}>{status}</span>
+              <span className="chip-status tone-dim">{status}</span>
               {isOwner && d.active && (
                 <button type="button" className="btn btn-danger" disabled={busy || pending} onClick={() => onRevoke(d)} aria-label={`Revoke ${personaOf(d.account_id)} (${d.account_id})`}>
                   Revoke
@@ -119,7 +126,7 @@ export function CrewPanel({
           );
         })}
       </ul>
-      {!isOwner && <p className="dim small">Connect the task owner's wallet to revoke.</p>}
+      {!isOwner && <p className="dim small">Connect the task owner's wallet to revoke. NEAR CLI signs in your terminal, so the key stays in your OS keychain.</p>}
     </section>
   );
 }
@@ -130,7 +137,7 @@ interface Row {
   who: string;
   to: string;
   badge: ReturnType<typeof refusalBadge>;
-  tx: { href: string; label: string; reported: boolean } | null;
+  tx: { href: string; label: string } | null;
   linking: boolean;
   at: string;
   reported: boolean;
@@ -142,7 +149,7 @@ export function Manifest({ commitments, records, personaOf, delegateIds, now, mo
   // Records are untrusted: keep only those from accounts that are on-chain delegates of this task.
   const trusted = records.filter((r) => delegateIds.has(r.account_id));
   // A tx link attaches to a chain row only from a record that matches that commitment exactly
-  // (same request, delegate, amount, recipient) — a self-asserted record cannot dress up a real row.
+  // (same request, delegate, amount, recipient), so a self-asserted record cannot dress up a real row.
   const txFor = (c: Commitment): string | null =>
     trusted.find(
       (r) =>
@@ -166,7 +173,7 @@ export function Manifest({ commitments, records, personaOf, delegateIds, now, mo
       who: personaOf(c.delegate),
       to: safeText(c.intent.recipient, 64),
       badge: stateBadge[c.state],
-      tx: tx ? { href: explorer.tx(tx), label: shortHash(tx), reported: true } : null,
+      tx: tx ? { href: explorer.tx(tx), label: shortHash(tx) } : null,
       linking: !tx && ageMs < 60_000,
       at: formatTime(c.updated_at),
       reported: false,
@@ -184,11 +191,11 @@ export function Manifest({ commitments, records, personaOf, delegateIds, now, mo
       const key = `r${r.decision_id}`; // one row per decision: a re-run reusing a request_id is a new row
       return {
         key,
-        amount: r.amount_yocto ? money.fmt(r.amount_yocto) : "—",
+        amount: r.amount_yocto ? money.fmt(r.amount_yocto) : "n/a",
         who: personaOf(r.account_id),
         to: safeText(r.recipient, 64),
         badge: refusalBadge(r.refusal_code),
-        tx: r.tx_hash ? { href: explorer.tx(r.tx_hash), label: shortHash(r.tx_hash), reported: true } : null,
+        tx: r.tx_hash ? { href: explorer.tx(r.tx_hash), label: shortHash(r.tx_hash) } : null,
         linking: false,
         at: new Date(r.at).toLocaleTimeString("en-GB", { hour12: false }),
         reported: true,
@@ -196,11 +203,12 @@ export function Manifest({ commitments, records, personaOf, delegateIds, now, mo
       };
     });
 
-  const section = (id: string, title: string, rows: Row[], empty: string) => (
+  const section = (id: string, title: string, rows: Row[], empty: string, note?: string) => (
     <div className="mgroup">
       <h3 id={id} className="label">
         {title} <span className="count">{rows.length}</span>
       </h3>
+      {rows.length > 0 && note && <p className="mgroup-note dim small">{note}</p>}
       {rows.length === 0 ? (
         <p className="dim small">{empty}</p>
       ) : (
@@ -213,15 +221,13 @@ export function Manifest({ commitments, records, personaOf, delegateIds, now, mo
                 <span className="sr-only">to</span> <span className="mono">{r.to}</span>
               </span>
               <span className="mbadge">
-                <span className="mbadge-inner">
-                  <Badge badge={r.badge} />
-                </span>
+                <Badge badge={r.badge} />
               </span>
               <span className="mtx">
                 {r.tx ? (
-                  <a href={r.tx.href} target="_blank" rel="noopener noreferrer" className="mono" title="transaction hash reported by the proposer; open it to verify on the explorer">
+                  <a href={r.tx.href} target="_blank" rel="noopener noreferrer" className="mono">
                     <Icon name="link" size={14} /> tx {r.tx.label}
-                    {!r.reported && <span className="sr-only"> (hash reported by proposer)</span>}
+                    <span className="sr-only"> (hash reported by proposer)</span>
                   </a>
                 ) : r.linking ? (
                   <span className="dim">linking…</span>
@@ -231,7 +237,7 @@ export function Manifest({ commitments, records, personaOf, delegateIds, now, mo
               </span>
               <span className="mono dim mtime">
                 {r.at}
-                {r.reported && <span className="reported"> · reported by proposer</span>}
+                {r.reported && <span className="reported">reported by proposer</span>}
               </span>
             </li>
           ))}
@@ -245,22 +251,25 @@ export function Manifest({ commitments, records, personaOf, delegateIds, now, mo
       <h2 id="manifest-h" className="label">
         Manifest
       </h2>
-      {section("holds-h", "Holds (pending)", groups.holds, "No holds — nothing awaiting proof.")}
+      {section("holds-h", "Holds (pending)", groups.holds, "No holds: nothing awaiting proof.", "Reserved budget stays held until there is proof of the outcome.")}
       {section("pay-h", "Payments (completed)", groups.payments, "No completed payments yet.")}
       {section("ref-h", "Refused", refused, "No refusals recorded.")}
-      {groups.released.length > 0 && section("rel-h", "Released (failed / cancelled)", groups.released, "")}
+      {groups.released.length > 0 && section("rel-h", "Released (failed / cancelled)", groups.released, "", "These reservations were released back to the budget.")}
+      {[...groups.holds, ...groups.payments, ...refused, ...groups.released].some((r) => r.tx) && <p className="manifest-note dim small">Transaction hashes come from the proposer's records. Open one to verify it on the explorer.</p>}
     </section>
   );
 }
 
-export function InvariantLine({ health, completed, outstanding, cap, money = nearDisplay }: { health: LineHealth; completed: bigint; outstanding: bigint; cap: bigint; money?: AmountDisplay }) {
-  const used = completed + outstanding;
-  const pct = cap > 0n ? Number((used * 100n) / cap) : 0;
-  const spoken = health.tone === "dim" ? "invariant state unavailable" : `${health.label.toLowerCase()}: ${money.fmt(used)} of ${money.fmt(cap)} ${money.unit} used (${pct} percent)`;
+export function InvariantLine({ health, completed, outstanding, cap, money = nearDisplay }: { health: LineHealth; completed: bigint | null; outstanding: bigint | null; cap: bigint | null; money?: AmountDisplay }) {
+  const read = completed !== null && outstanding !== null && cap !== null;
+  const used = read ? completed + outstanding : 0n;
+  const pct = read && cap > 0n ? Number((used * 100n) / cap) : 0;
+  const spoken = health.tone === "dim" || !read ? "invariant state unavailable" : `${health.label.toLowerCase()}: ${money.fmt(used)} of ${money.fmt(cap)} ${money.unit} used (${pct} percent)`;
   return (
-    <div className={`invariant tone-${health.tone}`} role="status" aria-live="polite" aria-label={spoken}>
+    <div className={`invariant tone-${health.tone}`} role="status" aria-live="polite">
+      <span className="sr-only">{spoken}</span>
       <span className="mono eq" aria-hidden="true">
-        completed {money.fmt(completed)} + outstanding {money.fmt(outstanding)} = {money.fmt(used)} ≤ cap {money.fmt(cap)}
+        {read ? `completed ${money.fmt(completed)} + outstanding ${money.fmt(outstanding)} = ${money.fmt(used)} ≤ cap ${money.fmt(cap)}` : "waiting for the contract's first reading"}
       </span>
       <span className="health" aria-hidden="true">
         <Icon name={health.icon} /> {health.label}
@@ -269,11 +278,8 @@ export function InvariantLine({ health, completed, outstanding, cap, money = nea
   );
 }
 
-/**
- * Keys that appeared since the previous commit (never on the first load), cleared after 1.5 s:
- * a row "lands" or flashes once, and re-renders don't re-flash it. Computed after commit, so
- * StrictMode's double render can't swallow or repeat it.
- */
+/** Keys new since the previous commit, cleared after 1.5 s, so a row lands or flashes exactly once. */
+// Computed after commit, so StrictMode's double render can't swallow or repeat it.
 function useFreshKeys(keys: string[]): ReadonlySet<string> {
   const prev = useRef<Set<string> | null>(null);
   const [fresh, setFresh] = useState<ReadonlySet<string>>(new Set());
@@ -292,18 +298,14 @@ function useFreshKeys(keys: string[]): ReadonlySet<string> {
   return fresh;
 }
 
-/**
- * "On-chain history (cached)": rows from the indexer. Every API string is a React text node; the only
- * href is built from a validated tx hash and the app's own explorer. A row from a block the board has
- * not reached yet is labelled as ahead of the board, never as settled.
- */
+/** Indexer rows. Every API string is a text node; the only href comes from a validated tx hash. */
+// A row from a block the board has not reached is labelled ahead of the board, never as settled.
 export function CachedHistory({
   rows,
   dropped,
   boardBlock,
   personaOf,
   recordTx,
-  contractId,
   offline = false,
   money = nearDisplay,
 }: {
@@ -312,20 +314,19 @@ export function CachedHistory({
   boardBlock: number | null;
   personaOf: (a: string) => string;
   recordTx: (r: CachedCommitment) => string | null;
-  contractId: string;
   offline?: boolean;
   money?: AmountDisplay;
 }) {
   return (
-    <section className="panel cached-history" aria-labelledby="cache-h">
+    <section className={`panel cached-history ${offline ? "offline" : ""}`} aria-labelledby="cache-h">
       <h2 id="cache-h" className="label">
         On-chain history <span className="dim">(cached)</span>
       </h2>
-      {offline && rows.length > 0 && <p className="tone-warn small">offline — showing last known</p>}
+      {offline && rows.length > 0 && <p className="tone-warn small">offline: showing last known</p>}
       {rows.length === 0 ? (
-        <p className="dim small">No cached history for this task yet.</p>
+        <p className="dim small">No cached history for this task yet. It appears once the indexer has read this task's events.</p>
       ) : (
-        <ul aria-labelledby="cache-h" style={offline ? { opacity: 0.6 } : undefined}>
+        <ul aria-labelledby="cache-h">
           {[...rows]
             .sort((a, b) => Number(b.commitmentId) - Number(a.commitmentId))
             .map((r) => {
@@ -351,9 +352,7 @@ export function CachedHistory({
                         {r.txStatus !== "resolved" && <span className="dim small"> proposer-reported, unverified</span>}
                       </>
                     ) : (
-                      <a href={explorer.account(contractId)} target="_blank" rel="noopener noreferrer" className="dim small">
-                        {r.txStatus === "unavailable" ? "tx unavailable" : r.txStatus === "pending" ? "tx pending" : "tx not indexed"}
-                      </a>
+                      <span className="dim small">{r.txStatus === "unavailable" ? "tx unavailable" : r.txStatus === "pending" ? "tx pending" : "tx not indexed"}</span>
                     )}
                   </span>
                   <span className="mono dim mtime">cached @ block {r.asOfHeight}</span>

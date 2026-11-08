@@ -1,6 +1,5 @@
-// The comparison shot (DEMO-SCRIPT §2): a deliberately unsafe budget, loudly labeled, in its own window.
-// Dev only (see main.tsx). A run starts ONLY from a click; a reload re-attaches to a run still going and
-// otherwise starts clean, so an earlier take's numbers are never on screen.
+// The comparison shot (DEMO-SCRIPT §2): a deliberately unsafe budget, loudly labeled, dev only (see main.tsx).
+// A run starts ONLY from a click; a reload re-attaches or starts clean, so an earlier take's numbers never show.
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { explorer } from "../config.ts";
@@ -10,8 +9,8 @@ import { useTheme } from "../theme.ts";
 import { type BaselineLane, type BaselineResult, parseResult, readStream } from "./parse.ts";
 import "./baseline.css";
 
-const BANNER = "NAÏVE BASELINE — NO RESERVATION (for comparison only)";
-const TITLE = "NAÏVE BASELINE (NO RESERVATION) — for comparison only";
+const BANNER = "NAÏVE BASELINE: NO RESERVATION (for comparison only)";
+const TITLE = "NAÏVE BASELINE (NO RESERVATION): for comparison only";
 const CAP_UNITS = 100;
 const EACH_UNITS = 60;
 const KIND = "baseline";
@@ -24,7 +23,7 @@ type Phase =
   | { name: "failed"; message: string; tail: string[] };
 
 function Lane({ name, lane, saw, running }: { name: string; lane: BaselineLane | null; saw: number | null; running: boolean }) {
-  const pending = running ? "running…" : "—";
+  const pending = running ? "running…" : "not run";
   return (
     <section className="naive-lane" aria-label={name}>
       <h2 className="label">{name}</h2>
@@ -119,18 +118,18 @@ export default function BaselinePage() {
     <div className="naive">
       <div className="naive-banner">{BANNER}</div>
       <main className="naive-main">
-        <h1>{TITLE}</h1>
+        <h1>Two agents share one balance, with no reservation</h1>
         <p className="naive-sub">Deliberately unsafe, written for this demo. Not Purser and not any real product.</p>
         <p className="dim">The limit lives inside the agents. Each one reads the shared balance, checks it, then spends. Real NEAR testnet transfers from a throwaway account.</p>
 
         <section className={`naive-meter ${result ? "over" : ""}`} aria-label="Baseline budget">
           <div className="label">Spent</div>
           <div className="naive-numeral mono">
-            {failed ? "—" : spent}
+            {failed ? "?" : spent}
             <span className="of"> / cap {cap}</span>
           </div>
           <div className="mono small">
-            {result ? <strong className="naive-over">OVER CAP BY {result.overUnits}</strong> : failed ? <span className="tone-warn">result unknown — check the output below</span> : <span className="dim">remaining {cap - spent} units</span>}
+            {result ? <strong className="naive-over">OVER CAP BY {result.overUnits}</strong> : failed ? <span className="tone-warn">result unknown: check the output below</span> : <span className="dim">remaining {cap - spent} units</span>}
           </div>
         </section>
 
@@ -139,7 +138,7 @@ export default function BaselinePage() {
           <Lane name="Agent B" lane={result?.b ?? null} saw={result?.sawUnits ?? null} running={running} />
         </div>
 
-        {result && <p className="naive-caption">Naïve implementation — concurrent checks double-spend.</p>}
+        {result && <p className="naive-caption">Naïve implementation: concurrent checks double-spend.</p>}
 
         <button type="button" className="btn btn-primary" disabled={!available || running} onClick={() => void fire()}>
           Fire {EACH_UNITS} + {EACH_UNITS} concurrently

@@ -1,4 +1,4 @@
-// Line icons (DESIGN-BRIEF §8): 1.5px stroke, currentColor. Decorative — every use sits next to text.
+// Line icons (DESIGN-BRIEF §8): 1.5px stroke, currentColor. Decorative: every use sits next to text.
 
 import type { IconName } from "../lib/semantics.ts";
 

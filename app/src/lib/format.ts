@@ -1,4 +1,4 @@
-// Display formatting. Amounts stay bigint/decimal strings end to end — never floats.
+// Display formatting. Amounts stay bigint/decimal strings end to end, never floats.
 
 import { formatUnits, unitsToYocto } from "@purser/types";
 

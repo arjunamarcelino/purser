@@ -1,9 +1,7 @@
-// Owner actions: one at a time, every one confirmed with exactly what will be signed.
-//   idle → confirming → signing → idle
-// The signer and task are captured when the action starts; an account switch while confirming
-// closes the dialog; the receiver is always the configured contract (wallet.ts).
+// Owner actions, one at a time (idle → confirming → signing → idle), each confirmed with exactly what will be signed.
+// The signer is captured at the start; an account switch while confirming closes the dialog.
 
-import { type ReactNode, useEffect, useRef, useState } from "react";
+import { type InputHTMLAttributes, type ReactNode, useEffect, useId, useRef, useState } from "react";
 import { NEAR_ACCOUNT_ID, SAFE_TASK_ID } from "@purser/types";
 import { config, explorer } from "../config.ts";
 import { type OwnerMethod, signOwnerCall } from "../wallet/wallet.ts";
@@ -43,14 +41,14 @@ export function useOwnerActions(accountId: string | null, isOwner: boolean) {
     setPhase({ kind: "idle" });
     if (out.kind === "ok") {
       req.onSuccess?.();
-      pushToast({ tone: "ok", icon: "check", title: `${req.title} — done`, ...(out.txHash ? { href: explorer.tx(out.txHash) } : {}) });
+      pushToast({ tone: "ok", icon: "check", title: `${req.title}: done`, ...(out.txHash ? { href: explorer.tx(out.txHash) } : {}) });
     } else if (out.kind === "refused") {
       const b = refusalBadge(out.code);
-      pushToast({ tone: "warn", icon: "slash", title: `${req.title} — ${b.label}`, ...(out.code ? {} : { detail: out.raw }), ...(out.txHash ? { href: explorer.tx(out.txHash) } : {}) });
+      pushToast({ tone: "warn", icon: "slash", title: `${req.title}: ${b.label}`, ...(out.code ? {} : { detail: out.raw }), ...(out.txHash ? { href: explorer.tx(out.txHash) } : {}) });
     } else if (out.kind === "rejected") {
-      pushToast({ tone: "neutral", icon: "minus", title: `${req.title} — not signed`, detail: out.raw });
+      pushToast({ tone: "neutral", icon: "minus", title: `${req.title}: not signed`, detail: out.raw });
     } else {
-      pushToast({ tone: "warn", icon: "clock", title: `${req.title} — outcome unknown`, detail: out.raw }, 20000);
+      pushToast({ tone: "warn", icon: "clock", title: `${req.title}: outcome unknown`, detail: out.raw }, 20000);
     }
   };
 
@@ -60,13 +58,34 @@ export function useOwnerActions(accountId: string | null, isOwner: boolean) {
 
 export function ConfirmDialog({ phase, onConfirm, onCancel }: { phase: Phase; onConfirm: () => void; onCancel: () => void }) {
   const confirmRef = useRef<HTMLButtonElement>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
   const open = phase.kind !== "idle";
   useEffect(() => {
+    if (!open) return;
+    const opener = document.activeElement;
+    return () => {
+      if (opener instanceof HTMLElement) opener.focus();
+    };
+  }, [open]);
+  useEffect(() => {
     if (phase.kind === "confirming") confirmRef.current?.focus();
+    else if (phase.kind === "signing") dialogRef.current?.focus(); // the buttons are gone while signing
   }, [phase.kind]);
   useEffect(() => {
     if (!open) return;
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onCancel();
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onCancel();
+      if (e.key !== "Tab" || !dialogRef.current) return;
+      const dialog = dialogRef.current;
+      const items = [...dialog.querySelectorAll<HTMLElement>("a[href], button:not(:disabled), input, select, textarea")];
+      const first = items[0] ?? dialog;
+      const last = items[items.length - 1] ?? dialog;
+      const active = document.activeElement;
+      if (!dialog.contains(active) || (e.shiftKey ? active === first || active === dialog : active === last)) {
+        e.preventDefault();
+        (e.shiftKey ? last : first).focus();
+      }
+    };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [open, onCancel]);
@@ -74,7 +93,7 @@ export function ConfirmDialog({ phase, onConfirm, onCancel }: { phase: Phase; on
   const { req, signer } = phase;
   return (
     <div className="scrim" role="presentation">
-      <div className="dialog" role="dialog" aria-modal="true" aria-labelledby="confirm-title">
+      <div ref={dialogRef} tabIndex={-1} className="dialog" role="dialog" aria-modal="true" aria-labelledby="confirm-title">
         <h2 id="confirm-title">{req.title}</h2>
         {req.warnings && <div className="warnings">{req.warnings}</div>}
         <dl className="tx-details mono">
@@ -120,6 +139,21 @@ export function nearToYocto(near: string): string | null {
   return (BigInt(w) * YOCTO + BigInt(f.padEnd(24, "0"))).toString();
 }
 
+function Field({ label, error, ...input }: { label: string; error: string | null } & InputHTMLAttributes<HTMLInputElement>) {
+  const errorId = useId();
+  return (
+    <label>
+      {label}
+      <input {...input} aria-invalid={error !== null} aria-describedby={error ? errorId : undefined} />
+      {error && (
+        <span id={errorId} className="field-error">
+          {error}
+        </span>
+      )}
+    </label>
+  );
+}
+
 /** Owner-only maintenance: create a task, add a delegate, set the allowlist. */
 export function OwnerPanel({ task, request, busy }: { task: string | null; request: (r: OwnerRequest) => void; busy: boolean }) {
   const [newTask, setNewTask] = useState({ id: "", cap: "1", crew: "3" });
@@ -129,9 +163,13 @@ export function OwnerPanel({ task, request, busy }: { task: string | null; reque
   const taskValid = SAFE_TASK_ID.test(newTask.id);
   const capYocto = nearToYocto(newTask.cap);
   const crewCap = Number(newTask.crew);
-  const delegateValid = NEAR_ACCOUNT_ID.test(delegate.account) && /^[a-z0-9_-]{1,32}$/.test(delegate.persona);
+  const crewValid = Number.isInteger(crewCap) && crewCap >= 1 && crewCap <= 255;
+  const accountValid = NEAR_ACCOUNT_ID.test(delegate.account);
+  const personaValid = /^[a-z0-9_-]{1,32}$/.test(delegate.persona);
+  const delegateValid = accountValid && personaValid;
   const allowList = allow.split(/[\s,]+/).filter(Boolean);
   const allowValid = allowList.length > 0 && allowList.length <= 20 && allowList.every((a) => NEAR_ACCOUNT_ID.test(a));
+  const createReady = taskValid && capYocto !== null && crewValid;
 
   return (
     <details className="panel owner-panel">
@@ -139,7 +177,7 @@ export function OwnerPanel({ task, request, busy }: { task: string | null; reque
       <form
         onSubmit={(e) => {
           e.preventDefault();
-          if (!taskValid || !capYocto || !(crewCap >= 1 && crewCap <= 255)) return;
+          if (!createReady) return;
           request({
             method: "create_task",
             args: { task_id: newTask.id, cap: capYocto, token: "NearNative", crew_cap: crewCap },
@@ -149,18 +187,13 @@ export function OwnerPanel({ task, request, busy }: { task: string | null; reque
         }}
       >
         <h3>Create task</h3>
-        <label>
-          Task id <input value={newTask.id} onChange={(e) => setNewTask({ ...newTask, id: e.target.value.trim() })} aria-invalid={newTask.id !== "" && !taskValid} placeholder="board-1" />
-        </label>
-        <label>
-          Cap (NEAR) <input value={newTask.cap} inputMode="decimal" onChange={(e) => setNewTask({ ...newTask, cap: e.target.value.trim() })} aria-invalid={!capYocto} />
-        </label>
-        <label>
-          Crew cap <input value={newTask.crew} inputMode="numeric" onChange={(e) => setNewTask({ ...newTask, crew: e.target.value.trim() })} />
-        </label>
-        <button className="btn" disabled={busy || !taskValid || !capYocto}>
-          Create…
+        <Field label="Task id" value={newTask.id} onChange={(e) => setNewTask({ ...newTask, id: e.target.value.trim() })} error={newTask.id !== "" && !taskValid ? "Use lowercase letters, digits, dots, dashes or underscores, starting with a letter or digit." : null} placeholder="board-1" />
+        <Field label="Cap (NEAR)" value={newTask.cap} inputMode="decimal" onChange={(e) => setNewTask({ ...newTask, cap: e.target.value.trim() })} error={capYocto ? null : "Enter a NEAR amount, such as 1 or 0.5."} />
+        <Field label="Crew cap" value={newTask.crew} inputMode="numeric" onChange={(e) => setNewTask({ ...newTask, crew: e.target.value.trim() })} error={crewValid ? null : "Enter a whole number from 1 to 255."} />
+        <button className="btn" disabled={busy || !createReady}>
+          Create task…
         </button>
+        {newTask.id === "" && <p className="form-note dim small">Enter a task id to continue.</p>}
       </form>
 
       <form
@@ -174,16 +207,13 @@ export function OwnerPanel({ task, request, busy }: { task: string | null; reque
           });
         }}
       >
-        <h3>Add delegate to {task ?? "—"}</h3>
-        <label>
-          Account <input value={delegate.account} onChange={(e) => setDelegate({ ...delegate, account: e.target.value.trim() })} placeholder="scout.you.testnet" />
-        </label>
-        <label>
-          Persona <input value={delegate.persona} onChange={(e) => setDelegate({ ...delegate, persona: e.target.value.trim() })} placeholder="scout" />
-        </label>
+        <h3>Add delegate{task ? ` to ${task}` : ""}</h3>
+        <Field label="Account" value={delegate.account} onChange={(e) => setDelegate({ ...delegate, account: e.target.value.trim() })} error={delegate.account !== "" && !accountValid ? "Enter a NEAR account, such as scout.you.testnet." : null} placeholder="scout.you.testnet" />
+        <Field label="Persona" value={delegate.persona} onChange={(e) => setDelegate({ ...delegate, persona: e.target.value.trim() })} error={delegate.persona !== "" && !personaValid ? "Use up to 32 lowercase letters, digits, dashes or underscores." : null} placeholder="scout" />
         <button className="btn" disabled={busy || !task || !delegateValid}>
-          Add…
+          Add delegate…
         </button>
+        {!task ? <p className="form-note dim small">Select a task first.</p> : (delegate.account === "" || delegate.persona === "") && <p className="form-note dim small">Enter an account and a persona to continue.</p>}
       </form>
 
       <form
@@ -193,13 +223,12 @@ export function OwnerPanel({ task, request, busy }: { task: string | null; reque
           request({ method: "set_recipient_allowlist", args: { task_id: task, recipients: allowList }, title: `Set allowlist on ${task}` });
         }}
       >
-        <h3>Allowlist recipients on {task ?? "—"}</h3>
-        <label>
-          Accounts (comma or space separated) <input value={allow} onChange={(e) => setAllow(e.target.value)} placeholder="data.you.testnet, compute.you.testnet" />
-        </label>
+        <h3>Allowlist recipients{task ? ` on ${task}` : ""}</h3>
+        <Field label="Accounts (comma or space separated)" value={allow} onChange={(e) => setAllow(e.target.value)} error={allow.trim() !== "" && !allowValid ? "Enter up to 20 valid NEAR accounts." : null} placeholder="data.you.testnet, compute.you.testnet" />
         <button className="btn" disabled={busy || !task || !allowValid}>
-          Set…
+          Set allowlist…
         </button>
+        {!task ? <p className="form-note dim small">Select a task first.</p> : allow.trim() === "" && <p className="form-note dim small">Enter at least one recipient to continue.</p>}
       </form>
     </details>
   );

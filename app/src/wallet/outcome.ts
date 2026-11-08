@@ -48,16 +48,12 @@ function decodeArgs(b64: string): unknown {
   }
 }
 
-/**
- * The outcome must PROVE it is the transaction we asked for: present, final, to our contract, from
- * the expected signer, calling exactly this method with exactly these args. A wallet (e.g. the NEAR
- * CLI wallet, where the owner pastes a hash) can hand back any transaction — a pasted hash of an
- * earlier owner call must never read as "Revoke — done".
- */
+/** The outcome must PROVE it is the transaction we asked for: final, our contract, expected signer, exact method and args. */
+// A wallet can hand back any transaction: a pasted hash of an earlier owner call must never read as "Revoke: done".
 export function checkOutcome(outcome: Outcome, method: OwnerMethod, args: Record<string, unknown>, expectedSigner: string): OwnerOutcome {
   const tx = outcome.transaction;
   const status = outcome.status;
-  if (!tx || typeof status !== "object" || status === null) return { kind: "unknown", raw: "the wallet returned no final outcome — check the explorer" };
+  if (!tx || typeof status !== "object" || status === null) return { kind: "unknown", raw: "the wallet returned no final outcome: check the explorer" };
   if (tx.receiver_id !== config.contractId) return { kind: "unknown", raw: `transaction is for ${tx.receiver_id ?? "?"}, not ${config.contractId}` };
   if (tx.signer_id !== expectedSigner) return { kind: "unknown", raw: `transaction was signed by ${tx.signer_id ?? "?"}, expected ${expectedSigner}` };
   const actions = tx.actions ?? [];
@@ -68,7 +64,7 @@ export function checkOutcome(outcome: Outcome, method: OwnerMethod, args: Record
     const raw = executionError(status.Failure);
     return { kind: "refused", code: classifyRefusal(raw)?.code ?? null, raw, txHash: tx.hash ?? null };
   }
-  if (!("SuccessValue" in status)) return { kind: "unknown", raw: "transaction outcome is not final yet — check the explorer" };
+  if (!("SuccessValue" in status)) return { kind: "unknown", raw: "transaction outcome is not final yet: check the explorer" };
   return { kind: "ok", txHash: tx.hash ?? "", blockHash: outcome.transaction_outcome?.block_hash ?? "" };
 }
 

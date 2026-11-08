@@ -82,7 +82,7 @@ export async function signOwnerCall(method: OwnerMethod, args: Record<string, un
       timer = setTimeout(() => r("timeout"), timeoutMs);
     });
     const outcome = await Promise.race([send, timeout]);
-    if (outcome === "timeout") return { kind: "unknown", raw: "no answer from the wallet — check the explorer before retrying" };
+    if (outcome === "timeout") return { kind: "unknown", raw: "no answer from the wallet: check the explorer before retrying" };
     return checkOutcome(outcome, method, args, expectedSigner);
   } catch (err) {
     return { kind: "rejected", raw: err instanceof Error ? err.message : String(err) };
