@@ -1,7 +1,7 @@
 // Pure text frames for every ASCII visual on the page, so each one is testable without a browser.
 
 const NOISE = "#%*+=-:.";
-const clamp = (v: number, lo = 0, hi = 1) => Math.min(hi, Math.max(lo, v));
+const clamp = (v: number) => Math.min(1, Math.max(0, v));
 
 export function scrambleFrame(text: string, p: number): string {
   const tick = Math.floor(p * 40);
@@ -42,7 +42,8 @@ const BUDGET_STEPS = [
   { name: "RACE", left: 10 },
 ];
 
-export function budgetChart(p: number, cols: number, rows = 10): string {
+export function budgetChart(p: number, cols: number): string {
+  const rows = 10;
   const axis = 5;
   const width = Math.max(32, cols) - axis;
   const segment = Math.floor(width / BUDGET_STEPS.length);
@@ -84,7 +85,7 @@ export function dissolveFrame(cols: number, rows: number, p: number, denseAtTop:
   }).join("\n");
 }
 
-export interface StageRow {
+interface StageRow {
   text: string;
   tone: "plain" | "ok" | "warn";
 }

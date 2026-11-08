@@ -8,13 +8,14 @@ export const ART_TUBES: TubeOptions = { radius: 0.11, step: 0.018, sides: 14, no
 const TAU = Math.PI * 2;
 const deg = (d: number) => (d * Math.PI) / 180;
 
-function loop(point: (angle: number) => Vec, from = 0, to = TAU, segments = 40): MeshPath {
+function loop(point: (angle: number) => Vec, from = 0, to = TAU): MeshPath {
+  const segments = 40;
   return Array.from({ length: segments + 1 }, (_, i) => point(from + ((to - from) * i) / segments));
 }
 const ringXY = (cx: number, cy: number, r: number, z = 0, from = 0, to = TAU) => loop((a) => [cx + Math.cos(a) * r, cy + Math.sin(a) * r, z], from, to);
 const ringXZ = (y: number, r: number) => loop((a) => [Math.cos(a) * r, y, Math.sin(a) * r]);
 
-const arrowHead = (tip: Vec, direction: number, size = 0.42): MeshPath => {
+const arrowHead = (tip: Vec, direction: number, size: number): MeshPath => {
   const barb = (turn: number): Vec => [tip[0] + Math.cos(direction + turn) * size, tip[1] + Math.sin(direction + turn) * size, tip[2]];
   return [barb(deg(138)), tip, barb(deg(-138))];
 };

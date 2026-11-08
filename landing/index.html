@@ -72,7 +72,7 @@
           <p class="section-sub">Agents are starting to buy data, compute and API access. Today's controls break in three places.</p>
         </div>
         <ol class="cards">
-          <li class="card card-dark band-dark">
+          <li class="card band-dark">
             <p class="card-tag">The limit</p>
             <canvas class="art" data-ascii-art="config" aria-hidden="true"></canvas>
             <h3>The limit lives with the spender.</h3>
@@ -89,7 +89,7 @@
               <figcaption class="naive-note">Each agent saw 100 left and spent 60. Real transfers, from a throwaway account built to fail: <a class="tx" href="https://testnet.nearblocks.io/txns/FR2SJmBgLcEgSsZZrXME4wssaH6sCT46meAXyQtfeXPy" rel="noopener noreferrer" target="_blank">tx FR2SJm -&gt;</a> <a class="tx" href="https://testnet.nearblocks.io/txns/4r9umk2cFiJNUCheXNBjwNVW5yyMDDJWT3nFvfLNJowM" rel="noopener noreferrer" target="_blank">tx 4r9umk -&gt;</a></figcaption>
             </figure>
           </li>
-          <li class="card card-dark band-dark">
+          <li class="card band-dark">
             <p class="card-tag">The timeout</p>
             <canvas class="art" data-ascii-art="hourglass" aria-hidden="true"></canvas>
             <h3>A timeout gets mistaken for a failure.</h3>
@@ -103,7 +103,7 @@
 
       <section id="race" class="race band band-dark" aria-labelledby="race-h">
         <div class="race-pin">
-          <div class="race-text">
+          <div>
             <div class="rule-mark" aria-hidden="true"><i></i><span>&lt;=</span><i></i></div>
             <h2 id="race-h" class="bracket">Three agents ask for 30. There is 40 left.</h2>
             <ol class="race-steps">
@@ -258,7 +258,7 @@ C ---------------[ check 30 &lt;= 10 | refused ]</pre>
         <div class="rule-mark" aria-hidden="true"><i></i><span>&lt;=</span><i></i></div>
         <h2 id="evidence-h">The numbers come with receipts.</h2>
         <div class="evidence-grid">
-          <div class="evidence-lead">
+          <div>
             <pre class="ascii-zero" data-ascii-reveal aria-hidden="true">  #####
  #     #
 #       #
@@ -303,7 +303,7 @@ C ---------------[ check 30 &lt;= 10 | refused ]</pre>
       <div class="notch band-light" aria-hidden="true"></div>
 
       <section id="try" class="try band band-dark" aria-labelledby="try-h">
-        <div class="try-head">
+        <div>
           <div class="rule-mark" aria-hidden="true"><i></i><span>&lt;=</span><i></i></div>
           <h2 id="try-h" class="bracket">Check our work.</h2>
           <p class="section-sub">You need Rust 1.95, <code>cargo-near</code>, Node 26 and pnpm 10. The first two commands cost nothing. Testnet steps also need near-cli-rs 0.30.1.</p>
