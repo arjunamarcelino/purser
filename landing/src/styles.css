@@ -334,7 +334,7 @@ code {
   align-items: center;
   justify-content: flex-end;
   min-height: 100vh;
-  min-height: 100dvh;
+  min-height: 100svh;
   padding: 7rem var(--gutter) calc(var(--scene-gap) + 2rem);
   overflow: hidden;
 }
@@ -530,7 +530,7 @@ code {
   align-items: center;
   gap: clamp(2rem, 5vw, 5rem);
   min-height: 100vh;
-  min-height: 100dvh;
+  min-height: 100svh;
   padding-block: 3rem var(--bar-room);
 }
 .race-steps {
@@ -809,7 +809,7 @@ td {
   flex-direction: column;
   justify-content: center;
   min-height: 100vh;
-  min-height: 100dvh;
+  min-height: 100svh;
   overflow: hidden;
   overflow: clip;
 }

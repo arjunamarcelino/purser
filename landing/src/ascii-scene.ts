@@ -228,6 +228,8 @@ export function initAsciiArt(canvas: HTMLCanvasElement) {
     lit = new Float32Array(cols * rows);
     depth = new Float32Array(cols * rows);
     sync();
+    // Resizing clears the canvas, so repaint now and don't leave a blank frame for the next tick.
+    if (visible && !calm.matches) draw(clock);
   };
 
   const resizes = new ResizeObserver(resize);
