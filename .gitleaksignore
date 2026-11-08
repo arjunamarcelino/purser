@@ -6,3 +6,6 @@
 # remove them; not credentials). Scoped to these two findings (commit:file:rule:line).
 bfbe893d2f7baf60e9de3430ad255c40631f2862:scripts/evm-testnet.sh:generic-api-key:38
 cbb4efed1bde43efacda52df90c287a928128f71:relayer/test/unit/scrub.test.ts:generic-api-key:8
+
+# The docs note explaining the canary pins above quotes the same fake canary string. Scoped to this one finding.
+4718bb8825428a2fd03bcb54fa82d1cf1ffe79ab:docs/solutions/build-errors/gitleaks-and-precommit-flag-fake-canary-keys-in-scrubber-tests.md:generic-api-key:29

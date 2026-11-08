@@ -49,14 +49,14 @@ jobs:
           cargo fmt --manifest-path tests/fixtures/mock-signer/Cargo.toml -- --check
           CARGO_TARGET_DIR="$PWD/target/mock-signer" cargo clippy --locked --manifest-path tests/fixtures/mock-signer/Cargo.toml --all-targets -- -D warnings
       - name: Keep the sandbox-only race driver out of deploy tooling
-        run: "! grep -rn race-driver ../scripts ../Makefile"
+        run: "! grep -rn --exclude=metrics.sh race-driver ../scripts ../Makefile"   # metrics.sh builds it for the local sandbox harness
       - name: Keep the race-driver toolchain and near-sdk pin in lock-step with the contract
         run: |
           diff <(grep -v '^#' rust-toolchain.toml) <(grep -v '^#' tests/fixtures/race-driver/rust-toolchain.toml)
           pin() { grep -m1 '^near-sdk' "$1" | grep -oE '"=[0-9.]+"'; }   # first near-sdk line, string or table form
           [ "$(pin Cargo.toml)" = "$(pin tests/fixtures/race-driver/Cargo.toml)" ]
       - name: Keep the sandbox-only mock signer out of deploy tooling
-        run: "! grep -rn mock-signer ../scripts ../Makefile"
+        run: "! grep -rn --exclude=metrics.sh mock-signer ../scripts ../Makefile"   # metrics.sh builds it for the local sandbox harness
       - name: Keep the mock-signer toolchain and near-sdk pin in lock-step with the contract
         run: |
           diff <(grep -v '^#' rust-toolchain.toml) <(grep -v '^#' tests/fixtures/mock-signer/rust-toolchain.toml)
@@ -161,7 +161,7 @@ jobs:
           name: test-wasms
           path: wasm/test
       - run: cargo test --test attacks --test payments --test delegates --test evm --test limits --test refusals -- --test-threads=4
-      - name: Metrics harness (single-threaded: its latency samples are wall-clock)
+      - name: "Metrics harness (single-threaded: its latency samples are wall-clock)"
         run: cargo test --test metrics -- --test-threads=1
 
   # In-place upgrade: the previous release (merge-base with main) writes state, this tree's wasm reads it.
@@ -198,7 +198,7 @@ jobs:
       - run: pnpm -r --workspace-concurrency=1 run typecheck
       - run: pnpm --filter @purser/app build   # before tests: the app's test scans dist/ for secrets
       - run: pnpm -r run test
-      - name: Metrics aggregator self-test (fixtures: good set, overrun, missing metric)
+      - name: "Metrics aggregator self-test (fixtures: good set, overrun, missing metric)"
         run: node --test scripts/metrics-report.test.mjs
 
   # The committed generated types must match the ABI of the wasm this run built.
