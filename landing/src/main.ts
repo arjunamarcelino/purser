@@ -4,43 +4,12 @@ import "@fontsource/ibm-plex-mono/600.css";
 import "../../app/src/styles/tokens.css";
 import "./theme.css";
 import "./styles.css";
-import { initAsciiScene } from "./ascii-scene.ts";
+import { initAsciiArt } from "./ascii-scene.ts";
 import { initMotion } from "./motion.ts";
 
 // Waits for the font so the glyphs measure and draw as IBM Plex Mono from the first frame.
-function initHeroScene() {
-  const canvas = document.querySelector<HTMLCanvasElement>("[data-hero-ascii]");
-  if (canvas) void document.fonts.ready.then(() => initAsciiScene(canvas));
-}
-
-const THEME_KEY = "purser.theme";
-const NEXT_THEME = { system: "dark", dark: "light", light: "system" } as const;
-type Theme = keyof typeof NEXT_THEME;
-
-function readTheme(): Theme {
-  const set = document.documentElement.dataset.theme;
-  return set === "dark" || set === "light" ? set : "system";
-}
-
-function initTheme() {
-  const button = document.querySelector<HTMLButtonElement>(".theme-toggle");
-  if (!button) return;
-  const show = (theme: Theme) => {
-    button.textContent = `Theme: ${theme}`;
-  };
-  show(readTheme());
-  button.addEventListener("click", () => {
-    const next = NEXT_THEME[readTheme()];
-    if (next === "system") delete document.documentElement.dataset.theme;
-    else document.documentElement.dataset.theme = next;
-    try {
-      if (next === "system") localStorage.removeItem(THEME_KEY);
-      else localStorage.setItem(THEME_KEY, next);
-    } catch {
-      // Private browsing can refuse storage: the choice still applies to this visit.
-    }
-    show(next);
-  });
+function initArt() {
+  void document.fonts.ready.then(() => document.querySelectorAll<HTMLCanvasElement>("[data-ascii-art]").forEach(initAsciiArt));
 }
 
 function initMenu() {
@@ -86,10 +55,9 @@ function initCopy() {
   });
 }
 
-initTheme();
 initMenu();
 initCopy();
-initHeroScene();
+initArt();
 initMotion().catch(() => {
   // A failed animation setup must never hide the page: the headline's guard class comes off here.
   document.documentElement.classList.remove("js-motion");

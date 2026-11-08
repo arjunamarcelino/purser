@@ -2,7 +2,7 @@
 
 import gsap from "gsap";
 import { ScrollTrigger } from "gsap/ScrollTrigger";
-import { RACE_REFUSED, RACE_RESERVED, RACE_SETTLED, capBar, gauge, raceFrame, railFrame, revealFrame, scrambleFrame } from "./ascii.ts";
+import { RACE_REFUSED, RACE_RESERVED, RACE_SETTLED, budgetChart, capBar, dissolveFrame, gauge, raceFrame, railFrame, revealFrame, scrambleFrame } from "./ascii.ts";
 
 gsap.registerPlugin(ScrollTrigger);
 
@@ -128,6 +128,77 @@ function createRail() {
   return draw;
 }
 
+function createChart() {
+  const el = $<HTMLElement>("[data-budget-chart]");
+  if (!el) return () => {};
+  let progress = 1;
+  const draw = (p: number) => {
+    progress = p;
+    el.textContent = budgetChart(p, columnsOf(el));
+  };
+  new ResizeObserver(() => draw(progress)).observe(el);
+  draw(1);
+  return draw;
+}
+
+function createDissolves() {
+  const strips = gsap.utils.toArray<HTMLElement>("[data-dissolve]").map((el) => {
+    let progress = 1;
+    const draw = (p: number) => {
+      progress = p;
+      el.textContent = dissolveFrame(columnsOf(el), 6, p, el.dataset.dissolve === "down");
+    };
+    new ResizeObserver(() => draw(progress)).observe(el);
+    draw(1);
+    return { el, draw };
+  });
+  return strips;
+}
+
+// Page scroll moves the cards, and tabbing to a card's link scrolls the page to bring that card into view.
+function initSaidCards() {
+  const section = $<HTMLElement>(".refuses");
+  const track = $<HTMLElement>("[data-said]");
+  const count = $<HTMLElement>("[data-said-count]");
+  if (!section || !track || !count) return;
+  document.documentElement.classList.add("js-said");
+  count.hidden = false;
+  const cards = gsap.utils.toArray<HTMLElement>("li", track);
+  const distance = () => Math.max(0, track.scrollWidth + parseFloat(getComputedStyle(section).paddingLeft) * 2 - section.clientWidth);
+  const show = (p: number) => {
+    const active = Math.round(p * (cards.length - 1));
+    cards.forEach((card, i) => card.classList.toggle("is-active", i === active));
+    count.textContent = `[ ${active + 1} / ${cards.length} ]`;
+  };
+  show(0);
+  const tween = gsap.to(track, {
+    x: () => -distance(),
+    ease: "none",
+    scrollTrigger: {
+      trigger: section,
+      start: "top top",
+      end: () => `+=${distance()}`,
+      pin: true,
+      scrub: 0.4,
+      anticipatePin: 1,
+      invalidateOnRefresh: true,
+      onUpdate: (self) => show(self.progress),
+    },
+  });
+  const onFocus = (event: FocusEvent) => {
+    const card = (event.target as HTMLElement).closest("li");
+    const trigger = tween.scrollTrigger;
+    if (!card || !trigger) return;
+    window.scrollTo({ top: trigger.start + (cards.indexOf(card) / (cards.length - 1)) * (trigger.end - trigger.start) });
+  };
+  track.addEventListener("focusin", onFocus);
+  return () => {
+    track.removeEventListener("focusin", onFocus);
+    document.documentElement.classList.remove("js-said");
+    count.hidden = true;
+  };
+}
+
 function barFollowsPage(raceDrivesBar: boolean) {
   ScrollTrigger.create({
     trigger: "#race",
@@ -201,6 +272,8 @@ export async function initMotion() {
   const stageEl = $<HTMLElement>("[data-race-stage]");
   const stage = stageEl ? createRaceStage(stageEl) : null;
   const drawRail = createRail();
+  const drawChart = createChart();
+  const dissolves = createDissolves();
 
   naiveBar(120);
   setBar(0, 0);
@@ -219,12 +292,24 @@ export async function initMotion() {
         initNaiveCount();
         ScrollTrigger.create({ trigger: ".how-grid", start: "top 70%", end: "bottom 70%", onUpdate: (self) => drawRail(self.progress) });
         drawRail(0);
+        ScrollTrigger.create({ trigger: "[data-budget-chart]", start: "top 85%", end: "top 35%", onUpdate: (self) => drawChart(self.progress) });
+        drawChart(0);
+        for (const { el, draw } of dissolves) {
+          ScrollTrigger.create({ trigger: el, start: "top bottom", end: "top 45%", onUpdate: (self) => draw(self.progress) });
+          draw(0);
+        }
       } else {
         naiveBar(120);
         drawRail(1);
+        drawChart(1);
+        for (const { draw } of dissolves) draw(1);
       }
       barFollowsPage(pinnable);
       if (stage) cleanups.push(pinnable ? pinnedRace(stage) : freeRace(stage, motion && !reduce));
+      if (motion) cleanups.push(initSaidCards());
+      // Triggers were created out of page order, and each pin moves everything below it.
+      ScrollTrigger.sort();
+      ScrollTrigger.refresh();
       return () => cleanups.forEach((cleanup) => cleanup?.());
     },
   );

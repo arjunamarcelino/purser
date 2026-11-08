@@ -1,8 +1,8 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
-import { RACE_REFUSED, RACE_RESERVED, RACE_SETTLED, capBar, gauge, raceFrame, railFrame, revealFrame, scrambleFrame } from "../src/ascii.ts";
-import { cellLuminance, charFor } from "../src/ascii-scene.ts";
+import { RACE_REFUSED, RACE_RESERVED, RACE_SETTLED, budgetChart, capBar, dissolveFrame, gauge, raceFrame, railFrame, revealFrame, scrambleFrame } from "../src/ascii.ts";
+import { artNames, cellLuminance, charFor } from "../src/ascii-scene.ts";
 
 const root = resolve(import.meta.dirname, "..");
 const read = (path: string) => readFileSync(resolve(root, path), "utf8");
@@ -83,6 +83,68 @@ describe("hero", () => {
   });
 });
 
+describe("layout", () => {
+  it("alternates black and white bands down the page", () => {
+    const bands = [...html.matchAll(/<section id="([a-z]+)" class="[^"]*band-(dark|light)/g)].map((m) => m[2]);
+    expect(bands).toHaveLength(9);
+    bands.forEach((band, i) => expect(band).toBe(i % 2 === 0 ? "dark" : "light"));
+  });
+
+  it("has no invented people or quotes", () => {
+    expect(prose).not.toMatch(/testimonial|investor|CEO|CTO|"[^"]{20,}"/i);
+  });
+
+  it("moves the refusal cards with page scroll, with no manual scroll area", () => {
+    const said = css.slice(css.indexOf(".said {"), css.indexOf(".js-said .refuses"));
+    expect(said).not.toMatch(/overflow-x|scroll-snap/);
+    expect(html).not.toMatch(/class="said"[^>]*tabindex/);
+    expect(read("src/motion.ts")).toMatch(/initSaidCards/);
+  });
+
+  it("stops flexible canvases from growing their own tile", () => {
+    expect(css).toMatch(/\.art-tall \{[^}]*contain: size/);
+    expect(css).toMatch(/\.art \{[^}]*height: 12rem/);
+  });
+
+  it("points every piece of art at a drawing that exists", () => {
+    for (const [, name] of html.matchAll(/data-ascii-art="([a-z]+)"/g)) expect(artNames()).toContain(name);
+  });
+});
+
+describe("palette", () => {
+  const theme = read("src/theme.css");
+  const tokens = (selector: string) => {
+    const start = theme.indexOf(selector);
+    const body = theme.slice(theme.indexOf("{", start) + 1, theme.indexOf("}", start));
+    return Object.fromEntries([...body.matchAll(/--([a-z0-9-]+):\s*(#[0-9a-f]{6})/gi)].map((m) => [m[1]!, m[2]!]));
+  };
+  const channels = (hex: string) => [1, 3, 5].map((i) => Number.parseInt(hex.slice(i, i + 2), 16));
+  const luminance = (rgb: number[]) => {
+    const [r, g, b] = rgb.map((v) => (v / 255 <= 0.03928 ? v / 255 / 12.92 : ((v / 255 + 0.055) / 1.055) ** 2.4));
+    return 0.2126 * r! + 0.7152 * g! + 0.0722 * b!;
+  };
+  const ratio = (a: number[], b: number[]) => {
+    const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x);
+    return (hi! + 0.05) / (lo! + 0.05);
+  };
+
+  it.each([".band-dark", ".band-light"])("%s: all text passes AA on every surface", (band) => {
+    const t = tokens(band);
+    for (const fg of [t.text!, t["text-dim"]!, t.link!, t.ok!, t.warn!, t.alarm!]) for (const bg of [t.bg!, t.surface!]) expect(ratio(channels(fg), channels(bg)), `${band} ${fg} on ${bg}`).toBeGreaterThanOrEqual(4.5);
+  });
+
+  it("keeps the glass bar legible over a white band", () => {
+    const t = tokens(".band-dark");
+    const bar = [0, 1, 2].map(() => 255 * 0.08);
+    for (const fg of [t.text!, t["text-dim"]!, t.ok!]) expect(ratio(channels(fg), bar), fg).toBeGreaterThanOrEqual(4.5);
+  });
+
+  it("keeps hero text legible over the field's densest cells", () => {
+    const scrimOverWhite = [255, 255, 255].map((v) => v * 0.28);
+    for (const fg of ["#ffffff", tokens(".band-dark")["text-dim"]!]) expect(ratio(channels(fg), scrimOverWhite), fg).toBeGreaterThanOrEqual(4.5);
+  });
+});
+
 describe("ascii scene", () => {
   it("orders the ramp from empty to dense", () => {
     expect(charFor(0)).toBe(" ");
@@ -143,6 +205,27 @@ describe("ascii frames", () => {
     expect(bar.indexOf("|")).toBeGreaterThan(0);
     expect(bar.slice(bar.indexOf("|") + 1, bar.indexOf("]"))).toMatch(/^#+$/);
     expect(bar).toMatch(/120\/100$/);
+  });
+
+  it("charts the run's real balances in order", () => {
+    const chart = budgetChart(1, 50);
+    for (const label of ["START", "SCOUT", "FORGE", "RACE"]) expect(chart).toContain(label);
+    const positions = ["100", "70", "40", "10"].map((n, i) => (i === 0 ? chart.indexOf("100", 6) : chart.indexOf(n)));
+    expect(positions.every((v) => v >= 0)).toBe(true);
+    expect(budgetChart(0, 50)).not.toMatch(/SCOUT|#/);
+  });
+
+  it("fits the chart to its width", () => {
+    for (const cols of [36, 60, 90]) for (const line of budgetChart(1, cols).split("\n")) expect(line.length).toBeLessThanOrEqual(cols + 1);
+  });
+
+  it("thins a dissolve away from its dense edge", () => {
+    const ink = (s: string) => s.replace(/\s/g, "").length;
+    const rows = dissolveFrame(200, 6, 1, true).split("\n");
+    expect(ink(rows[0]!)).toBeGreaterThan(ink(rows[5]!));
+    const up = dissolveFrame(200, 6, 1, false).split("\n");
+    expect(ink(up[5]!)).toBeGreaterThan(ink(up[0]!));
+    expect(ink(dissolveFrame(200, 6, 0, true))).toBe(0);
   });
 
   it("draws gauges and rails to size", () => {

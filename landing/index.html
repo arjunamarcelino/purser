@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="dark">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
@@ -7,11 +7,7 @@
     <meta name="description" content="A spending limit AI agents can't talk their way around. One budget, many agents, enforced by a NEAR contract." />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <script>
-      // Runs before first paint so the theme never flashes and the headline waits for its reveal.
-      try {
-        const saved = localStorage.getItem("purser.theme");
-        if (saved === "dark" || saved === "light") document.documentElement.dataset.theme = saved;
-      } catch {}
+      // Runs before first paint so the headline can wait for its reveal.
       if (matchMedia("(prefers-reduced-motion: no-preference)").matches) {
         document.documentElement.classList.add("js-motion");
         setTimeout(() => document.documentElement.classList.remove("js-motion"), 3000);
@@ -22,7 +18,7 @@
   <body>
     <a class="skip" href="#main">Skip to the content</a>
 
-    <header class="site-head">
+    <header class="site-head band-dark">
       <a class="brand" href="#top" aria-label="Purser, back to top"><span class="wordmark">PURSER</span></a>
       <button class="menu-toggle btn" type="button" aria-expanded="false" aria-controls="site-nav">Menu</button>
       <nav id="site-nav" class="site-nav" aria-label="Page sections">
@@ -30,16 +26,16 @@
         <a href="#race">The race</a>
         <a href="#how">How it works</a>
         <a href="#near">Why NEAR</a>
+        <a href="#refuses">Refusals</a>
         <a href="#evidence">Evidence</a>
         <a href="#limits">Limits</a>
         <a href="#try">Run it</a>
       </nav>
-      <button class="theme-toggle btn" type="button">Theme: system</button>
     </header>
 
     <main id="main">
-      <section id="top" class="hero">
-        <div class="hero-scene" aria-hidden="true"><canvas data-hero-ascii></canvas></div>
+      <section id="top" class="hero band-dark">
+        <div class="hero-scene" aria-hidden="true"><canvas data-ascii-art="anchor"></canvas></div>
         <span class="hero-corner corner-tl" aria-hidden="true">+</span>
         <span class="hero-corner corner-tr" aria-hidden="true">+</span>
         <span class="hero-corner corner-bl" aria-hidden="true">+</span>
@@ -63,39 +59,49 @@
         </div>
       </section>
 
-      <section id="problem" class="problem" aria-labelledby="problem-h">
+      <pre class="dissolve band-light" data-dissolve="down" aria-hidden="true"></pre>
+
+      <section id="problem" class="problem band band-light" aria-labelledby="problem-h">
         <div class="problem-head">
           <div class="rule-mark" aria-hidden="true"><i></i><span>&lt;=</span><i></i></div>
           <h2 id="problem-h">A spending limit inside the agent is only a suggestion.</h2>
           <p class="section-sub">Agents are starting to buy data, compute and API access. Today's controls break in three places.</p>
         </div>
-        <ol class="gaps">
-          <li class="gap">
+        <ol class="cards">
+          <li class="card card-dark band-dark">
+            <p class="card-tag">The limit</p>
+            <canvas class="art" data-ascii-art="config" aria-hidden="true"></canvas>
             <h3>The limit lives with the spender.</h3>
             <p>A bug, a jailbreak or a bad tool walks straight past a cap in a config file.</p>
           </li>
-          <li class="gap gap-lead">
+          <li class="card card-lead ascii-box">
+            <p class="card-tag">The balance</p>
+            <canvas class="art" data-ascii-art="balance" aria-hidden="true"></canvas>
             <h3>Two agents read the same balance.</h3>
-            <p>Both see enough, so both spend.</p>
-            <figure class="naive ascii-box">
-              <figcaption class="label">A deliberately naive baseline, on NEAR testnet</figcaption>
+            <p>Both see enough, so both spend. A deliberately naive baseline, on NEAR testnet:</p>
+            <figure class="naive">
               <p class="numeral numeral-over"><span data-naive-spent>120</span><span class="of"> / cap 100</span></p>
               <pre class="ascii-bar" data-naive-bar aria-hidden="true">[####################|###] 120/100</pre>
-              <p class="naive-note">Each agent saw 100 left and spent 60. Real transfers, from a throwaway account built to fail: <a class="tx" href="https://testnet.nearblocks.io/txns/FR2SJmBgLcEgSsZZrXME4wssaH6sCT46meAXyQtfeXPy" rel="noopener noreferrer" target="_blank">tx FR2SJm -&gt;</a> and <a class="tx" href="https://testnet.nearblocks.io/txns/4r9umk2cFiJNUCheXNBjwNVW5yyMDDJWT3nFvfLNJowM" rel="noopener noreferrer" target="_blank">tx 4r9umk -&gt;</a>.</p>
+              <figcaption class="naive-note">Each agent saw 100 left and spent 60. Real transfers, from a throwaway account built to fail: <a class="tx" href="https://testnet.nearblocks.io/txns/FR2SJmBgLcEgSsZZrXME4wssaH6sCT46meAXyQtfeXPy" rel="noopener noreferrer" target="_blank">tx FR2SJm -&gt;</a> <a class="tx" href="https://testnet.nearblocks.io/txns/4r9umk2cFiJNUCheXNBjwNVW5yyMDDJWT3nFvfLNJowM" rel="noopener noreferrer" target="_blank">tx 4r9umk -&gt;</a></figcaption>
             </figure>
           </li>
-          <li class="gap">
+          <li class="card card-dark band-dark">
+            <p class="card-tag">The timeout</p>
+            <canvas class="art" data-ascii-art="hourglass" aria-hidden="true"></canvas>
             <h3>A timeout gets mistaken for a failure.</h3>
             <p>A timed-out payment can still land. Release the hold, and you've overspent without knowing it.</p>
           </li>
         </ol>
       </section>
 
-      <section id="race" class="race" aria-labelledby="race-h">
+      <pre class="dissolve band-light" data-dissolve="up" aria-hidden="true"></pre>
+      <div class="notch band-light" aria-hidden="true"></div>
+
+      <section id="race" class="race band band-dark" aria-labelledby="race-h">
         <div class="race-pin">
           <div class="race-text">
             <div class="rule-mark" aria-hidden="true"><i></i><span>&lt;=</span><i></i></div>
-            <h2 id="race-h">Three agents ask for 30. There is 40 left.</h2>
+            <h2 id="race-h" class="bracket">Three agents ask for 30. There is 40 left.</h2>
             <ol class="race-steps">
               <li class="race-step">All three hit the contract in the same block.</li>
               <li class="race-step">The first reserves 30 before any money moves. Now there's 10 left.</li>
@@ -116,103 +122,135 @@
             </div>
           </div>
         </div>
+
+        <div class="budget">
+          <div class="budget-head">
+            <h3>One budget, one real run</h3>
+            <p class="section-sub">Every drop is a payment the contract admitted. Nothing went below 10.</p>
+          </div>
+          <pre class="ascii-chart" data-budget-chart role="img" aria-label="Remaining budget across the run: 100 at the start, 70 after Scout, 40 after Forge, 10 after the race."></pre>
+          <ul class="payments">
+            <li><span>Scout paid 30</span><span class="payments-left">70 left</span><a class="tx" href="https://testnet.nearblocks.io/txns/HcCdWDNNP6uCzrBEnj6tgc5nYbY4YMSgDvDZpfXKXoHv" rel="noopener noreferrer" target="_blank">tx HcCdWD -&gt;</a></li>
+            <li><span>Forge paid 30</span><span class="payments-left">40 left</span><a class="tx" href="https://testnet.nearblocks.io/txns/DnfbNmrKgmffUvqDjFmbD6P1XuGAYDxBAJiupQp9W8ga" rel="noopener noreferrer" target="_blank">tx DnfbNm -&gt;</a></li>
+            <li><span>One of three admitted</span><span class="payments-left">10 left</span><a class="tx" href="https://testnet.nearblocks.io/txns/AwrG7nA9um6528bn4pkuRwEcAfdNeTTeJHkJ57AMAckp" rel="noopener noreferrer" target="_blank">tx AwrG7n -&gt;</a></li>
+          </ul>
+        </div>
       </section>
 
-      <section id="how" class="how" aria-labelledby="how-h">
+      <pre class="dissolve band-light" data-dissolve="down" aria-hidden="true"></pre>
+
+      <section id="how" class="how band band-light" aria-labelledby="how-h">
         <div class="rule-mark" aria-hidden="true"><i></i><span>&lt;=</span><i></i></div>
         <h2 id="how-h">Every payment takes the same path.</h2>
         <p class="section-sub">The AI proposes. The contract does the rest.</p>
-        <div class="how-grid">
-          <pre class="how-rail" data-how-rail aria-hidden="true"></pre>
-          <ol class="how-steps">
-            <li><h3>Open a task</h3><p>One shared budget with a hard cap, set by <code>create_task</code>.</p></li>
-            <li><h3>Name the crew</h3><p>Register each agent. On the NEAR path, list who can get paid.</p></li>
-            <li><h3>An agent proposes</h3><p>A recipient, an amount and a <code>request_id</code>. The contract builds the rest.</p></li>
-            <li><h3>The contract checks</h3><p>Active agent? New request? Allowed recipient? Room under the cap?</p></li>
-            <li class="how-key"><h3>The budget is reserved first</h3><p>Check and reservation run as one step, before any promise exists. That's why a race can't overspend.</p></li>
-            <li><h3>The contract pays</h3><p>It builds the transfer from the fields it validated. On the EVM path, the MPC signer signs what the contract built.</p></li>
-            <li><h3>Only proof closes it</h3><p>The settlement callback confirms the payment. Silence keeps the hold.</p></li>
-          </ol>
-        </div>
+        <div class="how-layout">
+          <div class="how-grid">
+            <pre class="how-rail" data-how-rail aria-hidden="true"></pre>
+            <ol class="how-steps">
+              <li><h3>Open a task</h3><p>One shared budget with a hard cap, set by <code>create_task</code>.</p></li>
+              <li><h3>Name the crew</h3><p>Register each agent. On the NEAR path, list who can get paid.</p></li>
+              <li><h3>An agent proposes</h3><p>A recipient, an amount and a <code>request_id</code>. The contract builds the rest.</p></li>
+              <li><h3>The contract checks</h3><p>Active agent? New request? Allowed recipient? Room under the cap?</p></li>
+              <li class="how-key"><h3>The budget is reserved first</h3><p>Check and reservation run as one step, before any promise exists. That's why a race can't overspend.</p></li>
+              <li><h3>The contract pays</h3><p>It builds the transfer from the fields it validated. On the EVM path, the MPC signer signs what the contract built.</p></li>
+              <li><h3>Only proof closes it</h3><p>The settlement callback confirms the payment. Silence keeps the hold.</p></li>
+            </ol>
+          </div>
 
-        <div class="states">
-          <h3 id="states-h">Where the money sits</h3>
-          <pre class="ascii-diagram ascii-box" data-ascii-reveal aria-hidden="true">[RESERVED] ---- signature / settled ---> [SIGNED] -- proof --> [CONFIRMED]
-    |                                      |                       ^
-    | proven failure                       | timeout               |
-    v                                      v                       |
- [FAILED]                              [UNKNOWN] --- later proof --+
-                                           |
-                                           | nonce-burn + owner release (EVM)
-                                           v
-                                      [CANCELLED]</pre>
-          <div class="table-wrap" tabindex="0" role="region" aria-labelledby="states-h">
-            <table>
-              <thead><tr><th scope="col">State</th><th scope="col">Budget</th><th scope="col">What moves it on</th></tr></thead>
-              <tbody>
-                <tr><th scope="row">Reserved</th><td>Held</td><td>A signature, a settled transfer or a proven failure</td></tr>
-                <tr><th scope="row">Signed</th><td>Held</td><td>Proof of the outcome, or a timeout</td></tr>
-                <tr><th scope="row">Unknown</th><td>Held</td><td>Later proof, or the owner reconciling the observed outcome</td></tr>
-                <tr><th scope="row">Confirmed</th><td>Spent</td><td>Final</td></tr>
-                <tr><th scope="row">Failed</th><td>Released</td><td>Set only on a proven failure</td></tr>
-                <tr><th scope="row">Cancelled</th><td>Released</td><td>EVM only: a confirmed nonce-burn and the owner's release</td></tr>
-              </tbody>
-            </table>
+          <div class="states">
+            <h3 id="states-h">Where the money sits</h3>
+            <pre class="ascii-diagram ascii-box" data-ascii-reveal aria-hidden="true">[RESERVED] -- signed / settled --> [SIGNED] -- proof --> [CONFIRMED]
+    |                                 |                       ^
+    | proven failure                  | timeout               |
+    v                                 v                       |
+ [FAILED]                         [UNKNOWN] -- later proof ---+
+                                      |
+                                      | nonce-burn + owner release (EVM)
+                                      v
+                                 [CANCELLED]</pre>
+            <div class="table-wrap" tabindex="0" role="region" aria-labelledby="states-h">
+              <table>
+                <thead><tr><th scope="col">State</th><th scope="col">Budget</th><th scope="col">What moves it on</th></tr></thead>
+                <tbody>
+                  <tr><th scope="row">Reserved</th><td>Held</td><td>A signature, a settled transfer or a proven failure</td></tr>
+                  <tr><th scope="row">Signed</th><td>Held</td><td>Proof of the outcome, or a timeout</td></tr>
+                  <tr><th scope="row">Unknown</th><td>Held</td><td>Later proof, or the owner reconciling the observed outcome</td></tr>
+                  <tr><th scope="row">Confirmed</th><td>Spent</td><td>Final</td></tr>
+                  <tr><th scope="row">Failed</th><td>Released</td><td>Set only on a proven failure</td></tr>
+                  <tr><th scope="row">Cancelled</th><td>Released</td><td>EVM only: a confirmed nonce-burn and the owner's release</td></tr>
+                </tbody>
+              </table>
+            </div>
           </div>
         </div>
       </section>
 
-      <section id="refuses" class="refuses" aria-labelledby="refuses-h">
-        <div class="rule-mark" aria-hidden="true"><i></i><span>&lt;=</span><i></i></div>
-        <h2 id="refuses-h">What an agent can't get away with.</h2>
-        <ul class="log">
-          <li><p class="log-ask">Spend past the cap</p><p class="log-answer"><span class="state state-warn">REFUSED: exceeds task budget</span></p><a class="tx" href="https://testnet.nearblocks.io/txns/BHc6avPjFeD1Te6rMTt6sPRwXbNFR8KR8APn5JZ4UH2U" rel="noopener noreferrer" target="_blank">tx BHc6av -&gt;</a></li>
-          <li><p class="log-ask">Pay twice with a retry</p><p class="log-answer">Same commitment, no new spend</p><a class="tx" href="https://testnet.nearblocks.io/txns/2oeEZ1WGhF9oURX8a7i9MZN782AdKkHdW5Guo6mK6x5y" rel="noopener noreferrer" target="_blank">tx 2oeEZ1 -&gt;</a></li>
-          <li><p class="log-ask">Pay someone off the allowlist</p><p class="log-answer"><span class="state state-warn">REJECTED: recipient not allowlisted</span></p><a class="tx" href="https://testnet.nearblocks.io/txns/4PNRgPyCCyfEspbmkWo63Rp8MPgBjduNYQhNxVy2pVeG" rel="noopener noreferrer" target="_blank">tx 4PNRgP -&gt;</a></li>
-          <li><p class="log-ask">Reuse a <code>request_id</code> for something else</p><p class="log-answer"><span class="state state-warn">REJECTED: request_id reused with a different request</span></p><a class="tx" href="https://testnet.nearblocks.io/txns/13dNBMcJh8JFNtTxQXKZWvtF6yxz41Jo8mFVe2HtF2zS" rel="noopener noreferrer" target="_blank">tx 13dNBM -&gt;</a></li>
-          <li><p class="log-ask">Keep spending after a revoke</p><p class="log-answer"><span class="state state-warn">BLOCKED: delegate revoked</span></p><a class="tx" href="https://testnet.nearblocks.io/txns/EMSwHfRxXh3BNuUcCNm8p1LMGaMConjGQZgyX6Qgrqwk" rel="noopener noreferrer" target="_blank">tx EMSwHf -&gt;</a></li>
-          <li><p class="log-ask">Free a hold by timing out</p><p class="log-answer">The hold stays through silence, retry and revoke</p><span class="fine">Sandbox replay: the shipped contract can't lose a callback</span></li>
+      <pre class="dissolve band-light" data-dissolve="up" aria-hidden="true"></pre>
+
+      <section id="near" class="near band band-dark" aria-labelledby="near-h">
+        <div class="near-head">
+          <div>
+            <div class="rule-mark" aria-hidden="true"><i></i><span>&lt;=</span><i></i></div>
+            <h2 id="near-h">Why NEAR</h2>
+            <p class="section-sub">Purser builds on what the protocol already enforces.</p>
+          </div>
+          <article class="near-lead">
+            <h3>Check and reserve land in one atomic step</h3>
+            <p>NEAR runs a call as one step until its first promise. Purser checks the budget and reserves inside that step, so two requests can't both pass.</p>
+            <pre class="ascii-diagram" data-ascii-reveal aria-hidden="true">A --[ check 30 &lt;= 40 | reserve 30 ]--> 10 left
+B ---------------[ check 30 &lt;= 10 | refused ]
+C ---------------[ check 30 &lt;= 10 | refused ]</pre>
+          </article>
+        </div>
+        <ul class="mosaic">
+          <li class="tile tile-key">
+            <h3>Function-call access keys</h3>
+            <p>An agent's key can call one method on one contract: <code>propose_payment</code>. It can't move the account's funds.</p>
+            <canvas class="art" data-ascii-art="key" aria-hidden="true"></canvas>
+          </li>
+          <li class="tile tile-chain band-light">
+            <h3>Chain Signatures</h3>
+            <p>One contract can govern spending on another chain. Run live on Sepolia: <a class="tx" href="https://testnet.nearblocks.io/txns/523rR74zoyjFDKCKeeWNXUPTvKKmw8SBbunVoPuCj915" rel="noopener noreferrer" target="_blank">NEAR tx 523rR7 -&gt;</a> <a class="tx" href="https://sepolia.etherscan.io/tx/0xbf264ff1f43e37336d09f92304785047f67af9f9bedefc32e5ed93e9b818eb12" rel="noopener noreferrer" target="_blank">Sepolia tx 0xbf264f -&gt;</a></p>
+            <canvas class="art art-tall" data-ascii-art="chain" aria-hidden="true"></canvas>
+          </li>
+          <li class="tile tile-vault">
+            <h3>Contract custody</h3>
+            <p>Budget and policy live in the contract, out of reach of a compromised tool.</p>
+            <canvas class="art" data-ascii-art="vault" aria-hidden="true"></canvas>
+          </li>
+          <li class="tile tile-callback">
+            <h3>Receipts and callbacks</h3>
+            <p>NEAR payments report their own outcome back to the contract, with no relayer in the path.</p>
+            <canvas class="art" data-ascii-art="callback" aria-hidden="true"></canvas>
+          </li>
+          <li class="tile tile-attest">
+            <h3>NEAR AI Cloud</h3>
+            <p>Attestation shows where the agents' model ran, with Intel TDX and NVIDIA GPU evidence. The contract never reads it.</p>
+            <canvas class="art" data-ascii-art="fingerprint" aria-hidden="true"></canvas>
+          </li>
         </ul>
       </section>
 
-      <section id="near" class="near" aria-labelledby="near-h">
-        <div class="near-head">
-          <div class="rule-mark" aria-hidden="true"><i></i><span>&lt;=</span><i></i></div>
-          <h2 id="near-h">Why NEAR</h2>
-          <p class="section-sub">Purser builds on what the protocol already enforces.</p>
-        </div>
-        <article class="near-lead">
-          <h3>Check and reserve land in one atomic step</h3>
-          <p>NEAR runs a call as one step until its first promise. Purser checks the budget and reserves inside that step, so two requests can't both pass.</p>
-          <pre class="ascii-diagram" data-ascii-reveal aria-hidden="true">A --[ check 30 &lt;= 40 | reserve 30 ]--> 10 left
-B ---------------[ check 30 &lt;= 10 | refused ]
-C ---------------[ check 30 &lt;= 10 | refused ]</pre>
-        </article>
-        <dl class="near-list">
-          <div>
-            <dt>Function-call access keys</dt>
-            <dd>An agent's key can call one method on one contract: <code>propose_payment</code>. It can't move the account's funds.</dd>
-          </div>
-          <div>
-            <dt>Contract custody</dt>
-            <dd>Budget and policy live in the contract, out of reach of a compromised tool.</dd>
-          </div>
-          <div>
-            <dt>Receipts and callbacks</dt>
-            <dd>NEAR payments report their own outcome back to the contract, with no relayer in the path.</dd>
-          </div>
-          <div>
-            <dt>Chain Signatures</dt>
-            <dd>One contract can govern spending on another chain. Run live on Sepolia: <a class="tx" href="https://testnet.nearblocks.io/txns/523rR74zoyjFDKCKeeWNXUPTvKKmw8SBbunVoPuCj915" rel="noopener noreferrer" target="_blank">NEAR tx 523rR7 -&gt;</a>, <a class="tx" href="https://sepolia.etherscan.io/tx/0xbf264ff1f43e37336d09f92304785047f67af9f9bedefc32e5ed93e9b818eb12" rel="noopener noreferrer" target="_blank">Sepolia tx 0xbf264f -&gt;</a>.</dd>
-          </div>
-          <div>
-            <dt>NEAR AI Cloud</dt>
-            <dd>Attestation shows where the agents' model ran, with Intel TDX and NVIDIA GPU evidence. The contract never reads it.</dd>
-          </div>
-        </dl>
+      <pre class="dissolve band-light" data-dissolve="down" aria-hidden="true"></pre>
+
+      <section id="refuses" class="refuses band band-light" aria-labelledby="refuses-h">
+        <div class="rule-mark" aria-hidden="true"><i></i><span>&lt;=</span><i></i></div>
+        <h2 id="refuses-h">What an agent can't get away with.</h2>
+        <p class="section-sub">Every answer below came from the contract.</p>
+        <p class="said-count" data-said-count aria-hidden="true" hidden></p>
+        <ul class="said" data-said>
+          <li><p class="said-ask">Spend past the cap</p><p class="said-answer state-warn">REFUSED: exceeds task budget</p><a class="tx" href="https://testnet.nearblocks.io/txns/BHc6avPjFeD1Te6rMTt6sPRwXbNFR8KR8APn5JZ4UH2U" rel="noopener noreferrer" target="_blank">tx BHc6av -&gt;</a></li>
+          <li><p class="said-ask">Pay twice with a retry</p><p class="said-answer">Same commitment, no new spend</p><a class="tx" href="https://testnet.nearblocks.io/txns/2oeEZ1WGhF9oURX8a7i9MZN782AdKkHdW5Guo6mK6x5y" rel="noopener noreferrer" target="_blank">tx 2oeEZ1 -&gt;</a></li>
+          <li><p class="said-ask">Pay someone off the allowlist</p><p class="said-answer state-warn">REJECTED: recipient not allowlisted</p><a class="tx" href="https://testnet.nearblocks.io/txns/4PNRgPyCCyfEspbmkWo63Rp8MPgBjduNYQhNxVy2pVeG" rel="noopener noreferrer" target="_blank">tx 4PNRgP -&gt;</a></li>
+          <li><p class="said-ask">Reuse a <code>request_id</code> for something else</p><p class="said-answer state-warn">REJECTED: request_id reused with a different request</p><a class="tx" href="https://testnet.nearblocks.io/txns/13dNBMcJh8JFNtTxQXKZWvtF6yxz41Jo8mFVe2HtF2zS" rel="noopener noreferrer" target="_blank">tx 13dNBM -&gt;</a></li>
+          <li><p class="said-ask">Keep spending after a revoke</p><p class="said-answer state-warn">BLOCKED: delegate revoked</p><a class="tx" href="https://testnet.nearblocks.io/txns/EMSwHfRxXh3BNuUcCNm8p1LMGaMConjGQZgyX6Qgrqwk" rel="noopener noreferrer" target="_blank">tx EMSwHf -&gt;</a></li>
+          <li><p class="said-ask">Free a hold by timing out</p><p class="said-answer">The hold stays through silence, retry and revoke</p><span class="fine">Sandbox replay: the shipped contract can't lose a callback</span></li>
+        </ul>
       </section>
 
-      <section id="evidence" class="evidence" aria-labelledby="evidence-h">
+      <pre class="dissolve band-light" data-dissolve="up" aria-hidden="true"></pre>
+
+      <section id="evidence" class="evidence band band-dark" aria-labelledby="evidence-h">
         <div class="rule-mark" aria-hidden="true"><i></i><span>&lt;=</span><i></i></div>
         <h2 id="evidence-h">The numbers come with receipts.</h2>
         <div class="evidence-grid">
@@ -240,9 +278,14 @@ C ---------------[ check 30 &lt;= 10 | refused ]</pre>
         <p class="fine evidence-source">Measured on a local nearcore sandbox with the production wasm, 10 repeats. These are not testnet or mainnet figures, and this is not an audit. Regenerate with <code>make metrics</code> or read the <a class="text-link" href="https://github.com/arjunamarcelino/purser/blob/main/docs/METRICS.md" rel="noopener noreferrer" target="_blank">full report -&gt;</a>.</p>
       </section>
 
-      <section id="limits" class="limits" aria-labelledby="limits-h">
-        <div class="rule-mark" aria-hidden="true"><i></i><span>&lt;=</span><i></i></div>
-        <h2 id="limits-h">What Purser won't do</h2>
+      <pre class="dissolve band-light" data-dissolve="down" aria-hidden="true"></pre>
+
+      <section id="limits" class="limits band band-light" aria-labelledby="limits-h">
+        <div>
+          <div class="rule-mark" aria-hidden="true"><i></i><span>&lt;=</span><i></i></div>
+          <h2 id="limits-h">What Purser won't do</h2>
+          <p class="limits-more">The full list is in the <a class="text-link" href="https://github.com/arjunamarcelino/purser#honest-limits" rel="noopener noreferrer" target="_blank">README -&gt;</a>.</p>
+        </div>
         <ul class="limit-list">
           <li><strong>It can't recall a payment.</strong> Revoking stops new proposals. Anything already issued stands.</li>
           <li><strong>It can't fix bad judgment.</strong> A prompt-injected agent can still waste budget on an allowed merchant.</li>
@@ -250,13 +293,15 @@ C ---------------[ check 30 &lt;= 10 | refused ]</pre>
           <li><strong>It relies on a relayer for other chains.</strong> The relayer reports what happened on Sepolia. Only the owner can release budget.</li>
           <li><strong>It's early.</strong> One token per task, testnet and Sepolia only, and no audit.</li>
         </ul>
-        <p class="limits-more">The full list is in the <a class="text-link" href="https://github.com/arjunamarcelino/purser#honest-limits" rel="noopener noreferrer" target="_blank">README -&gt;</a>.</p>
       </section>
 
-      <section id="try" class="try" aria-labelledby="try-h">
+      <pre class="dissolve band-light" data-dissolve="up" aria-hidden="true"></pre>
+      <div class="notch band-light" aria-hidden="true"></div>
+
+      <section id="try" class="try band band-dark" aria-labelledby="try-h">
         <div class="try-head">
           <div class="rule-mark" aria-hidden="true"><i></i><span>&lt;=</span><i></i></div>
-          <h2 id="try-h">Check our work.</h2>
+          <h2 id="try-h" class="bracket">Check our work.</h2>
           <p class="section-sub">You need Rust 1.95, <code>cargo-near</code>, Node 26 and pnpm 10. The first two commands cost nothing. Testnet steps also need near-cli-rs 0.30.1.</p>
           <a class="btn" href="https://github.com/arjunamarcelino/purser" rel="noopener noreferrer" target="_blank">Read the source -&gt;</a>
         </div>
@@ -271,10 +316,18 @@ C ---------------[ check 30 &lt;= 10 | refused ]</pre>
       </section>
     </main>
 
-    <footer class="site-foot">
-      <p class="foot-tag">One budget. Many agents. Nothing overspent.</p>
-      <p>Built at NEAR HACKATHON. Tracks: security, swarms, agents. MIT licensed.</p>
-      <p><a class="text-link" href="https://github.com/arjunamarcelino/purser" rel="noopener noreferrer" target="_blank">GitHub -&gt;</a> <a class="text-link" href="https://testnet.nearblocks.io/address/purser.demo.arjuna-purser.testnet" rel="noopener noreferrer" target="_blank">Demo contract on testnet -&gt;</a></p>
+    <footer class="site-foot band band-dark">
+      <div class="foot-row">
+        <p class="foot-tag">One budget. Many agents. Nothing overspent.</p>
+        <p>Built at NEAR HACKATHON. Tracks: security, swarms, agents. MIT licensed.</p>
+        <p><a class="text-link" href="https://github.com/arjunamarcelino/purser" rel="noopener noreferrer" target="_blank">GitHub -&gt;</a> <a class="text-link" href="https://testnet.nearblocks.io/address/purser.demo.arjuna-purser.testnet" rel="noopener noreferrer" target="_blank">Demo contract on testnet -&gt;</a></p>
+      </div>
+      <pre class="wordmark-giant" aria-hidden="true">#####  #    # #####   ####  ###### #####
+#    # #    # #    # #      #      #    #
+#    # #    # #    #  ####  #####  #    #
+#####  #    # #####       # #      #####
+#      #    # #   #  #    # #      #   #
+#       ####  #    #  ####  ###### #    #</pre>
     </footer>
 
     <div class="invariant-bar" aria-hidden="true">

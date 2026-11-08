@@ -34,6 +34,56 @@ export function railFrame(p: number, lines: number): string {
   return Array.from({ length: lines }, (_, i) => (i < done ? "#" : ":")).join("\n");
 }
 
+// The demo run's real balances, from the cap down to where the race left it.
+const BUDGET_STEPS = [
+  { name: "START", left: 100 },
+  { name: "SCOUT", left: 70 },
+  { name: "FORGE", left: 40 },
+  { name: "RACE", left: 10 },
+];
+
+export function budgetChart(p: number, cols: number, rows = 10): string {
+  const axis = 5;
+  const width = Math.max(32, cols) - axis;
+  const segment = Math.floor(width / BUDGET_STEPS.length);
+  const revealed = clamp(p) * width;
+  const grid = Array.from({ length: rows }, (_, r) => {
+    const level = ((rows - 1 - r) / (rows - 1)) * 100;
+    const edge = 100 / (rows - 1);
+    const line: string[] = Array.from({ length: width }, (_, x) => {
+      if (x >= revealed) return " ";
+      const value = BUDGET_STEPS[Math.min(BUDGET_STEPS.length - 1, Math.floor(x / segment))]!.left;
+      return level > value ? " " : value - level < edge ? "#" : ":";
+    });
+    return line;
+  });
+  BUDGET_STEPS.forEach(({ left }, i) => {
+    const start = i * segment + 1;
+    if (start >= revealed) return;
+    const row = Math.max(0, rows - 2 - Math.floor((left / 100) * (rows - 1)));
+    [...` ${left} `].forEach((ch, n) => {
+      grid[row]![start + n] = ch;
+    });
+  });
+  const labelled = grid.map((line, r) => `${r === 0 ? "100" : r === rows - 1 ? "  0" : "   "} |${line.join("")}`);
+  const names = BUDGET_STEPS.map(({ name }, i) => (i * segment < revealed ? name : "").padEnd(segment)).join("");
+  return [...labelled, `    +${"-".repeat(width)}`, `     ${names}`].join("\n");
+}
+
+const DISSOLVE = "#%+:.";
+
+// Dense at one edge and thinning across the strip, with a fixed pattern so scrubbing never flickers.
+export function dissolveFrame(cols: number, rows: number, p: number, denseAtTop: boolean): string {
+  return Array.from({ length: rows }, (_, r) => {
+    const depth = (denseAtTop ? rows - r : r + 1) / rows;
+    const density = depth * clamp(p);
+    return Array.from({ length: cols }, (_, c) => {
+      const noise = (((c * 73856093) ^ (r * 19349663)) >>> 0) % 997 / 997;
+      return noise < density ? DISSOLVE[Math.min(DISSOLVE.length - 1, Math.floor((1 - depth) * DISSOLVE.length))]! : " ";
+    }).join("");
+  }).join("\n");
+}
+
 export interface StageRow {
   text: string;
   tone: "plain" | "ok" | "warn";
