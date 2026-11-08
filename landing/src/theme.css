@@ -1,17 +1,18 @@
-/* The landing page's black and white bands, over the board's tokens. Each band sets the tokens for what's inside it. */
+/* The landing page's black and white bands. Each band sets the tokens for what's inside it. */
+
+:root {
+  --font-mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+}
 
 :root[data-theme="dark"],
 .band-dark {
   color-scheme: dark;
   --bg: #000000;
   --surface: #0b0b0b;
-  --surface-2: #161616;
-  --border: #2b2b2b;
   --border-strong: #707070;
   --text: #ffffff;
   --text-dim: #c0c0c0;
   --accent: #ffffff;
-  --on-accent: #000000;
   --link: #ffffff;
   --ok: #3fb68b;
   --warn: #f08a24;
@@ -22,13 +23,10 @@
   color-scheme: light;
   --bg: #ffffff;
   --surface: #f2f2f2;
-  --surface-2: #e6e6e6;
-  --border: #d4d4d4;
   --border-strong: #6f6f6f;
   --text: #000000;
   --text-dim: #4d4d4d;
   --accent: #000000;
-  --on-accent: #ffffff;
   --link: #000000;
   --ok: #17714f;
   --warn: #a84c06;

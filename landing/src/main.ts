@@ -1,7 +1,6 @@
 import "@fontsource/ibm-plex-mono/400.css";
 import "@fontsource/ibm-plex-mono/500.css";
 import "@fontsource/ibm-plex-mono/600.css";
-import "../../app/src/styles/tokens.css";
 import "./theme.css";
 import "./styles.css";
 import { initAsciiArt } from "./ascii-scene.ts";
