@@ -1,0 +1,40 @@
+/* The landing page's black and white bands. Each band sets the tokens for what's inside it. */
+
+:root {
+  --font-mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+}
+
+:root[data-theme="dark"],
+.band-dark {
+  color-scheme: dark;
+  --bg: #000000;
+  --surface: #0b0b0b;
+  --border-strong: #707070;
+  --text: #ffffff;
+  --text-dim: #c0c0c0;
+  --accent: #ffffff;
+  --link: #ffffff;
+  --ok: #3fb68b;
+  --warn: #f08a24;
+  --alarm: #f06b62;
+}
+
+.band-light {
+  color-scheme: light;
+  --bg: #ffffff;
+  --surface: #f2f2f2;
+  --border-strong: #6f6f6f;
+  --text: #000000;
+  --text-dim: #4d4d4d;
+  --accent: #000000;
+  --link: #000000;
+  --ok: #17714f;
+  --warn: #a84c06;
+  --alarm: #b42318;
+}
+
+.band-dark,
+.band-light {
+  background: var(--bg);
+  color: var(--text);
+}

@@ -229,6 +229,7 @@ Live transaction references for both stuck-payment runs are in [`docs/EVM-EVIDEN
 | `make ts-test-sandbox` | the AI proposer on a local chain: attack case 2 through the AI path, rogue proposals, key scope, exactly-once retries, model-independence property |
 | `make crew` | run Scout, Forge and Buyer against Purser (`NETWORK=sandbox\|testnet`, `SCENARIO=demo\|legit\|race\|rogue`) |
 | `make board` | the operator board at http://127.0.0.1:5173: live invariant, manifest, Revoke, demo buttons (see [`app/README.md`](app/README.md)) |
+| `make landing` | the product page at http://127.0.0.1:5180: what Purser is, why it belongs on NEAR, how it works, evidence and limits |
 | `make types-gen` | regenerate `@purser/types` from the contract ABI |
 | `make deploy-testnet` | deploy to testnet and provision the crew (`OPERATOR_ACCOUNT_ID=<you>.testnet`) |
 | `make demo` | replay the 7 enforcement outcomes: 1-6 live on testnet with tx refs, 7 as a labeled sandbox replay |
