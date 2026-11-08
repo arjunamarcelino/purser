@@ -39,12 +39,15 @@ function createRaceStage(el: HTMLElement) {
   };
   new ResizeObserver(() => draw(progress)).observe(el);
   draw(1);
+  let replay: gsap.core.Tween | undefined;
   return {
     draw,
     play() {
+      replay?.kill();
       const state = { p: 0 };
-      gsap.to(state, { p: 1, duration: 3.5, ease: "none", onUpdate: () => draw(state.p) });
+      replay = gsap.to(state, { p: 1, duration: 3.5, ease: "none", onUpdate: () => draw(state.p) });
     },
+    stop: () => replay?.kill(),
   };
 }
 type RaceStage = ReturnType<typeof createRaceStage>;
@@ -293,6 +296,7 @@ function freeRace(stage: RaceStage, autoplay: boolean) {
   }
   if (autoplay) ScrollTrigger.create({ trigger: ".race-stage", start: "top 70%", once: true, onEnter: play });
   return () => {
+    stage.stop();
     if (replay) {
       replay.hidden = true;
       replay.removeEventListener("click", play);
