@@ -64,3 +64,19 @@ build. A comment-only edit that keeps the line count is also safe; verify with `
   change, and keep the section-diff snippet handy for when they differ.
 - Treat "the default build is byte-identical" as a claim that needs a fresh build and a `cmp`, not as a
   consequence of the feature being off.
+
+## Second form of the same trap: comment edits in `contract/src` (S8 review, 2026-11-06)
+
+A documentation-only fix to `contract/src/lib.rs` after the metrics had been measured moved the shipped wasm sha256
+away from the one in `docs/METRICS.md` and from the code deployed on testnet, so "measured wasm == deployed wasm"
+silently became false. Observed hashes: measured/deployed `55d40b07...`; after adding a 4-line doc comment to a
+`#[near]` method `51a63007...`; after turning it into a plain comment `5bb8d516...`; after deleting it again
+`55d40b07...`.
+
+- A `///` doc comment on a `pub fn` inside the `#[near]` impl is embedded in the ABI, and the ABI is embedded in the
+  wasm, so it changes the hash even apart from line shifts. A plain `//` comment still shifts every later panic
+  location.
+- A comment edit that keeps the same number of lines (reword within three lines) left the hash unchanged.
+- Rule: after ANY edit under `contract/src`, run `make contract-build`, compare `shasum -a 256
+  contract/target/near/purser_contract.wasm` with the hash printed in `docs/METRICS.md`, and either keep it identical
+  (move the prose to the README or the audit doc) or re-run `make metrics`.
