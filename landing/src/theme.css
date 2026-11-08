@@ -1,0 +1,59 @@
+/* The landing page's black-and-white palette, over the board's tokens. State colors (--ok, --warn, --alarm) stay. */
+
+:root,
+:root[data-theme="dark"] {
+  --bg: #000000;
+  --surface: #0b0b0b;
+  --surface-2: #161616;
+  --border: #2b2b2b;
+  --border-strong: #707070;
+  --text: #ffffff;
+  --text-dim: #a6a6a6;
+  --accent: #ffffff;
+  --on-accent: #000000;
+  --link: #ffffff;
+}
+
+:root[data-theme="light"] {
+  --bg: #ffffff;
+  --surface: #f5f5f5;
+  --surface-2: #ebebeb;
+  --border: #d4d4d4;
+  --border-strong: #767676;
+  --text: #000000;
+  --text-dim: #555555;
+  --accent: #000000;
+  --on-accent: #ffffff;
+  --link: #000000;
+}
+
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme]) {
+    --bg: #ffffff;
+    --surface: #f5f5f5;
+    --surface-2: #ebebeb;
+    --border: #d4d4d4;
+    --border-strong: #767676;
+    --text: #000000;
+    --text-dim: #555555;
+    --accent: #000000;
+    --on-accent: #ffffff;
+    --link: #000000;
+  }
+}
+
+/* The hero and its header are black in both themes, because the scene behind them is. */
+.site-head,
+.hero {
+  --bg: #000000;
+  --surface: #0b0b0b;
+  --surface-2: #161616;
+  --border: #2b2b2b;
+  --border-strong: #707070;
+  --text: #ffffff;
+  --text-dim: #c8c8c8;
+  --accent: #ffffff;
+  --on-accent: #000000;
+  --link: #ffffff;
+  color: var(--text);
+}

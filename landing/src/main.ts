@@ -1,11 +1,17 @@
-import "@fontsource/ibm-plex-sans/400.css";
-import "@fontsource/ibm-plex-sans/500.css";
-import "@fontsource/ibm-plex-sans/600.css";
 import "@fontsource/ibm-plex-mono/400.css";
 import "@fontsource/ibm-plex-mono/500.css";
+import "@fontsource/ibm-plex-mono/600.css";
 import "../../app/src/styles/tokens.css";
+import "./theme.css";
 import "./styles.css";
+import { initAsciiScene } from "./ascii-scene.ts";
 import { initMotion } from "./motion.ts";
+
+// Waits for the font so the glyphs measure and draw as IBM Plex Mono from the first frame.
+function initHeroScene() {
+  const canvas = document.querySelector<HTMLCanvasElement>("[data-hero-ascii]");
+  if (canvas) void document.fonts.ready.then(() => initAsciiScene(canvas));
+}
 
 const THEME_KEY = "purser.theme";
 const NEXT_THEME = { system: "dark", dark: "light", light: "system" } as const;
@@ -34,7 +40,6 @@ function initTheme() {
       // Private browsing can refuse storage: the choice still applies to this visit.
     }
     show(next);
-    document.dispatchEvent(new CustomEvent("purser:theme"));
   });
 }
 
@@ -84,6 +89,7 @@ function initCopy() {
 initTheme();
 initMenu();
 initCopy();
+initHeroScene();
 initMotion().catch(() => {
   // A failed animation setup must never hide the page: the headline's guard class comes off here.
   document.documentElement.classList.remove("js-motion");
