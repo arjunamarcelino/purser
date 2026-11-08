@@ -159,7 +159,7 @@ export function initAsciiArt(canvas: HTMLCanvasElement) {
       pose.yaw += (Math.sin(phase) * sway + pointer.x * lean + drag.spin - pose.yaw) * follow;
       pose.pitch += (Math.sin(phase * 0.74) * 0.1 + pointer.y * 0.3 + drag.tilt - pose.pitch) * follow;
     }
-    const lean = calm.matches ? 0 : 1;
+    const parallax = calm.matches ? 0 : 1;
     mesh ??= meshFor(name);
     renderMesh(
       mesh,
@@ -172,8 +172,8 @@ export function initAsciiArt(canvas: HTMLCanvasElement) {
         cellH: layout.cellH,
         centerX: layout.centerX(width),
         centerY,
-        shiftX: pointer.x * layout.shift[0] * lean,
-        shiftY: pointer.y * layout.shift[1] * lean,
+        shiftX: pointer.x * layout.shift[0] * parallax,
+        shiftY: pointer.y * layout.shift[1] * parallax,
         scale: layout.scale(width, height),
         ambient: layout.ambient,
       },
