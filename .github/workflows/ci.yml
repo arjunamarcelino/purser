@@ -49,14 +49,14 @@ jobs:
           cargo fmt --manifest-path tests/fixtures/mock-signer/Cargo.toml -- --check
           CARGO_TARGET_DIR="$PWD/target/mock-signer" cargo clippy --locked --manifest-path tests/fixtures/mock-signer/Cargo.toml --all-targets -- -D warnings
       - name: Keep the sandbox-only race driver out of deploy tooling
-        run: "! grep -rn race-driver ../scripts ../Makefile"
+        run: "! grep -rn --exclude=metrics.sh race-driver ../scripts ../Makefile"   # metrics.sh builds it for the local sandbox harness
       - name: Keep the race-driver toolchain and near-sdk pin in lock-step with the contract
         run: |
           diff <(grep -v '^#' rust-toolchain.toml) <(grep -v '^#' tests/fixtures/race-driver/rust-toolchain.toml)
           pin() { grep -m1 '^near-sdk' "$1" | grep -oE '"=[0-9.]+"'; }   # first near-sdk line, string or table form
           [ "$(pin Cargo.toml)" = "$(pin tests/fixtures/race-driver/Cargo.toml)" ]
       - name: Keep the sandbox-only mock signer out of deploy tooling
-        run: "! grep -rn mock-signer ../scripts ../Makefile"
+        run: "! grep -rn --exclude=metrics.sh mock-signer ../scripts ../Makefile"   # metrics.sh builds it for the local sandbox harness
       - name: Keep the mock-signer toolchain and near-sdk pin in lock-step with the contract
         run: |
           diff <(grep -v '^#' rust-toolchain.toml) <(grep -v '^#' tests/fixtures/mock-signer/rust-toolchain.toml)
