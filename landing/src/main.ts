@@ -33,6 +33,9 @@ function initMenu() {
     button.textContent = open ? "Close" : "Menu";
   };
   button.addEventListener("click", () => setOpen(!nav.classList.contains("open")));
+  matchMedia("(max-width: 1040px)").addEventListener("change", (event) => {
+    if (!event.matches) setOpen(false);
+  });
   nav.addEventListener("click", (e) => {
     if (e.target instanceof HTMLAnchorElement) setOpen(false);
   });
