@@ -111,6 +111,11 @@ describe("layout", () => {
     expect(read("src/main.ts")).toMatch(/import\.meta\.env\.DEV \? "http:\/\/127\.0\.0\.1:5173/);
   });
 
+  it("never writes noise into a real heading", () => {
+    expect(read("src/motion.ts")).not.toMatch(/\bel\.textContent = scrambleFrame/);
+    expect(read("src/motion.ts")).toMatch(/setAttribute\("aria-hidden", "true"\)/);
+  });
+
   it("stops flexible canvases from growing their own tile", () => {
     expect(css).toMatch(/\.art-tall \{[^}]*contain: size/);
     expect(css).toMatch(/\.art \{[^}]*height: 15rem/);

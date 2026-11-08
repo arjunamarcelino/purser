@@ -49,25 +49,50 @@ function createRaceStage(el: HTMLElement) {
 }
 type RaceStage = ReturnType<typeof createRaceStage>;
 
+// The noise runs on an aria-hidden copy placed over the heading, so the heading's real text never changes.
+function decodeLayer(el: HTMLElement): HTMLElement {
+  el.parentElement?.classList.add("decode-host");
+  const css = getComputedStyle(el);
+  const layer = document.createElement("div");
+  layer.setAttribute("aria-hidden", "true");
+  layer.className = el.classList.contains("bracket") ? "decode-layer bracket" : "decode-layer";
+  Object.assign(layer.style, {
+    font: css.font,
+    letterSpacing: css.letterSpacing,
+    textTransform: css.textTransform,
+    textWrap: css.getPropertyValue("text-wrap"),
+    left: `${el.offsetLeft}px`,
+    top: `${el.offsetTop}px`,
+    width: `${el.offsetWidth}px`,
+  });
+  el.after(layer);
+  return layer;
+}
+
 function decode(el: HTMLElement, duration: number, scrollTrigger?: ScrollTrigger.Vars) {
   const original = el.textContent ?? "";
   const state = { p: 0 };
-  el.textContent = scrambleFrame(original, 0);
+  let layer: HTMLElement | null = null;
+  const finish = () => {
+    layer?.remove();
+    layer = null;
+    el.classList.remove("decoding");
+  };
+  el.classList.add("decoding");
   gsap.to(state, {
     p: 1,
     duration,
     ease: "none",
     ...(scrollTrigger ? { scrollTrigger } : {}),
+    onStart: () => {
+      layer = decodeLayer(el);
+    },
     onUpdate: () => {
-      el.textContent = scrambleFrame(original, state.p);
+      if (layer) layer.textContent = scrambleFrame(original, state.p);
     },
-    onComplete: () => {
-      el.textContent = original;
-    },
+    onComplete: finish,
   });
-  return () => {
-    el.textContent = original;
-  };
+  return finish;
 }
 
 function initHero() {

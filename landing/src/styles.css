@@ -106,6 +106,19 @@ code {
   color: var(--text-dim);
   font-size: 0.32em;
 }
+.decoding {
+  color: transparent;
+}
+.decode-host {
+  position: relative;
+}
+.decode-layer {
+  position: absolute;
+  margin: 0;
+  color: var(--text);
+  line-height: inherit;
+  pointer-events: none;
+}
 .bracket::before {
   content: "[ ";
 }
