@@ -111,7 +111,8 @@ function decode(el: HTMLElement, duration: number, scrollTrigger?: ScrollTrigger
 
 function initHero() {
   const title = $<HTMLElement>(".hero-title");
-  if (!title) return;
+  // Once the 3-second guard has shown the title, scrambling it would only look like a glitch.
+  if (!title || !document.documentElement.classList.contains("js-motion")) return;
   gsap.set(title, { visibility: "visible" });
   return decode(title, 1.1);
 }
