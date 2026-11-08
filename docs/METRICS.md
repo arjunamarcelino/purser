@@ -8,11 +8,11 @@ Reproduce: `make metrics` (from a clean checkout; `QUICK=1 make metrics` for a s
 
 | Field | Value |
 |---|---|
-| git sha | `cd8f95d95dd479660b503be6527bc74bfc70329b` |
+| git sha | `2220849003faaba5c1e0b1854b048d0b0a04aa7b` |
 | wasm sha256 | `55d40b073e6b5a0f2bae878bf35fe4f68fd85d22213b6395ef59b466f6281fe4` |
 | nearcore / workspaces | `nearcore 2.14.0 sandbox (near-workspaces 0.24.0)` |
 | toolchain | `rustc 1.95.0 (59807616e 2026-04-14); cargo-near-near 0.22.0; node v26.9.0` |
-| date | `2026-11-06T10:56:41.977Z` |
+| date | `2026-11-06T12:03:33.643Z` |
 | repeats (N) | `10` |
 | mode | `full` |
 
@@ -73,23 +73,23 @@ Blocks from admission to settlement (from receipt heights): median 2, p95 2, ran
 
 | Arm | n | min ms | median ms | p95 ms | max ms |
 |---|---|---|---|---|---|
-| propose_payment | 300 | 605 | 629 | 647 | 658 |
-| baseline transfer | 300 | 357 | 375 | 388 | 397 |
+| propose_payment | 300 | 602 | 628 | 646 | 655 |
+| baseline transfer | 300 | 359 | 372 | 388 | 395 |
 
-Added wall time = median(propose) - median(baseline) = **254 ms** (sandbox). Sandbox wall-clock is dominated by block time and polling, so read the block count above as the honest figure. No means are reported.
+Added wall time = median(propose) - median(baseline) = **256 ms** (sandbox). Sandbox wall-clock is dominated by block time and polling, so read the block count above as the honest figure. No means are reported.
 
 ## Storage
 
-Bytes per admitted commitment: median 375, range 375 to 375 (n=50). Counts the commitment record; the idempotency entry and the owner-paid stake are described in the README limits.
+Bytes per admitted commitment: median 375, range 375 to 375 (n=50). This is the whole-proposal storage delta (the commitment record plus its idempotency entry); the owner-paid stake is described in the README limits.
 
 ## Property tests (run once)
 
 | Test | Cases run (emitted by the test) |
 |---|---|
-| `core` | 10,000 |
-| `contract` | 2,000 |
+| `contract` | 2,002 |
+| `core` | 10,002 |
 
-libtest: `test result: ok. 3 passed; 0 failed`
+libtest: `test result: ok. 2 passed; 0 failed`
 
 ## What this does not show
 

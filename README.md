@@ -68,13 +68,13 @@ merchant's balance, receipt events). Headline rows are quoted below from that fi
 | Duplicate authorizations | **0** across 150 `(delegate, request_id)` pairs (target 0) |
 | Valid requests wrongly blocked | **0** of 400 (target 0) |
 | Attack suite | 8 core cases, each passing 10/10, plus the racing variants and the fault-build guard |
-| Property tests | invariant held over 10,000 + 2,000 generated sequences |
+| Property tests | invariant held over 10,002 + 2,002 generated sequences |
 | Timeouts and retries | 0 releases on silence, 0 duplicates on retry, reservation retained in 10/10 runs |
-| Added latency per authorization | +254 ms wall (sandbox, not testnet); 2 blocks from admission to settlement |
+| Added latency per authorization | +256 ms wall (sandbox, not testnet); 2 blocks from admission to settlement |
 | Gas per authorization | 3.51 Tgas (propose) + 2.22 Tgas (settlement callback) = 5.74 Tgas |
 | Storage per commitment | 375 bytes |
 
-Run: N=10, commit `cd8f95d95dd4`, wasm sha256 `55d40b073e6b5a0f…`. Reproduce with `make metrics`.
+Run: N=10, commit `2220849003fa`, wasm sha256 `55d40b073e6b5a0f…`. Reproduce with `make metrics`.
 <!-- metrics:end -->
 
 ## Architecture
