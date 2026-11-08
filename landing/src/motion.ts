@@ -343,7 +343,7 @@ export async function initMotion() {
   mm.add(
     {
       pinnable: "(min-width: 900px) and (min-height: 760px) and (prefers-reduced-motion: no-preference)",
-      cards: "(min-height: 560px) and (prefers-reduced-motion: no-preference)",
+      cards: "(min-width: 680px) and (min-height: 560px) and (prefers-reduced-motion: no-preference)",
       motion: "(prefers-reduced-motion: no-preference)",
       reduce: "(prefers-reduced-motion: reduce)",
     },
