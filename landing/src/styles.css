@@ -999,7 +999,6 @@ td {
   white-space: pre;
 }
 
-/* The page's one glass surface: the invariant floats over scrolling content, so the frost has a real backdrop. */
 .invariant-bar {
   position: fixed;
   left: 50%;
@@ -1011,9 +1010,7 @@ td {
   width: min(920px, 100% - 24px);
   padding: 0.65rem 1rem;
   color: var(--ok);
-  background: color-mix(in srgb, var(--bg) 92%, transparent);
-  -webkit-backdrop-filter: blur(14px) saturate(140%);
-  backdrop-filter: blur(14px) saturate(140%);
+  background: var(--bg);
   border: var(--rule);
   box-shadow: 0 10px 30px rgb(0 0 0 / 0.28);
   transform: translateX(-50%);
@@ -1032,18 +1029,6 @@ td {
   margin-left: auto;
   color: var(--text-dim);
   font-size: 0.75rem;
-}
-@supports not (backdrop-filter: blur(1px)) {
-  .invariant-bar {
-    background: var(--bg);
-  }
-}
-@media (prefers-reduced-transparency: reduce) {
-  .invariant-bar {
-    background: var(--bg);
-    -webkit-backdrop-filter: none;
-    backdrop-filter: none;
-  }
 }
 
 @media (max-width: 1040px) {

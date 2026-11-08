@@ -62,16 +62,6 @@ describe("stylesheet", () => {
     const headings = html.match(/<h2 /g)!.length;
     expect(html.match(/class="rule-mark"/g)).toHaveLength(headings + 1);
   });
-
-  it("frosts only the invariant bar", () => {
-    const blocks = css.match(/[^{}]+\{[^{}]*[^-]backdrop-filter:\s*blur[^{}]*\}/g) ?? [];
-    expect(blocks).toHaveLength(1);
-    expect(blocks[0]).toContain(".invariant-bar");
-  });
-
-  it("offers a solid bar when transparency is reduced", () => {
-    expect(css).toMatch(/prefers-reduced-transparency: reduce\)\s*\{\s*\.invariant-bar/);
-  });
 });
 
 describe("hero", () => {
@@ -146,12 +136,6 @@ describe("palette", () => {
   it.each([".band-dark", ".band-light"])("%s: all text passes AA on every surface", (band) => {
     const t = tokens(band);
     for (const fg of [t.text!, t["text-dim"]!, t.link!, t.ok!, t.warn!, t.alarm!]) for (const bg of [t.bg!, t.surface!]) expect(ratio(channels(fg), channels(bg)), `${band} ${fg} on ${bg}`).toBeGreaterThanOrEqual(4.5);
-  });
-
-  it("keeps the glass bar legible over a white band", () => {
-    const t = tokens(".band-dark");
-    const bar = [0, 1, 2].map(() => 255 * 0.08);
-    for (const fg of [t.text!, t["text-dim"]!, t.ok!]) expect(ratio(channels(fg), bar), fg).toBeGreaterThanOrEqual(4.5);
   });
 
   it("keeps hero text legible over the field's densest cells", () => {
