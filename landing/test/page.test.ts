@@ -362,9 +362,9 @@ describe("ascii frames", () => {
   });
 
   it("fits the stage at every width and moment", () => {
-    for (const cols of [30, 44, 64, 72]) {
+    for (const cols of [24, 28, 44, 64, 72]) {
       for (const p of [0, 0.2, 0.4, 0.6, 0.8, 1]) {
-        for (const line of texts(p, cols)) expect(line.length, `${cols}@${p}: ${line}`).toBeLessThanOrEqual(cols + 3);
+        for (const line of texts(p, cols)) expect(line.length, `${cols}@${p}: ${line}`).toBeLessThanOrEqual(cols);
       }
     }
   });
