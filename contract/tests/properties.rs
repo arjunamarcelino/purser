@@ -23,9 +23,13 @@
 //! on-chain. Its propose composition is re-assembled here from the public pure fns. That is
 //! acceptable only because Layer B (`contract_*`) drives the real `Purser` composition.
 //!
-//! Case counts default to the `with_cases` values below; `PROPTEST_CASES` overrides them.
+//! Case counts default to the values passed to `cases(..)` below; `PROPTEST_CASES` overrides them and
+//! must be a positive integer (anything else panics). Each block counts the cases it executes and
+//! emits `METRIC proptest.cases` from that observed number, after asserting it equals the configured one.
+//! (`ProptestConfig::with_cases` alone ignores the env var, so `cases` reads it explicitly.)
 
 use std::collections::BTreeMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use near_sdk::{AccountId, NearToken};
 use proptest::prelude::*;
@@ -372,8 +376,11 @@ impl CoreModel {
             .sum()
     }
 
+    /// Saturating: a frozen task (a contradicted reconcile recorded real spend) can legitimately
+    /// hold `completed + outstanding` above `u128::MAX` when the cap is near `2^127`, and every
+    /// caller only compares this against the cap, so saturation preserves the comparison.
     fn used(&self) -> u128 {
-        self.completed() + self.outstanding()
+        self.completed().saturating_add(self.outstanding())
     }
 
     fn propose(&mut self, key: Key, amount: u128) -> Outcome {
@@ -574,6 +581,15 @@ fn step_core(sut: &mut CoreSut, model: &mut CoreModel, op: &CoreOp) -> (Outcome,
                     Outcome::Illegal
                 } else if spent > model.commits[i].reserved {
                     Outcome::SpentExceeds
+                } else if model
+                    .completed()
+                    .checked_add(spent)
+                    .and_then(|c| c.checked_add(model.outstanding()))
+                    .is_none()
+                {
+                    // checked u128 arithmetic: a landed spend that would overflow completed + outstanding
+                    // is refused atomically (reachable only with a cap near u128::MAX / 2)
+                    Outcome::Overflow
                 } else {
                     let r = model.edge(i, &[Failed, Cancelled], Confirmed);
                     model.commits[i].spent = Some(spent);
@@ -691,15 +707,61 @@ fn check_core(
     Ok(())
 }
 
+/// Case count for a property block: `default` when `PROPTEST_CASES` is unset, otherwise the value,
+/// which must be a positive integer. A malformed or zero value panics rather than falling back, so a
+/// typo cannot silently run a different depth than the one the operator asked for.
+fn cases(default: u32) -> u32 {
+    match std::env::var("PROPTEST_CASES") {
+        Err(std::env::VarError::NotPresent) => default,
+        Err(e) => panic!("PROPTEST_CASES is not valid unicode: {e}"),
+        Ok(v) => match v.trim().parse::<u32>() {
+            Ok(n) if n > 0 => n,
+            _ => panic!("PROPTEST_CASES must be a positive integer, got {v:?}"),
+        },
+    }
+}
+
+/// Cases actually executed by each block, incremented inside the test body.
+static CORE_RUN: AtomicU64 = AtomicU64::new(0);
+static CONTRACT_RUN: AtomicU64 = AtomicU64::new(0);
+
+/// Saved failing seeds in `properties.proptest-regressions`; proptest replays every one of them in
+/// each block before the random cases, and those replays run the body too.
+const REPLAYED_SEEDS: u64 = {
+    let b = include_str!("properties.proptest-regressions").as_bytes();
+    let mut n = 0;
+    let mut i = 0;
+    while i + 3 <= b.len() {
+        if b[i] == b'c' && b[i + 1] == b'c' && b[i + 2] == b' ' && (i == 0 || b[i - 1] == b'\n') {
+            n += 1;
+        }
+        i += 1;
+    }
+    n
+};
+
+/// After a block finishes, require that the body ran exactly the configured number of random cases
+/// plus the replayed regression seeds, then emit that observed number for `scripts/metrics.sh`. A property that is skipped, short-circuited or
+/// misconfigured cannot print a count it did not run.
+fn report_observed(counter: &AtomicU64, configured: u32, tag: &str) {
+    let observed = counter.load(Ordering::SeqCst);
+    assert_eq!(
+        observed,
+        u64::from(configured) + REPLAYED_SEEDS,
+        "{tag}: executed {observed} cases, configured {configured} plus {REPLAYED_SEEDS} replayed seeds"
+    );
+    println!("METRIC proptest.cases {observed} test={tag}");
+}
+
 proptest! {
-    #![proptest_config(ProptestConfig::with_cases(10_000))]
+    #![proptest_config(ProptestConfig::with_cases(cases(10_000)))]
 
     /// Layer A: invariant, exactly-once, and no-release-on-silence over the pure core.
-    #[test]
-    fn core_invariants_hold_over_random_interleavings(
+    fn core_cases(
         cap in cap_strategy(),
         ops in prop::collection::vec(core_op_strategy(), 1..64),
     ) {
+        CORE_RUN.fetch_add(1, Ordering::SeqCst);
         let mut sut = CoreSut::new(cap);
         let mut model = CoreModel::new(cap);
         for op in &ops {
@@ -708,6 +770,12 @@ proptest! {
             check_core(op, &before, &sut, &model, outcomes)?;
         }
     }
+}
+
+#[test]
+fn core_invariants_hold_over_random_interleavings() {
+    core_cases();
+    report_observed(&CORE_RUN, cases(10_000), "core");
 }
 
 // ==== Layer B: the real `Purser` composition ====================================================
@@ -1518,16 +1586,22 @@ mod contract_layer {
 }
 
 proptest! {
-    #![proptest_config(ProptestConfig::with_cases(2_000))]
+    #![proptest_config(ProptestConfig::with_cases(cases(2_000)))]
 
     /// Layer B: the same three properties over the real `Purser` entrypoints, with callbacks
     /// delivered out of order or lost, owner reconciles, revocation, re-adds, allowlist churn,
     /// two tasks sharing delegates, and the owner acting as a delegate.
-    #[test]
-    fn contract_invariants_hold_over_random_interleavings(
+    fn contract_cases(
         caps in (cap_strategy(), cap_strategy()),
         ops in prop::collection::vec(contract_layer::op_strategy(), 1..48),
     ) {
+        CONTRACT_RUN.fetch_add(1, Ordering::SeqCst);
         contract_layer::run([caps.0, caps.1], &ops)?;
     }
+}
+
+#[test]
+fn contract_invariants_hold_over_random_interleavings() {
+    contract_cases();
+    report_observed(&CONTRACT_RUN, cases(2_000), "contract");
 }

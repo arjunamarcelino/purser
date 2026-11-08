@@ -35,6 +35,10 @@ jobs:
           cache-on-failure: true
       - run: cargo fmt --all -- --check
       - run: cargo clippy --all-targets -- -D warnings
+      - name: Static security audit (TRD S1-S4, S7, S8) and its seeded-violation self-test
+        run: ../scripts/audit-security.sh && ../scripts/audit-security-selftest.sh
+      - name: README names only things that exist (make targets, scripts, relative links)
+        run: node ../scripts/check-readme.mjs
       - run: PURSER_ALLOW_FAULT_INJECTION=1 cargo clippy --all-targets --features fault-injection -- -D warnings   # the test-only fault build must lint too
       - name: Lint the race-driver test fixture (not a member of any workspace)
         run: |
@@ -156,7 +160,29 @@ jobs:
         with:
           name: test-wasms
           path: wasm/test
-      - run: cargo test --test attacks --test payments --test delegates --test evm -- --test-threads=4
+      - run: cargo test --test attacks --test payments --test delegates --test evm --test limits --test refusals -- --test-threads=4
+      - name: Metrics harness (single-threaded: its latency samples are wall-clock)
+        run: cargo test --test metrics -- --test-threads=1
+
+  # In-place upgrade: the previous release (merge-base with main) writes state, this tree's wasm reads it.
+  upgrade-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0     # the previous release is built from git history
+      - uses: dtolnay/rust-toolchain@035fceb3c12fb0c6a9461b52775e16473133e591 # 1.95.0
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        with:
+          workspaces: contract -> target
+          cache-on-failure: true
+      - name: Install cargo-near (official prebuilt binary)
+        run: curl --proto '=https' --tlsv1.2 -LsSf https://github.com/near/cargo-near/releases/download/cargo-near-v0.22.0/cargo-near-installer.sh | sh
+      - run: |
+          git fetch origin main
+          scripts/upgrade-check.sh
 
   # TS workspace: typecheck + unit tests against the COMMITTED generated types (no wasm needed).
   ts:
@@ -172,6 +198,8 @@ jobs:
       - run: pnpm -r --workspace-concurrency=1 run typecheck
       - run: pnpm --filter @purser/app build   # before tests: the app's test scans dist/ for secrets
       - run: pnpm -r run test
+      - name: Metrics aggregator self-test (fixtures: good set, overrun, missing metric)
+        run: node --test scripts/metrics-report.test.mjs
 
   # The committed generated types must match the ABI of the wasm this run built.
   types-drift:

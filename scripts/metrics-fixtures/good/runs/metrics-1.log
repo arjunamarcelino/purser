@@ -1,0 +1,32 @@
+running 1 test
+some cargo noise that is not a metric
+METRIC count.overrun 0 runs=40
+METRIC count.duplicate 0 pairs=24
+METRIC count.wrongly_blocked 0 valid=60
+METRIC gas.propose 3000001000001 unit=gas round=1 path=near
+METRIC gas.settle 2000000000001 unit=gas round=1 path=near
+METRIC gas.propose 3000002000001 unit=gas round=2 path=near
+METRIC gas.settle 2000000000001 unit=gas round=2 path=near
+METRIC gas.propose 3000000000001 unit=gas round=3 path=near
+METRIC gas.settle 2000000000001 unit=gas round=3 path=near
+METRIC gas.propose 3000000000001 unit=gas round=4 path=near
+METRIC gas.settle 2000000000001 unit=gas round=4 path=near
+METRIC gas.evm.propose 5000000000000 unit=gas path=evm
+METRIC lat.blocks_admit_to_settle 3 unit=blocks
+METRIC lat.wall_ms 1210 unit=ms arm=propose i=1
+METRIC lat.wall_ms 1010 unit=ms arm=baseline i=1
+METRIC lat.wall_ms 1220 unit=ms arm=propose i=2
+METRIC lat.wall_ms 1020 unit=ms arm=baseline i=2
+METRIC lat.wall_ms 1230 unit=ms arm=propose i=3
+METRIC lat.wall_ms 1030 unit=ms arm=baseline i=3
+METRIC lat.wall_ms 1240 unit=ms arm=propose i=4
+METRIC lat.wall_ms 1040 unit=ms arm=baseline i=4
+METRIC lat.wall_ms 1250 unit=ms arm=propose i=5
+METRIC lat.wall_ms 1050 unit=ms arm=baseline i=5
+METRIC storage.commitment_bytes 412 stake_yocto=4120000000000000000000
+METRIC timeout.release_on_silence 0
+METRIC timeout.duplicate_on_retry 0
+METRIC timeout.reservation_retained 1
+METRIC race.attempts 1 case=2b
+METRIC race.attempts 1 case=4b
+test result: ok. 1 passed; 0 failed; 0 ignored

@@ -1,0 +1,10 @@
+{
+  "git_sha": "abc1234",
+  "dirty": false,
+  "wasm_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "nearcore_version": "near-workspaces fixture",
+  "toolchain": "fixture",
+  "date": "2026-01-01T00:00:00Z",
+  "n": 3,
+  "quick": false
+}

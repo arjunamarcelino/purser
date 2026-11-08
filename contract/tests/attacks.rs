@@ -217,6 +217,7 @@ async fn case_2b_external_parallel_dispatch_races() -> anyhow::Result<()> {
         assert_eq!(accounting(&crew).await?, (90 * UNIT, 0));
         if proof.raced() {
             println!("case 2b: race observed on attempt {attempt}/{RACE_ATTEMPTS}");
+            metric("race.attempts", attempt as i128, &[("case", "2b")]);
             return Ok(());
         }
     }
@@ -370,6 +371,7 @@ async fn case_4b_external_in_flight_retry() -> anyhow::Result<()> {
         );
         if proof.refused(MSG_IN_FLIGHT) == 1 && proof.raced() {
             println!("case 4b: in-flight retry observed on attempt {attempt}/{RACE_ATTEMPTS}");
+            metric("race.attempts", attempt as i128, &[("case", "4b")]);
             return Ok(());
         }
     }

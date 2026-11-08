@@ -2,14 +2,14 @@
         contract-build contract-build-release contract-test contract-fmt contract-lint prove \
         ts-install ts-lint ts-test ts-test-sandbox types-gen crew board \
         indexer-poll indexer-serve indexer-counts \
-        deploy-testnet demo metrics hooks evm-spike relayer
+        deploy-testnet demo metrics audit hooks evm-spike relayer upgrade-check
 
 # Aggregate targets: the contract plus the TS workspace (packages/*, proposer).
 build: contract-build
 build-release: contract-build-release
 test: contract-test ts-test
 fmt: contract-fmt
-lint: contract-lint ts-lint
+lint: contract-lint ts-lint audit
 
 # Contract (Rust / near-sdk). --all-features fails by design (build.rs gates the test-only
 # `fault-injection` feature); shipped wasm is guarded by scripts/check-wasm-clean.sh.
@@ -21,6 +21,9 @@ contract-lint: ; cd contract && cargo clippy --all-targets -- -D warnings
 
 # Security evidence: the property tests + the named attack cases, with race-proof heights printed.
 prove: ; cd contract && cargo test --test properties --test attacks -- --nocapture --test-threads=4
+
+# In-place upgrade check: builds the previous release (default: merge-base with origin/main) in a temp git worktree and runs contract/tests/upgrade.rs. ~5 min.
+upgrade-check: ; scripts/upgrade-check.sh $(PREV)
 
 # STRETCH spike (docs/EVM-SPIKE.md): size + gas of building and hashing an EIP-1559 tx in-contract. Local/sandbox only.
 evm-spike: ; scripts/evm-spike.sh
@@ -60,5 +63,10 @@ crew: contract-build ts-install
 # deploy-testnet needs OPERATOR_ACCOUNT_ID=<you>.testnet and near-cli-rs; demo replays outcomes 1-6 live + 7 in the sandbox.
 deploy-testnet: contract-build ts-install ; scripts/deploy-testnet.sh
 demo: ; scripts/demo.sh
-metrics: ; @echo "TODO (Prompt 13): measure + write docs/METRICS.md"
+# Measured evidence (docs/METRICS.md): repeats the attack suite N times (default 10) plus the measuring harness.
+# `make metrics QUICK=1` is a 3-run smoke that writes docs/METRICS.quick.md and never the published report.
+metrics: ; scripts/metrics.sh
+
+# Static security audit (TRD S1-S4, S7, S8) over contract/src, plus its seeded-violation self-test.
+audit: ; scripts/audit-security.sh && scripts/audit-security-selftest.sh && node scripts/check-readme.mjs
 hooks: ; cp scripts/pre-commit .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit && echo "pre-commit hook installed"

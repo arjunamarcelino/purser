@@ -35,3 +35,7 @@ neardev/
 
 # Proposer function-call keys written by scripts/deploy-testnet.sh
 .near-keys/
+
+# Short metrics runs are never the published report
+docs/METRICS.quick.md
+docs/METRICS.quick.json
