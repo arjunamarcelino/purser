@@ -55,10 +55,8 @@ function glyphAtlas(ink: string, layout: Layout, dpr: number): HTMLCanvasElement
   return atlas;
 }
 
-function meshFor(name: string): Mesh | null {
-  if (name === "anchor") return buildAnchorMesh();
-  const paths = ART_PATHS[name];
-  return paths ? buildMesh(paths, ART_TUBES) : null;
+function meshFor(name: string): Mesh {
+  return name === "anchor" ? buildAnchorMesh() : buildMesh(ART_PATHS[name]!, ART_TUBES);
 }
 
 // Starts each object at its own point in the sway, so a row of them never moves in unison.
@@ -66,9 +64,8 @@ const seedPhase = (name: string) => [...name].reduce((sum, ch) => sum + ch.charC
 
 export function initAsciiArt(canvas: HTMLCanvasElement) {
   const name = canvas.dataset.asciiArt ?? "";
-  const mesh = meshFor(name);
   const ctx = canvas.getContext("2d");
-  if (!mesh || !ctx) return;
+  if (!artNames().includes(name) || !ctx) return;
   const isHero = name === "anchor";
   let layout = isHero ? HERO : ART;
   const calm = matchMedia("(prefers-reduced-motion: reduce)");
@@ -86,6 +83,8 @@ export function initAsciiArt(canvas: HTMLCanvasElement) {
   let raf = 0;
   let last = 0;
   let visible = false;
+  // Built on the first visible frame, so art further down the page costs nothing at load.
+  let mesh: Mesh | null = null;
   let lit: Float32Array = new Float32Array(0);
   let depth: Float32Array = new Float32Array(0);
   let phase = seedPhase(name);
@@ -162,6 +161,7 @@ export function initAsciiArt(canvas: HTMLCanvasElement) {
       pose.pitch += (Math.sin(phase * 0.74) * 0.1 + pointer.y * 0.3 + drag.tilt - pose.pitch) * follow;
     }
     const lean = calm.matches ? 0 : 1;
+    mesh ??= meshFor(name);
     renderMesh(
       mesh,
       pose.yaw,
