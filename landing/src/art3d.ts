@@ -81,3 +81,5 @@ const ANCHOR_PATHS: MeshPath[] = [
 ];
 
 export const buildAnchorMesh = () => buildMesh(ANCHOR_PATHS, ANCHOR_TUBES);
+// The small anchor: thicker tubes for its tiny cells, and normalized like the rest of the art so it fits a tile.
+export const buildCompactAnchorMesh = () => buildMesh(ANCHOR_PATHS, ART_TUBES);

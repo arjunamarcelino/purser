@@ -47,12 +47,12 @@ export function Toasts() {
             {t.detail && <div className="dim">{t.detail}</div>}
             {t.href && (
               <a href={t.href} target="_blank" rel="noopener noreferrer">
-                view transaction ↗
+                view transaction -&gt;
               </a>
             )}
           </div>
           <button type="button" className="icon-btn" aria-label="Dismiss notification" onClick={() => dismiss(t.id)}>
-            ×
+            x
           </button>
         </div>
       ))}

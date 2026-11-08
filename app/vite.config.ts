@@ -62,7 +62,8 @@ export default defineConfig({
     },
     fs: {
       strict: true,
-      allow: [import.meta.dirname, resolve(repoRoot, "packages/types/src"), resolve(repoRoot, "node_modules/.pnpm")],
+      // landing/src: the palette and the ASCII renderer are shared with the product page.
+      allow: [import.meta.dirname, resolve(repoRoot, "packages/types/src"), resolve(repoRoot, "landing/src"), resolve(repoRoot, "node_modules/.pnpm")],
       deny: [".env", ".env.*", "**/.near-keys/**", "**/*.key", "**/*.pem", "**/*.crt", "**/out/**", "**/.git/**"],
     },
   },

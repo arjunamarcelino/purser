@@ -20,7 +20,10 @@
 .naive-main h1 {
   margin: 0;
   font-size: 1.75rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
   line-height: 1.2;
+  text-transform: uppercase;
 }
 .naive-sub {
   margin: 0.5rem 0 0.25rem;
@@ -29,15 +32,12 @@
 .naive-meter {
   margin: 1.25rem 0;
   padding: 1rem 1.25rem;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
+  border: var(--rule);
 }
 .naive-numeral {
   font-size: var(--size-display);
-  font-weight: 500;
-  line-height: 1.05;
-  letter-spacing: -0.02em;
+  font-weight: 600;
+  line-height: 1;
 }
 .naive-numeral .of {
   font-size: 0.35em;
@@ -66,8 +66,7 @@
 }
 .naive-lane {
   padding: 0.9rem 1rem;
-  background: var(--surface);
-  border-radius: var(--radius);
+  border: var(--rule);
 }
 .naive-lane ol {
   margin: 0 0 0.5rem;
@@ -79,6 +78,7 @@
   color: var(--alarm);
 }
 .naive-tail {
+  font-family: inherit;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }

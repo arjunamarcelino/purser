@@ -4,7 +4,7 @@
 import type { RefusalCode, ReservationState } from "@purser/types";
 
 export type Tone = "ok" | "warn" | "alarm" | "neutral" | "dim";
-export type IconName = "check" | "clock" | "slash" | "key" | "alert" | "coins" | "minus";
+export type IconName = "check" | "clock" | "slash" | "alert" | "minus";
 
 export interface Badge {
   label: string;

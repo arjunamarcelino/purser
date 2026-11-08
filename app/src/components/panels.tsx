@@ -4,7 +4,9 @@ import { explorer } from "../config.ts";
 import type { CachedCommitment } from "../data/cache.ts";
 import { type AmountDisplay, formatTime, nearDisplay, safeText, shortHash } from "../lib/format.ts";
 import { type LineHealth, groupOf, refusalBadge, stateBadge } from "../lib/semantics.ts";
-import { useReducedMotion } from "../theme.ts";
+import { useReducedMotion } from "../lib/useReducedMotion.ts";
+import { gauge } from "../../../landing/src/ascii.ts";
+import { Heading, budgetBar, useColumns } from "./ascii.tsx";
 import { Badge } from "./Badge.tsx";
 import { Icon } from "./Icon.tsx";
 
@@ -47,36 +49,26 @@ export function useCountTo(target: bigint | null, snapKey: string): bigint | nul
 
 export function BudgetPanel({ task, cap, completed, outstanding, remaining, money = nearDisplay }: { task: string; cap: bigint; completed: bigint; outstanding: bigint; remaining: bigint; money?: AmountDisplay }) {
   const shown = useCountTo(remaining, task);
-  const pctOf = (v: bigint) => (cap > 0n ? Number((v * 1000n) / cap) / 10 : 0);
-  const pct = pctOf(completed + outstanding);
-  const segments = [
-    { name: "remaining", width: pctOf(remaining) },
-    { name: "outstanding", width: pctOf(outstanding) },
-    { name: "completed", width: pctOf(completed) },
-  ].filter((s) => s.width > 0);
+  const pct = cap > 0n ? Number(((completed + outstanding) * 1000n) / cap) / 10 : 0;
+  const meter = useRef<HTMLDivElement>(null);
+  const columns = useColumns(meter);
   return (
     <section className="panel budget" aria-labelledby="budget-h">
-      <h2 id="budget-h" className="label">
-        <Icon name="coins" /> Budget
-      </h2>
+      <Heading id="budget-h">Budget</Heading>
       <div className="label">Remaining</div>
-      <div className="display mono" aria-label={`${money.fmt(remaining)} of ${money.fmt(cap)} ${money.unit} remaining`}>
+      <div className="display" aria-label={`${money.fmt(remaining)} of ${money.fmt(cap)} ${money.unit} remaining`}>
         <span aria-hidden="true">
           {shown === null || shown === remaining ? money.fmt(remaining) : money.frame(shown)}
           <span className="of"> / {money.fmt(cap)}</span>
         </span>
       </div>
-      <div className="meter" role="progressbar" aria-label="Budget used" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.min(100, Math.round(pct))}>
-        {segments.map((s) => (
-          <div key={s.name} className={`meter-seg seg-${s.name}`} style={{ flexBasis: `${Math.min(100, s.width)}%` }} />
-        ))}
+      <div ref={meter} className="meter" role="progressbar" aria-label="Budget used" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.min(100, Math.round(pct))}>
+        {budgetBar(completed, outstanding, cap, columns - 2)}
       </div>
-      <div className="breakdown mono">
-        <span className="swatch seg-completed" aria-hidden="true" />
-        completed {money.fmt(completed)} · <span className="swatch seg-outstanding" aria-hidden="true" />
-        outstanding {money.fmt(outstanding)} <span className="dim">{money.unit}</span>
+      <div className="breakdown">
+        # completed {money.fmt(completed)} | = outstanding {money.fmt(outstanding)} <span className="dim">{money.unit}</span>
       </div>
-      {money.note && <div className="unit-note mono dim small">{money.note}</div>}
+      {money.note && <div className="unit-note dim small">{money.note}</div>}
     </section>
   );
 }
@@ -100,9 +92,9 @@ export function CrewPanel({
 }) {
   return (
     <section className="panel crew" aria-labelledby="crew-h">
-      <h2 id="crew-h" className="label">
-        <Icon name="key" /> Crew <span className="dim">(delegates)</span>
-      </h2>
+      <Heading id="crew-h">
+        Crew <span className="dim">(delegates)</span>
+      </Heading>
       {delegates.length === 0 && <p className="dim">{isOwner ? "No delegates on this task. Add one in Owner tools below." : "No delegates on this task yet. The task owner adds them."}</p>}
       <ul className="chips">
         {delegates.map((d) => {
@@ -115,7 +107,7 @@ export function CrewPanel({
                 {personaOf(d.account_id)}
                 {roleOf(d.account_id) && <span className="chip-role dim small"> {roleOf(d.account_id)}</span>}
               </span>
-              <span className="mono dim chip-id">{d.account_id}</span>
+              <span className="dim chip-id">{d.account_id}</span>
               <span className="chip-status tone-dim">{status}</span>
               {isOwner && d.active && (
                 <button type="button" className="btn btn-danger" disabled={busy || pending} onClick={() => onRevoke(d)} aria-label={`Revoke ${personaOf(d.account_id)} (${d.account_id})`}>
@@ -215,18 +207,18 @@ export function Manifest({ commitments, records, personaOf, delegateIds, now, mo
         <ul aria-labelledby={id}>
           {rows.map((r) => (
             <li key={r.key} className={`mrow ${r.fresh ? "fresh" : ""} ${r.badge.tone === "warn" && r.fresh ? "flash" : ""}`}>
-              <span className="mono amt">{r.amount}</span>
+              <span className="amt">{r.amount}</span>
               <span className="who">
-                {r.who} <span aria-hidden="true">→</span>
-                <span className="sr-only">to</span> <span className="mono">{r.to}</span>
+                {r.who} <span aria-hidden="true">-&gt;</span>
+                <span className="sr-only">to</span> <span>{r.to}</span>
               </span>
               <span className="mbadge">
                 <Badge badge={r.badge} />
               </span>
               <span className="mtx">
                 {r.tx ? (
-                  <a href={r.tx.href} target="_blank" rel="noopener noreferrer" className="mono">
-                    <Icon name="link" size={14} /> tx {r.tx.label}
+                  <a href={r.tx.href} target="_blank" rel="noopener noreferrer">
+                    tx {r.tx.label} <span aria-hidden="true">-&gt;</span>
                     <span className="sr-only"> (hash reported by proposer)</span>
                   </a>
                 ) : r.linking ? (
@@ -235,7 +227,7 @@ export function Manifest({ commitments, records, personaOf, delegateIds, now, mo
                   <span className="dim small">no tx record</span>
                 )}
               </span>
-              <span className="mono dim mtime">
+              <span className="dim mtime">
                 {r.at}
                 {r.reported && <span className="reported">reported by proposer</span>}
               </span>
@@ -247,10 +239,8 @@ export function Manifest({ commitments, records, personaOf, delegateIds, now, mo
   );
 
   return (
-    <section className="panel manifest" aria-labelledby="manifest-h">
-      <h2 id="manifest-h" className="label">
-        Manifest
-      </h2>
+    <section className="panel manifest band band-light section" aria-labelledby="manifest-h">
+      <Heading id="manifest-h">Manifest</Heading>
       {section("holds-h", "Holds (pending)", groups.holds, "No holds: nothing awaiting proof.", "Reserved budget stays held until there is proof of the outcome.")}
       {section("pay-h", "Payments (completed)", groups.payments, "No completed payments yet.")}
       {section("ref-h", "Refused", refused, "No refusals recorded.")}
@@ -268,9 +258,14 @@ export function InvariantLine({ health, completed, outstanding, cap, money = nea
   return (
     <div className={`invariant tone-${health.tone}`} role="status" aria-live="polite">
       <span className="sr-only">{spoken}</span>
-      <span className="mono eq" aria-hidden="true">
-        {read ? `completed ${money.fmt(completed)} + outstanding ${money.fmt(outstanding)} = ${money.fmt(used)} ≤ cap ${money.fmt(cap)}` : "waiting for the contract's first reading"}
+      <span className="eq" aria-hidden="true">
+        {read ? `completed ${money.fmt(completed)} + outstanding ${money.fmt(outstanding)} = ${money.fmt(used)} <= cap ${money.fmt(cap)}` : "waiting for the contract's first reading"}
       </span>
+      {read && (
+        <span className="gauge" aria-hidden="true">
+          {gauge(pct, 100, 12)}
+        </span>
+      )}
       <span className="health" aria-hidden="true">
         <Icon name={health.icon} /> {health.label}
       </span>
@@ -318,10 +313,10 @@ export function CachedHistory({
   money?: AmountDisplay;
 }) {
   return (
-    <section className={`panel cached-history ${offline ? "offline" : ""}`} aria-labelledby="cache-h">
-      <h2 id="cache-h" className="label">
+    <section className={`panel cached-history band band-dark section ${offline ? "offline" : ""}`} aria-labelledby="cache-h">
+      <Heading id="cache-h">
         On-chain history <span className="dim">(cached)</span>
-      </h2>
+      </Heading>
       {offline && rows.length > 0 && <p className="tone-warn small">offline: showing last known</p>}
       {rows.length === 0 ? (
         <p className="dim small">No cached history for this task yet. It appears once the indexer has read this task's events.</p>
@@ -335,10 +330,10 @@ export function CachedHistory({
               const hash = r.txStatus === "resolved" ? r.nearTx : fallbackTx;
               return (
                 <li key={`${r.commitmentId}:${r.state}`} className="mrow">
-                  <span className="mono amt">{money.fmt(r.actualSpent ?? r.reservedAmount)}</span>
+                  <span className="amt">{money.fmt(r.actualSpent ?? r.reservedAmount)}</span>
                   <span className="who">
-                    {personaOf(r.delegate)} <span aria-hidden="true">→</span>
-                    <span className="sr-only">to</span> <span className="mono">{r.recipient}</span>
+                    {personaOf(r.delegate)} <span aria-hidden="true">-&gt;</span>
+                    <span className="sr-only">to</span> <span>{r.recipient}</span>
                   </span>
                   <span className="mbadge">
                     <span className="dim small">{ahead ? `${r.state} (ahead of board)` : r.state}</span>
@@ -346,8 +341,8 @@ export function CachedHistory({
                   <span className="mtx">
                     {hash ? (
                       <>
-                        <a href={explorer.tx(hash)} target="_blank" rel="noopener noreferrer" className="mono">
-                          <Icon name="link" size={14} /> tx {shortHash(hash)}
+                        <a href={explorer.tx(hash)} target="_blank" rel="noopener noreferrer">
+                          tx {shortHash(hash)} <span aria-hidden="true">-&gt;</span>
                         </a>
                         {r.txStatus !== "resolved" && <span className="dim small"> proposer-reported, unverified</span>}
                       </>
@@ -355,7 +350,7 @@ export function CachedHistory({
                       <span className="dim small">{r.txStatus === "unavailable" ? "tx unavailable" : r.txStatus === "pending" ? "tx pending" : "tx not indexed"}</span>
                     )}
                   </span>
-                  <span className="mono dim mtime">cached @ block {r.asOfHeight}</span>
+                  <span className="dim mtime">cached @ block {r.asOfHeight}</span>
                 </li>
               );
             })}

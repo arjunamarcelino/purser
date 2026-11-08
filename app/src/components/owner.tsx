@@ -96,7 +96,7 @@ export function ConfirmDialog({ phase, onConfirm, onCancel }: { phase: Phase; on
       <div ref={dialogRef} tabIndex={-1} className="dialog" role="dialog" aria-modal="true" aria-labelledby="confirm-title">
         <h2 id="confirm-title">{req.title}</h2>
         {req.warnings && <div className="warnings">{req.warnings}</div>}
-        <dl className="tx-details mono">
+        <dl className="tx-details">
           <dt>network</dt>
           <dd>{config.network}</dd>
           <dt>contract</dt>

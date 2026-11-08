@@ -5,7 +5,6 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { explorer } from "../config.ts";
 import { companionAvailable, companionCall } from "../data/companion.ts";
 import { shortHash } from "../lib/format.ts";
-import { useTheme } from "../theme.ts";
 import { type BaselineLane, type BaselineResult, parseResult, readStream } from "./parse.ts";
 import "./baseline.css";
 
@@ -29,22 +28,22 @@ function Lane({ name, lane, saw, running }: { name: string; lane: BaselineLane |
       <h2 className="label">{name}</h2>
       <ol>
         <li>
-          Reads the shared balance: <span className="mono">{lane ? `sees ${saw} left` : pending}</span>
+          Reads the shared balance: <span>{lane ? `sees ${saw} left` : pending}</span>
         </li>
         <li>
-          Checks {EACH_UNITS} ≤ what it saw: <span className="mono">{lane ? "OK" : pending}</span>
+          Checks {EACH_UNITS} &lt;= what it saw: <span>{lane ? "OK" : pending}</span>
         </li>
         <li>
-          Spends {EACH_UNITS}: <span className="mono">{lane ? `sent to ${lane.to}` : pending}</span>
+          Spends {EACH_UNITS}: <span>{lane ? `sent to ${lane.to}` : pending}</span>
         </li>
       </ol>
       {lane && (
         <p className="small">
-          <a href={explorer.tx(lane.hash)} target="_blank" rel="noopener noreferrer" className="mono">
-            tx {shortHash(lane.hash)} ↗
+          <a href={explorer.tx(lane.hash)} target="_blank" rel="noopener noreferrer">
+            tx {shortHash(lane.hash)} -&gt;
           </a>{" "}
-          <span className="dim mono">
-            read at block {lane.read} · landed in block {lane.included}
+          <span className="dim">
+            read at block {lane.read} | landed in block {lane.included}
           </span>
         </p>
       )}
@@ -53,7 +52,6 @@ function Lane({ name, lane, saw, running }: { name: string; lane: BaselineLane |
 }
 
 export default function BaselinePage() {
-  useTheme();
   const available = companionAvailable();
   const [phase, setPhase] = useState<Phase>({ name: "idle" });
   const streamRef = useRef<AbortController | null>(null);
@@ -124,11 +122,11 @@ export default function BaselinePage() {
 
         <section className={`naive-meter ${result ? "over" : ""}`} aria-label="Baseline budget">
           <div className="label">Spent</div>
-          <div className="naive-numeral mono">
+          <div className="naive-numeral">
             {failed ? "?" : spent}
             <span className="of"> / cap {cap}</span>
           </div>
-          <div className="mono small">
+          <div className="small">
             {result ? <strong className="naive-over">OVER CAP BY {result.overUnits}</strong> : failed ? <span className="tone-warn">result unknown: check the output below</span> : <span className="dim">remaining {cap - spent} units</span>}
           </div>
         </section>
@@ -152,7 +150,7 @@ export default function BaselinePage() {
         {phase.name === "failed" && (
           <div role="status">
             <p className="tone-warn small">{phase.message}</p>
-            {phase.tail.length > 0 && <pre className="mono small naive-tail">{phase.tail.join("\n")}</pre>}
+            {phase.tail.length > 0 && <pre className="small naive-tail">{phase.tail.join("\n")}</pre>}
           </div>
         )}
       </main>

@@ -2,6 +2,7 @@ import { render, screen, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import type { CachedCommitment } from "../src/data/cache.ts";
 import type { Commitment, ProposalRecord } from "@purser/types";
+import { budgetBar } from "../src/components/ascii.tsx";
 import { CachedHistory, InvariantLine, Manifest } from "../src/components/panels.tsx";
 import { amountDisplay } from "../src/lib/format.ts";
 import { lineHealth } from "../src/lib/semantics.ts";
@@ -74,6 +75,20 @@ describe("Manifest", () => {
   it("ignores records from accounts that are not on-chain delegates of the task", () => {
     render(<Manifest commitments={[]} records={[record({ account_id: "mallory.testnet" })]} personaOf={persona} delegateIds={new Set(["buyer.op.testnet"])} now={NOW} />);
     expect(screen.getByText("No refusals recorded.")).toBeTruthy();
+  });
+});
+
+describe("budgetBar", () => {
+  it("draws completed, held and free cells to the exact width", () => {
+    expect(budgetBar(60n, 30n, 100n, 10)).toBe("[######===.]");
+    expect(budgetBar(0n, 0n, 100n, 10)).toBe("[..........]");
+  });
+  it("never hides a small hold, and never runs past the bar", () => {
+    expect(budgetBar(0n, 1n, 1000n, 10)).toBe("[=.........]");
+    expect(budgetBar(100n, 100n, 100n, 10)).toBe("[##########]");
+  });
+  it("draws an empty bar when the cap is zero", () => {
+    expect(budgetBar(0n, 0n, 0n, 4)).toBe("[....]");
   });
 });
 
