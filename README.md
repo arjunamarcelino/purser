@@ -27,7 +27,7 @@ the near-cli keychain. The sandbox binary (nearcore 2.14.0, sha256-pinned) downl
 
 | # | Do | See |
 |---|---|---|
-| 1 | `OPERATOR_ACCOUNT_ID=<you>.testnet ./scripts/deploy-testnet.sh` | accounts `purser/scout/forge/buyer/...<you>.testnet`; `PURSER_CONTRACT_ID=purser.<you>.testnet` written to `.env.testnet`. Testnet only: it refuses any other network. |
+| 1 | `OPERATOR_ACCOUNT_ID=<you>.testnet make deploy-testnet` (builds the wasm and installs dependencies first) | accounts `purser/scout/forge/buyer/...<you>.testnet`; `PURSER_CONTRACT_ID=purser.<you>.testnet` written to `.env.testnet`. Testnet only: it refuses any other network. |
 | 2 | `./scripts/demo.sh` | a fresh task `demo-<RUN_ID>` with 100 units, then the seven outcomes below, each with a tx ref the script already re-read from the chain |
 | 2a | outcome 1, legit purchases | remaining budget 100 → 70 → 40 |
 | 2b | outcome 2, three agents fire 30 each at 40 left | one admitted (40 → 10); two **refused** `exceeds task budget`, with the block heights |
@@ -106,7 +106,7 @@ persona that can call only `propose_payment`, and does no client-side policy: ev
   NEAR-native payments only; EVM tasks have no minimum. `max_commitments = 0` admits nothing, the intended way
   to pause a task's new admissions. `set_task_limits` emits no event, so the board and indexer cannot see limit
   changes. `set_relayer` still scans every commitment (bounded per task by the limit, but the number of tasks is
-  owner-controlled), so it stays unbounded in total; see todos/043.
+  owner-controlled), so it stays unbounded in total.
 - **Measurements are sandbox measurements.** Latency and gas in `docs/METRICS.md` come from a local nearcore
   sandbox, EVM gas from a mock signer. They are not testnet or mainnet figures.
 - **Outcome 7 of the demo is a sandbox replay**, because the shipped wasm cannot lose a callback.
@@ -119,9 +119,10 @@ persona that can call only `propose_payment`, and does no client-side policy: ev
 **Auth model (MVP): registry + predecessor.** The owner registers delegate agents per
 task; each agent authorizes from its own NEAR account. A caller is authorized only if it
 is a registered, **active** delegate of the task — the contract issues no access keys, so
-the budget guarantee is a property of the contract code, never of key mechanics. (The
-function-call-key path is a documented, deferred option; see the operator gate in
-`docs/BUILD-START-VERIFICATION.md`.)
+the budget guarantee is a property of the contract code, never of key mechanics. (Function-call
+keys are an outer layer: `make deploy-testnet` gives each proposer one key limited to
+`propose_payment`, and the contract's checks do not depend on it. Having the contract issue keys
+itself is a documented, deferred option; see the operator gate in `docs/BUILD-START-VERIFICATION.md`.)
 
 **State-growth limits (S8).** The owner bounds what a registered delegate can make the contract store with
 `set_task_limits(task_id, min_payment, max_commitments)`; the contract also refuses any attached deposit on
@@ -231,6 +232,21 @@ Live transaction references for both stuck-payment runs are in [`docs/EVM-EVIDEN
 | `make types-gen` | regenerate `@purser/types` from the contract ABI |
 | `make deploy-testnet` | deploy to testnet and provision the crew (`OPERATOR_ACCOUNT_ID=<you>.testnet`) |
 | `make demo` | replay the 7 enforcement outcomes: 1-6 live on testnet with tx refs, 7 as a labeled sandbox replay |
+
+## Built with
+
+Built during NEAR HACKATHON; the first commit is dated 2026-11-02, inside the hackathon window.
+
+- **Contract:** near-sdk 5.30.0, from the canonical `cargo-near` template. Tests use near-workspaces, proptest,
+  tokio, and sha2, sha3, rlp and k256 as independent oracles; none of those reach the wasm.
+- **TypeScript:** near-api-js, zod, `@nearai/inference-sdk`, openai (proposer), viem (relayer), pg (indexer),
+  React and `@hot-labs/near-connect` (board).
+- **AI assistance:** code and docs in this repository were written with Claude Code. Every limit stays enforced
+  by the contract and is checked by the tests above.
+
+## License
+
+[MIT](LICENSE)
 
 ## Toolchain
 
