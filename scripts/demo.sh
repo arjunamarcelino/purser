@@ -103,7 +103,8 @@ if [ "$MODE" = "setup" ]; then
   # balance is all they can ever lose. Idempotent, so a new take neither re-funds it nor replaces a key.
   NAIVE="naive.$OPERATOR_ACCOUNT_ID"
   TX=(network-config testnet sign-with-keychain send)
-  if [ "$("${OPS[@]}" account-exists "$RPC" "$NAIVE")" != "yes" ]; then
+  naive_exists="$("${OPS[@]}" account-exists "$RPC" "$NAIVE")" || die "could not read $NAIVE (RPC error above)"
+  if [ "$naive_exists" != "yes" ]; then
     near_quiet account create-account fund-myself "$NAIVE" "0.5 NEAR" autogenerate-new-keypair save-to-keychain \
       sign-as "$OPERATOR_ACCOUNT_ID" "${TX[@]}"
     echo "created $NAIVE (0.5 NEAR)"
@@ -115,7 +116,8 @@ if [ "$MODE" = "setup" ]; then
     else
       pk="$("${OPS[@]}" keygen "$keyfile")"
     fi
-    if ! "${OPS[@]}" verify-full-key "$RPC" "$NAIVE" "$pk" >/dev/null 2>&1; then
+    key_present="$("${OPS[@]}" key-present "$RPC" "$NAIVE" "$pk")" || die "could not read the keys of $NAIVE (RPC error above)"
+    if [ "$key_present" != "yes" ]; then
       near_quiet account add-key "$NAIVE" grant-full-access use-manually-provided-public-key "$pk" "${TX[@]}"
     fi
     "${OPS[@]}" verify-full-key "$RPC" "$NAIVE" "$pk" >/dev/null || die "key $k is not on $NAIVE after adding it"

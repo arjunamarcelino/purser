@@ -111,6 +111,7 @@ export default function BaselinePage() {
 
   const running = phase.name === "running";
   const result = phase.name === "done" ? phase.result : null;
+  const failed = phase.name === "failed"; // funds may have moved: never show the idle 0 / remaining
   const spent = result?.spentUnits ?? 0;
   const cap = result?.capUnits ?? CAP_UNITS;
 
@@ -125,10 +126,12 @@ export default function BaselinePage() {
         <section className={`naive-meter ${result ? "over" : ""}`} aria-label="Baseline budget">
           <div className="label">Spent</div>
           <div className="naive-numeral mono">
-            {spent}
+            {failed ? "—" : spent}
             <span className="of"> / cap {cap}</span>
           </div>
-          <div className="mono small">{result ? <strong className="naive-over">OVER CAP BY {result.overUnits}</strong> : <span className="dim">remaining {cap - spent} units</span>}</div>
+          <div className="mono small">
+            {result ? <strong className="naive-over">OVER CAP BY {result.overUnits}</strong> : failed ? <span className="tone-warn">result unknown — check the output below</span> : <span className="dim">remaining {cap - spent} units</span>}
+          </div>
         </section>
 
         <div className="naive-lanes">

@@ -330,6 +330,19 @@ async function run(): Promise<void> {
       console.log("ok");
       return;
     }
+    case "key-present": {
+      // "no" only on the chain's own answer; an RPC error throws, so it never reads as a missing key.
+      const [rpc, account, pk] = need(3);
+      const p = await testnet(rpc!);
+      try {
+        await p.viewAccessKey({ accountId: account!, publicKey: pk! });
+        console.log("yes");
+      } catch (e) {
+        if (!/AccessKeyDoesNotExist|UNKNOWN_ACCESS_KEY|does not exist/i.test(`${(e as Error).name} ${(e as Error).message}`)) throw e;
+        console.log("no");
+      }
+      return;
+    }
     case "verify-full-key": {
       const [rpc, account, pk] = need(3);
       const k = await (await testnet(rpc!)).viewAccessKey({ accountId: account!, publicKey: pk! });

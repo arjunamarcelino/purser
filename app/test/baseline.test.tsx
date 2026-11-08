@@ -108,6 +108,14 @@ describe("baseline page", () => {
 
 describe("result parsing", () => {
   it("accepts the driver's line", () => expect(parseResult([resultLine])).toEqual(payload));
+  it("shows the spend as unknown, not 0, when a run fails after sending", async () => {
+    mockCompanion({ start: started, events: events(["demo: merchant balances disagree"], 1) });
+    render(<BaselinePage />);
+    fire();
+    await screen.findByText(/result unknown/);
+    expect(screen.queryByText(/remaining 100 units/)).toBeNull();
+    expect(screen.queryByText(CAPTION)).toBeNull();
+  });
   it("reads the job's exit code from the stream", () => expect(readStream(events(["x"], 3))).toEqual({ done: true, code: 3, lines: ["x"] }));
   it.each([
     ["two result lines", [resultLine, resultLine]],
