@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { REFUSALS, type RefusalCode, type ReservationState } from "@purser/types";
-import { formatNear, safeText } from "../src/lib/format.ts";
+import { amountDisplay, formatNear, nearDisplay, safeText } from "../src/lib/format.ts";
 import { groupOf, lineHealth, refusalBadge, stateBadge, STALE_AFTER_MS } from "../src/lib/semantics.ts";
 
 const N = 10n ** 24n;
@@ -9,14 +9,20 @@ const inv = (o: Partial<{ cap: bigint; completed: bigint; outstanding: bigint; h
 });
 const now = 1_000_000;
 
+describe("refusal wording", () => {
+  it("names a reused request_id as a rejection, in amber", () => {
+    expect(refusalBadge("request_id_reused")).toMatchObject({ label: "REJECTED — request_id reused with a different request", tone: "warn" });
+  });
+});
+
 describe("invariant line", () => {
   it("is green only on fresh, healthy contract state", () => {
     expect(lineHealth(inv(), { hasUnknown: false, syncedAt: now - 1000, now })).toMatchObject({ tone: "ok", label: "INVARIANT HEALTHY" });
   });
   it("is amber when holds are pending-heavy or any outcome is unknown", () => {
-    expect(lineHealth(inv({ outstanding: 30n * N }), { hasUnknown: false, syncedAt: now, now }).tone).toBe("warn");
+    expect(lineHealth(inv({ outstanding: 50n * N }), { hasUnknown: false, syncedAt: now, now }).tone).toBe("warn");
     expect(lineHealth(inv({ outstanding: 1n }), { hasUnknown: true, syncedAt: now, now }).tone).toBe("warn");
-    expect(lineHealth(inv({ outstanding: 10n * N }), { hasUnknown: false, syncedAt: now, now }).tone).toBe("ok");
+    expect(lineHealth(inv({ outstanding: 30n * N }), { hasUnknown: false, syncedAt: now, now }).tone).toBe("ok"); // one 30-of-100 hold stays green
   });
   it("is red only when the contract reports the invariant does not hold", () => {
     expect(lineHealth(inv({ holds: false }), { hasUnknown: false, syncedAt: now, now })).toMatchObject({ tone: "alarm", label: "INVARIANT VIOLATED" });
@@ -63,5 +69,25 @@ describe("format", () => {
     expect(safeText("pay‮evil​.testnet")).toBe("payevil.testnet");
     expect(safeText("x".repeat(200), 10)).toBe(`${"x".repeat(9)}…`);
     expect(safeText(null)).toBe("");
+  });
+});
+
+describe("unit display", () => {
+  const cap = N / 10n; // 0.1 NEAR = 100 units
+  const unit = cap / 100n;
+  it("writes round units and always says what a unit is", () => {
+    const m = amountDisplay(cap, true);
+    expect(m.fmt(70n * unit)).toBe("70");
+    expect(m.note).toBe("units · 1 unit = 0.001 NEAR");
+  });
+  it("never rounds a settled value, and shows whole units on an animation frame", () => {
+    const m = amountDisplay(cap, true);
+    expect(m.fmt(70n * unit + 1n)).toMatch(/~$/);
+    expect(m.frame(87n * unit + unit / 3n)).toBe("87");
+  });
+  it("falls back to NEAR when not asked, or when the cap does not divide into 100 units", () => {
+    expect(amountDisplay(cap, false)).toBe(nearDisplay);
+    expect(amountDisplay(cap + 1n, true)).toBe(nearDisplay);
+    expect(amountDisplay(0n, true)).toBe(nearDisplay);
   });
 });

@@ -35,6 +35,10 @@ describe.each(Object.entries(themes))("%s theme", (_name, t) => {
     expect(ratio(t["border-strong"]!, t[bg]!)).toBeGreaterThanOrEqual(3);
   });
 
+  it("baseline banner text (--bg on --alarm) ≥ 4.5:1", () => {
+    expect(ratio(t.bg!, t.alarm!)).toBeGreaterThanOrEqual(4.5);
+  });
+
   it("text on brass buttons ≥ 4.5:1", () => {
     expect(ratio(t["on-brass"]!, t.brass!)).toBeGreaterThanOrEqual(4.5);
   });

@@ -35,6 +35,8 @@ export function refusalBadge(code: RefusalCode | null): Badge {
       return { label: "BLOCKED — delegate revoked", tone: "warn", icon: "slash", description: "blocked: delegate not authorized or revoked" };
     case "recipient_not_allowlisted":
       return { label: "REJECTED — recipient not allowlisted", tone: "warn", icon: "slash", description: "rejected: recipient not on the allowlist" };
+    case "request_id_reused":
+      return { label: "REJECTED — request_id reused with a different request", tone: "warn", icon: "slash", description: "rejected: request id reused with a different request" };
     case "invalid_recipient":
       return { label: "REJECTED — invalid recipient", tone: "warn", icon: "slash", description: "rejected: invalid recipient" };
     case "task_frozen":
@@ -66,7 +68,7 @@ export interface LineHealth {
 
 export const STALE_AFTER_MS = 30_000;
 /** Holds this large relative to the cap make the line amber: healthy, but a lot is awaiting proof. */
-export const PENDING_HEAVY_FRACTION = 4n; // outstanding ≥ cap / 4
+export const PENDING_HEAVY_FRACTION = 2n; // outstanding ≥ cap / 2: one ordinary hold is not a warning
 
 /**
  * The status line. Never green on stale or missing data; red only on the contract's own verdict.

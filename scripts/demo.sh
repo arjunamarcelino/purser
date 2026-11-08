@@ -4,17 +4,31 @@
 #
 #   ./scripts/deploy-testnet.sh && ./scripts/demo.sh
 #
+# For recording docs/PURSER-DEMO-SCRIPT.md one shot at a time:
+#
+#   ./scripts/demo.sh setup                 fresh task (cap 100 units, 3 delegates, allowlist) + the baseline account
+#   ./scripts/demo.sh shot <name>           scout | forge | race | retry | tamper | revoke | buyer | final
+#
 # Each run uses a fresh task (`demo-<RUN_ID>`): revocation is permanent, so a task cannot be replayed.
 # A failed run is simply re-run (a new RUN_ID is generated). Cost per run: ~90 of 100 units of the
 # demo cap (DEMO_CAP_NEAR, default 1 NEAR; e.g. 0.5 for a thin wallet) leave the contract for the operator's own merchant
 # sub-accounts, plus a few thousandths of a NEAR in gas.
 #
-# Env: RUN_ID (default: UTC timestamp), DEMO_CAP_NEAR (default 1). Network, wasm and key paths
+# Env: RUN_ID (default: UTC timestamp), DEMO_CAP_NEAR (default 1; 0.1 for setup). Network, wasm and key paths
 # cannot be overridden here; the RPC may be replaced by an https:// URL (its chain_id is checked).
 
 set -euo pipefail
 
 die() { echo "demo: $*" >&2; exit 1; }
+usage="usage: demo.sh [setup | shot scout|forge|race|retry|tamper|revoke|buyer|final]"
+
+MODE="${1:-}"
+case "$MODE" in
+  "") ;;
+  setup) [ $# -eq 1 ] || die "$usage" ;;
+  shot) [ $# -eq 2 ] && [[ "$2" =~ ^(scout|forge|race|retry|tamper|revoke|buyer|final)$ ]] || die "$usage" ;;
+  *) die "$usage" ;;
+esac
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ENVFILE="$ROOT/.env.testnet"
@@ -48,9 +62,14 @@ RPC="${NEAR_RPC_URL:-$(envval NEAR_RPC_URL)}"
   || die "OPERATOR_ACCOUNT_ID must be a named .testnet account"
 [ "$CONTRACT" = "purser.$OPERATOR_ACCOUNT_ID" ] || die "PURSER_CONTRACT_ID '$CONTRACT' is not purser.$OPERATOR_ACCOUNT_ID"
 
+# A shot reads its cap from the chain, so it needs none of the funding checks below.
+if [ "$MODE" = "shot" ]; then
+  OPERATOR_ACCOUNT_ID="$OPERATOR_ACCOUNT_ID" exec pnpm --silent --filter @purser/proposer run demo-shots shot "$2"
+fi
+
 RUN_ID="${RUN_ID:-$(date -u +%Y%m%d%H%M%S)}"
 [[ "$RUN_ID" =~ ^[a-z0-9-]{1,32}$ ]] || die "RUN_ID must match ^[a-z0-9-]{1,32}\$"
-DEMO_CAP_NEAR="${DEMO_CAP_NEAR:-1}"
+if [ "$MODE" = "setup" ]; then DEMO_CAP_NEAR="${DEMO_CAP_NEAR:-0.1}"; else DEMO_CAP_NEAR="${DEMO_CAP_NEAR:-1}"; fi
 [[ "$DEMO_CAP_NEAR" =~ ^(0|[1-9][0-9]{0,3})(\.[0-9]{1,3})?$ ]] || die "DEMO_CAP_NEAR must be a NEAR amount with up to 3 decimals (e.g. 1 or 0.5)"
 
 "$ROOT/scripts/check-wasm-clean.sh" "$WASM" >/dev/null   # the deployed build must be the production one
@@ -60,6 +79,53 @@ matches="$("${OPS[@]}" code-matches "$RPC" "$CONTRACT" "$WASM")" || die "could n
   || die "the deployed code on $CONTRACT does not match the built wasm: re-run ./scripts/deploy-testnet.sh"
 funds="$("${OPS[@]}" can-fund "$RPC" "$CONTRACT" "$DEMO_CAP_NEAR")"
 [ "$funds" = "yes" ] || die "${funds#no: } — its wasm locks ~2.6 NEAR as storage stake. Top it up, e.g.: near tokens $OPERATOR_ACCOUNT_ID send-near $CONTRACT '1 NEAR' network-config testnet sign-with-keychain send"
+
+if [ "$MODE" = "setup" ]; then
+  KEYS="$ROOT/.near-keys"
+  [ -d "$KEYS" ] || die "$KEYS missing: run ./scripts/deploy-testnet.sh first"
+  for p in scout forge buyer; do
+    pk="$("${OPS[@]}" pubkey "$KEYS/$p.key")"
+    "${OPS[@]}" verify-fc-key "$RPC" "$p.$OPERATOR_ACCOUNT_ID" "$pk" "$CONTRACT" 0.01 >/dev/null \
+      || die "the function-call key of $p.$OPERATOR_ACCOUNT_ID is missing or low on allowance: re-run ./scripts/deploy-testnet.sh"
+  done
+
+  # near-cli prints a full transcript (to stderr) for every call; keep it, and show it only on failure.
+  scrub() { sed -E 's/ed25519:[A-Za-z0-9]{40,}/ed25519:[redacted]/g'; }
+  near_quiet() {
+    local out
+    if ! out="$(near "$@" 2>&1)"; then
+      printf '%s\n' "$out" | scrub >&2
+      die "near $1 $2 failed (transcript above)"
+    fi
+  }
+
+  # The naive baseline's throwaway account: no contract, two full-access keys (transfers need them), its
+  # balance is all they can ever lose. Idempotent, so a new take neither re-funds it nor replaces a key.
+  NAIVE="naive.$OPERATOR_ACCOUNT_ID"
+  TX=(network-config testnet sign-with-keychain send)
+  naive_exists="$("${OPS[@]}" account-exists "$RPC" "$NAIVE")" || die "could not read $NAIVE (RPC error above)"
+  if [ "$naive_exists" != "yes" ]; then
+    near_quiet account create-account fund-myself "$NAIVE" "0.5 NEAR" autogenerate-new-keypair save-to-keychain \
+      sign-as "$OPERATOR_ACCOUNT_ID" "${TX[@]}"
+    echo "created $NAIVE (0.5 NEAR)"
+  fi
+  for k in naive-a naive-b; do
+    keyfile="$KEYS/$k.key"
+    if [ -f "$keyfile" ]; then
+      pk="$("${OPS[@]}" pubkey "$keyfile")"
+    else
+      pk="$("${OPS[@]}" keygen "$keyfile")"
+    fi
+    key_present="$("${OPS[@]}" key-present "$RPC" "$NAIVE" "$pk")" || die "could not read the keys of $NAIVE (RPC error above)"
+    if [ "$key_present" != "yes" ]; then
+      near_quiet account add-key "$NAIVE" grant-full-access use-manually-provided-public-key "$pk" "${TX[@]}"
+    fi
+    "${OPS[@]}" verify-full-key "$RPC" "$NAIVE" "$pk" >/dev/null || die "key $k is not on $NAIVE after adding it"
+  done
+
+  RUN_ID="$RUN_ID" OPERATOR_ACCOUNT_ID="$OPERATOR_ACCOUNT_ID" DEMO_CAP_NEAR="$DEMO_CAP_NEAR" \
+    exec pnpm --silent --filter @purser/proposer run demo-shots setup
+fi
 
 echo "== LIVE on NEAR testnet — outcomes 1-6 =="
 RUN_ID="$RUN_ID" OPERATOR_ACCOUNT_ID="$OPERATOR_ACCOUNT_ID" DEMO_CAP_NEAR="$DEMO_CAP_NEAR" \

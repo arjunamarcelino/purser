@@ -1,6 +1,10 @@
 // Pure helpers for the testnet demo driver (demo.ts): input validation, near-cli output parsing,
 // explorer links and output scrubbing. No I/O here, so they are unit-tested.
 
+import { formatUnits, unitsToYocto } from "@purser/types";
+
+export { formatUnits, unitsToYocto };
+
 export const RUN_ID = /^[a-z0-9-]{1,32}$/;
 const BASE58_HASH = /^[1-9A-HJ-NP-Za-km-z]{43,44}$/;
 const ED25519_SECRET_RE = /ed25519:[A-Za-z0-9]{40,}/g;
@@ -146,22 +150,6 @@ export function judgeInvariant(inv: InvariantView | null, cap: bigint, remaining
   return { pass: reasons.length === 0, reasons };
 }
 
-/** Exact units for display: "40", or "40.9" with the remainder shown, never truncated. */
-export function formatUnits(yocto: bigint, cap: bigint): string {
-  const unit = unitsToYocto(cap, 1n);
-  const whole = yocto / unit;
-  const rem = yocto % unit;
-  if (rem === 0n) return whole.toString();
-  const frac = ((rem * 10000n) / unit).toString().padStart(4, "0").replace(/0+$/, "");
-  return `${whole}.${frac || "0000"}~`;
-}
-
-/** `units` budget units (1 unit = cap/100) as yocto. Exact integer math; cap must divide into 100 units. */
-export function unitsToYocto(capYocto: bigint, units: bigint): bigint {
-  if (capYocto <= 0n || capYocto % 100n !== 0n) throw new Error("cap must be a positive multiple of 100 yocto");
-  return (capYocto / 100n) * units;
-}
-
 /** The demo cap in NEAR (up to 3 decimals, e.g. "1" or "0.5") as exact yocto. */
 export function capNearToYocto(near: string): bigint {
   if (!/^(0|[1-9][0-9]{0,3})(\.[0-9]{1,3})?$/.test(near)) throw new Error("DEMO_CAP_NEAR must be a NEAR amount with up to 3 decimals (e.g. 1 or 0.5)");
@@ -169,4 +157,137 @@ export function capNearToYocto(near: string): bigint {
   const yocto = BigInt(whole) * 10n ** 24n + BigInt(frac.padEnd(24, "0"));
   if (yocto === 0n) throw new Error("DEMO_CAP_NEAR must be greater than zero");
   return yocto;
+}
+
+// ---- the recording shots (demo-shots.ts) ------------------------------------------------------------
+
+/** The propose_payment arguments of one demo request, stored so a shot can resend the exact request. */
+export interface DemoArgs {
+  task: string;
+  intent: { chain: string; recipient: string; amount: string; token: string; memo: string };
+  request_id: string;
+}
+
+const PERSONAS = ["scout", "forge", "buyer"] as const;
+type Persona = (typeof PERSONAS)[number];
+
+/** What later shots need from earlier processes. Holds no keys. */
+export interface DemoSession {
+  contract: string;
+  task: string;
+  winner?: { persona: Persona; args: DemoArgs; cid: number };
+  refused?: { persona: Persona; args: DemoArgs };
+}
+
+const isArgs = (v: unknown): v is DemoArgs => {
+  const a = v as DemoArgs | null;
+  return typeof a?.task === "string" && typeof a.request_id === "string" && ["chain", "recipient", "amount", "token", "memo"].every((k) => typeof (a.intent as unknown as Record<string, unknown> | undefined)?.[k] === "string");
+};
+const isPersona = (v: unknown): v is Persona => PERSONAS.includes(v as Persona);
+
+/** A session file is local but hand-editable: anything malformed means "run setup", never a half-valid resend. */
+export function parseSession(raw: string): DemoSession {
+  const bad = new Error("the demo session file is malformed: run ./scripts/demo.sh setup for a new take");
+  let s: DemoSession;
+  try {
+    s = JSON.parse(raw) as DemoSession;
+  } catch {
+    throw bad;
+  }
+  if (typeof s?.contract !== "string" || typeof s.task !== "string") throw bad;
+  if (s.winner !== undefined && !(isPersona(s.winner.persona) && isArgs(s.winner.args) && Number.isSafeInteger(s.winner.cid))) throw bad;
+  if (s.refused !== undefined && !(isPersona(s.refused.persona) && isArgs(s.refused.args))) throw bad;
+  return s;
+}
+
+/** The fields of a SendResult a record needs (structural, so this file stays free of the RPC client). */
+export interface SendOutcome {
+  kind: string;
+  cid?: number;
+  code?: string;
+  txHash?: string | null;
+}
+
+/** A ProposalRecord for one send. `detail` stays null: raw error text can carry the RPC URL. */
+export function shotRecord(i: { decisionId: string; persona: Persona; accountId: string; contract: string; args: DemoArgs; result: SendOutcome; latencyMs: number; at: string }) {
+  const { result: r, args } = i;
+  return {
+    schema_version: 1 as const,
+    decision_id: i.decisionId,
+    persona: i.persona,
+    account_id: i.accountId,
+    network: "testnet" as const,
+    contract_id: i.contract,
+    task: args.task,
+    request_id: args.request_id,
+    outcome: r.kind === "success" ? "admitted" : r.kind,
+    recipient: args.intent.recipient,
+    amount_yocto: args.intent.amount,
+    commitment_id: r.kind === "success" ? (r.cid ?? null) : null,
+    state: null,
+    refusal_code: r.kind === "refused" ? (r.code ?? null) : null,
+    detail: null,
+    tx_hash: r.txHash ?? null,
+    payload_hash: null,
+    latency_ms: i.latencyMs,
+    at: i.at,
+  };
+}
+
+// ---- the naive baseline (naive-baseline.ts) --------------------------------------------------------
+
+export interface BaselineLane {
+  hash: string;
+  to: string;
+  /** The block the agent's balance read was served from. */
+  read: number;
+  /** The block its transfer was included in. */
+  included: number;
+  /** The Transfer deposit re-read from the chain. */
+  deposit: bigint;
+  /** Whether the chain reports the transfer succeeded. */
+  ok: boolean;
+}
+
+export interface BaselineResult {
+  sawUnits: number;
+  capUnits: number;
+  spentUnits: number;
+  overUnits: number;
+  a: { hash: string; to: string; read: number; included: number };
+  b: { hash: string; to: string; read: number; included: number };
+}
+
+/** Whole units an agent sees left: cap minus what left since the anchor; a late gas refund cannot lift it past the cap. */
+export function baselineSeenUnits(anchor: bigint, read: bigint, cap: bigint, unit: bigint): number {
+  const left = cap - (anchor - read);
+  const clamped = left > cap ? cap : left < 0n ? 0n : left;
+  return Number(clamped / unit);
+}
+
+/** The double-spend is claimed only with two distinct verified transfers, reads that preceded both, and a matching independent oracle. */
+export function judgeBaseline(a: BaselineLane, b: BaselineLane, i: { spend: bigint; unit: bigint; capUnits: number; sawUnits: number; merchantDelta: bigint }): Verdict & { result: BaselineResult | null } {
+  const reasons: string[] = [];
+  for (const [name, l] of [["A", a], ["B", b]] as const) {
+    if (!BASE58_HASH.test(l.hash)) reasons.push(`agent ${name} has no valid tx hash`);
+    if (!l.ok) reasons.push(`agent ${name}'s transfer did not succeed`);
+    if (l.deposit !== i.spend) reasons.push(`agent ${name} transferred ${l.deposit}, expected ${i.spend}`);
+  }
+  if (a.hash === b.hash) reasons.push("both agents report the same transaction");
+  if (a.read >= b.included) reasons.push(`agent A read at ${a.read}, not before B's transfer at ${b.included}`);
+  if (b.read >= a.included) reasons.push(`agent B read at ${b.read}, not before A's transfer at ${a.included}`);
+  const expected = i.spend * 2n;
+  if (i.merchantDelta !== expected) reasons.push(`merchants received ${i.merchantDelta} yocto, expected ${expected}`);
+  const spentUnits = Number(expected / i.unit);
+  if (spentUnits <= i.capUnits) reasons.push(`spent ${spentUnits} units does not exceed the cap of ${i.capUnits}`);
+  if (reasons.length > 0) return { pass: false, reasons, result: null };
+  const lane = (l: BaselineLane) => ({ hash: l.hash, to: l.to, read: l.read, included: l.included });
+  return { pass: true, reasons, result: { sawUnits: i.sawUnits, capUnits: i.capUnits, spentUnits, overUnits: spentUnits - i.capUnits, a: lane(a), b: lane(b) } };
+}
+
+/** The one line the baseline page reads. The companion truncates lines at 500 characters. */
+export function formatBaselineLine(r: BaselineResult): string {
+  const line = `BASELINE ${JSON.stringify(r)}`;
+  if (line.length >= 500) throw new Error("baseline result line is too long");
+  return line;
 }

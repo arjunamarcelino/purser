@@ -12,6 +12,7 @@
 //   node testnet-ops.ts keygen                  <secret-file>
 //   node testnet-ops.ts pubkey                  <secret-file>
 //   node testnet-ops.ts verify-fc-key           <rpc> <account> <public-key> <contract> <min-allowance-near>
+//   node testnet-ops.ts verify-full-key         <rpc> <account> <public-key>   (the baseline's throwaway account only)
 //   node testnet-ops.ts view                    <rpc> <contract> <method> <json-args>
 //
 // EVM path helpers (scripts/evm-testnet.sh; testnet + Sepolia only):
@@ -326,6 +327,26 @@ async function run(): Promise<void> {
       }
       if (fc.allowance === null) throw new Error(`${account}: key has an unlimited allowance`);
       if (BigInt(fc.allowance) < nearToYocto(minAllowance as `${number}`)) throw new Error(`${account}: allowance below ${minAllowance} NEAR — rotate the key`);
+      console.log("ok");
+      return;
+    }
+    case "key-present": {
+      // "no" only on the chain's own answer; an RPC error throws, so it never reads as a missing key.
+      const [rpc, account, pk] = need(3);
+      const p = await testnet(rpc!);
+      try {
+        await p.viewAccessKey({ accountId: account!, publicKey: pk! });
+        console.log("yes");
+      } catch (e) {
+        if (!/AccessKeyDoesNotExist|UNKNOWN_ACCESS_KEY|does not exist/i.test(`${(e as Error).name} ${(e as Error).message}`)) throw e;
+        console.log("no");
+      }
+      return;
+    }
+    case "verify-full-key": {
+      const [rpc, account, pk] = need(3);
+      const k = await (await testnet(rpc!)).viewAccessKey({ accountId: account!, publicKey: pk! });
+      if (k.permission !== "FullAccess") throw new Error(`${account}: key ${pk} is not a full-access key`);
       console.log("ok");
       return;
     }

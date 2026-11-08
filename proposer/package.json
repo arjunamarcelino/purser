@@ -12,7 +12,9 @@
     "typecheck": "tsc -p tsconfig.json",
     "test": "vitest run --project unit",
     "test:sandbox": "vitest run --project sandbox",
-    "demo": "node --env-file-if-exists=../.env.testnet src/dev/demo.ts"
+    "demo": "node --env-file-if-exists=../.env.testnet src/dev/demo.ts",
+    "demo-shots": "node --env-file-if-exists=../.env.testnet src/dev/demo-shots.ts",
+    "naive-baseline": "node --env-file-if-exists=../.env.testnet src/dev/naive-baseline.ts"
   },
   "dependencies": {
     "@nearai/inference-sdk": "0.2.0",

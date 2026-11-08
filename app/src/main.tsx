@@ -5,7 +5,7 @@ import "@fontsource/ibm-plex-mono/400.css";
 import "@fontsource/ibm-plex-mono/500.css";
 import "./styles/tokens.css";
 import "./styles/app.css";
-import { StrictMode } from "react";
+import { StrictMode, Suspense, lazy } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App.tsx";
 
@@ -18,8 +18,16 @@ try {
 
 const root = document.getElementById("root");
 if (!root) throw new Error("#root missing");
+// Dev only: the whole branch is compiled out of a production build, chunk included.
+const Comparison = import.meta.env.DEV && new URLSearchParams(location.search).get("baseline") === "1" ? lazy(() => import("./baseline/BaselinePage.tsx")) : null;
 createRoot(root).render(
   <StrictMode>
-    <App />
+    {Comparison ? (
+      <Suspense fallback={null}>
+        <Comparison />
+      </Suspense>
+    ) : (
+      <App />
+    )}
   </StrictMode>,
 );
