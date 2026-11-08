@@ -152,17 +152,9 @@ describe("ascii scene", () => {
     expect(charFor(-1)).toBe(" ");
   });
 
-  it("draws the mark brighter than the empty field at every sampled time", () => {
-    for (const t of [0, 1.5, 7, 40]) {
-      for (const [col, row] of [[10, 10], [60, 20], [120, 40]] as const) {
-        expect(cellLuminance(1, col, row, t)).toBeGreaterThan(cellLuminance(0, col, row, t));
-      }
-    }
-  });
-
   it("leaves most of the empty field dark", () => {
     let blank = 0;
-    for (let col = 0; col < 100; col++) for (let row = 0; row < 40; row++) if (charFor(cellLuminance(0, col, row, 3)) === " ") blank++;
+    for (let col = 0; col < 100; col++) for (let row = 0; row < 40; row++) if (charFor(cellLuminance(col, row, 3)) === " ") blank++;
     expect(blank / 4000).toBeGreaterThan(0.6);
   });
 });

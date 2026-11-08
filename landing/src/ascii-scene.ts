@@ -17,10 +17,9 @@ export const TURN_LIMITS = { hero: { sway: 0.5, lean: 0.6 }, art: { sway: 0.4, l
 
 export const artNames = () => ["anchor", ...Object.keys(ART_PATHS)];
 
-export function cellLuminance(mask: number, col: number, row: number, t: number): number {
+export function cellLuminance(col: number, row: number, t: number): number {
   const wave = (Math.sin(col * 0.09 + t * 0.6) + Math.sin(row * 0.16 - t * 0.45) + Math.sin((col + row) * 0.05 + t * 0.3)) / 6 + 0.5;
-  const crest = Math.max(0, wave - 0.62) * 0.9;
-  return Math.min(1, Math.max(crest, mask * (0.62 + 0.38 * wave)));
+  return Math.max(0, wave - 0.62) * 0.9;
 }
 
 const glyphIndex = (luminance: number) => Math.round(Math.min(1, Math.max(0, luminance)) * (RAMP.length - 1));
@@ -198,7 +197,7 @@ export function initAsciiArt(canvas: HTMLCanvasElement) {
       for (let col = 0; col < cols; col++) {
         if (lit[row * cols + col]! > 0) continue;
         const fade = fieldClearance(col * layout.cellW, row * layout.cellH, cx, centerY, clear);
-        const glyph = fade > 0 ? glyphIndex(cellLuminance(0, col, row, t) * fade) : 0;
+        const glyph = fade > 0 ? glyphIndex(cellLuminance(col, row, t) * fade) : 0;
         if (glyph > 0) stamp(fieldAtlas!, glyph, col, row);
       }
     }
