@@ -10,9 +10,10 @@
 //! make upgrade-check            # or: scripts/upgrade-check.sh [GIT_REF]
 //! ```
 //!
-//! Scope: history written before the upgrade is NOT counted toward `created_count`. A task that
-//! predates the limits reads 0 after the upgrade and gets a fresh allowance beyond its existing
-//! commitments (asserted below). By hand, with a wasm you built yourself:
+//! Scope: history written before the limits existed is NOT counted toward `created_count`. A task
+//! that predates them reads 0 after the upgrade and gets a fresh allowance beyond its existing
+//! commitments; a previous release that already has them keeps its count (both asserted below, so
+//! any git ref works as the previous release). By hand, with a wasm you built yourself:
 //!
 //! ```text
 //! PURSER_WASM_PREV=/path/to/previous/purser_contract.wasm cargo test --test upgrade -- --ignored
@@ -41,6 +42,11 @@ async fn the_new_wasm_reads_state_written_by_the_previous_release() -> anyhow::R
     let old_commitment = view(&crew, "get_commitment", json!({ "commitment_id": 0 })).await?;
     assert_eq!(old_commitment["state"], "Confirmed");
 
+    // A release from before the limits has no `get_task_limits` view, so its history counts as 0.
+    let created_before = view(&crew, "get_task_limits", json!({ "task_id": TASK }))
+        .await
+        .map_or(0, |l| l["created_count"].as_u64().unwrap());
+
     // Deploy the NEW wasm over the same account. No migration call.
     crew.purser
         .as_account()
@@ -64,10 +70,10 @@ async fn the_new_wasm_reads_state_written_by_the_previous_release() -> anyhow::R
         json!(true)
     );
 
-    // A task that predates the limits reports the defaults; the history is NOT counted toward
-    // created_count (documented limitation: old tasks get a fresh allowance).
+    // The limits read the defaults and the count carries over unchanged; history from before the
+    // limits is NOT counted (documented limitation: old tasks get a fresh allowance).
     let limits = view(&crew, "get_task_limits", json!({ "task_id": TASK })).await?;
-    assert_eq!(limits["created_count"], 0);
+    assert_eq!(limits["created_count"], created_before);
     assert_eq!(
         limits["max_commitments"],
         purser_contract::DEFAULT_MAX_COMMITMENTS
@@ -88,7 +94,7 @@ async fn the_new_wasm_reads_state_written_by_the_previous_release() -> anyhow::R
     assert_eq!(accounting(&crew).await?, (15 * UNIT, 0));
     assert_eq!(
         view(&crew, "get_task_limits", json!({ "task_id": TASK })).await?["created_count"],
-        1
+        created_before + 1
     );
     Ok(())
 }
