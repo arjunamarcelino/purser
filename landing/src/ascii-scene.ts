@@ -1,6 +1,7 @@
-// Art drawn as ASCII on local canvases: the hero's 3D anchor and the page's section artwork.
+// Every drawing on the page is a lit 3D object rendered as ASCII: it sways by itself, speeds up on hover, spins when dragged.
 
-import { DRAG_GAIN, anchorScale, buildAnchorMesh, fieldClearance, renderAnchor, settleSpin } from "./anchor3d.ts";
+import { ART_TUBES, DRAG_GAIN, type Mesh, anchorScale, artScale, buildAnchorMesh, buildMesh, fieldClearance, renderMesh, settleSpin } from "./anchor3d.ts";
+import { ART_PATHS } from "./art3d.ts";
 
 export const RAMP = " .:-=+*#%@";
 
@@ -8,25 +9,17 @@ const FRAME_MS = 1000 / 24;
 const HELD_FRAME_MS = 1000 / 40;
 const FIELD_INK = "rgb(255 255 255 / 0.2)";
 const STILL_POSE = { yaw: 0.55, pitch: -0.14 };
+const IDLE_RATE = { hero: 0.5, art: 0.3 };
+const HOVER_RATE = 1.15;
 
-// Every drawing is a 24-unit stroke path, sharing the look of the anchor mark.
-const ART: Record<string, string> = {
-  anchor: "M12 7a2 2 0 1 0 0-4 2 2 0 0 0 0 4zM12 7v14M5 13a7 7 0 0 0 14 0M8 10h8",
-  config: "M6 2h9l4 4v16H6zM15 2v4h4M9 11h7M9 15h7M9 19h4",
-  balance: "M8 6a2.5 2.5 0 1 1-5 0 2.5 2.5 0 0 1 5 0zM21 6a2.5 2.5 0 1 1-5 0 2.5 2.5 0 0 1 5 0zM16 17a4 4 0 1 1-8 0 4 4 0 0 1 8 0zM6 10l4 4M18 10l-4 4",
-  hourglass: "M6 2h12M6 22h12M7 2v4c0 3 10 5 10 10v6M17 2v4c0 3-10 5-10 10v6",
-  key: "M15 7a3 3 0 1 1 0 6 3 3 0 0 1 0-6zM12.6 11.4L4 20M7 17l2 2M9 15l2 2",
-  vault: "M3 3h18v18H3zM16 12a4 4 0 1 1-8 0 4 4 0 0 1 8 0zM12 8V5M12 19v-3M8 12H5M19 12h-3",
-  callback: "M20 11a8 8 0 1 0-2 6M20 5v6h-6",
-  chain: "M10 14a4 4 0 0 1 0-6l3-3a4 4 0 0 1 6 6l-2 2M14 10a4 4 0 0 1 0 6l-3 3a4 4 0 0 1-6-6l2-2",
-  fingerprint: "M12 11v4M8 20c1-3 1-6 1-9a3 3 0 0 1 6 0c0 3 0 7-1 10M4 16c1-2 1-3 1-5a7 7 0 0 1 14 0c0 3 0 5-.5 7",
-};
+// How far an object may turn by itself and on hover. Together they stay well short of edge-on (1.57), where shapes vanish.
+export const TURN_LIMITS = { hero: { sway: 0.5, lean: 0.6 }, art: { sway: 0.4, lean: 0.45 } };
 
-export const artNames = () => Object.keys(ART);
+export const artNames = () => ["anchor", ...Object.keys(ART_PATHS)];
 
-export function cellLuminance(mask: number, col: number, row: number, t: number, field = true): number {
+export function cellLuminance(mask: number, col: number, row: number, t: number): number {
   const wave = (Math.sin(col * 0.09 + t * 0.6) + Math.sin(row * 0.16 - t * 0.45) + Math.sin((col + row) * 0.05 + t * 0.3)) / 6 + 0.5;
-  const crest = field ? Math.max(0, wave - 0.62) * 0.9 : 0;
+  const crest = Math.max(0, wave - 0.62) * 0.9;
   return Math.min(1, Math.max(crest, mask * (0.62 + 0.38 * wave)));
 }
 
@@ -36,79 +29,72 @@ interface Layout {
   cellW: number;
   cellH: number;
   font: string;
-  field: boolean;
-  scale: number;
-  widthScale: number;
+  ambient: number;
+  shift: [number, number];
   centerX: (width: number) => number;
+  scale: (width: number, height: number) => number;
 }
 
-const HERO: Layout = { cellW: 9, cellH: 16, font: "13px", field: true, scale: 0.84, widthScale: 0.42, centerX: (w) => w * (w < 1024 ? 0.5 : 0.29) };
-const TILE: Layout = { cellW: 6, cellH: 11, font: "9px", field: false, scale: 0.92, widthScale: 0.9, centerX: (w) => w * 0.5 };
+const HERO: Layout = { cellW: 7, cellH: 12, font: "10.5px", ambient: 0.32, shift: [16, 10], centerX: (w) => w * (w < 1024 ? 0.5 : 0.29), scale: anchorScale };
+const ART: Layout = { cellW: 5, cellH: 9, font: "7.5px", ambient: 0.42, shift: [6, 4], centerX: (w) => w * 0.5, scale: artScale };
 
-// Cells are taller than wide, so the art is drawn in pixels and scaled down per axis to stay in proportion.
-function strokeMask(path: string, layout: Layout, width: number, height: number, cols: number, rows: number): Float32Array {
-  const grid = document.createElement("canvas");
-  grid.width = cols;
-  grid.height = rows;
-  const ctx = grid.getContext("2d", { willReadFrequently: true })!;
-  const size = Math.min(height * layout.scale, width * layout.widthScale);
-  const unit = size / 24;
-  ctx.scale(1 / layout.cellW, 1 / layout.cellH);
-  ctx.translate(layout.centerX(width) - size / 2, height / 2 - size / 2);
-  ctx.scale(unit, unit);
-  ctx.strokeStyle = "#fff";
-  ctx.lineWidth = 2.4;
-  ctx.lineCap = "round";
-  ctx.lineJoin = "round";
-  ctx.stroke(new Path2D(path));
-  const { data } = ctx.getImageData(0, 0, cols, rows);
-  return Float32Array.from({ length: cols * rows }, (_, i) => data[i * 4 + 3]! / 255);
+function meshFor(name: string): Mesh | null {
+  if (name === "anchor") return buildAnchorMesh();
+  const paths = ART_PATHS[name];
+  return paths ? buildMesh(paths, ART_TUBES) : null;
 }
+
+// Starts each object at its own point in the sway, so a row of them never moves in unison.
+const seedPhase = (name: string) => [...name].reduce((sum, ch) => sum + ch.charCodeAt(0), 0) % 7;
 
 export function initAsciiArt(canvas: HTMLCanvasElement) {
   const name = canvas.dataset.asciiArt ?? "";
-  const path = ART[name];
+  const mesh = meshFor(name);
   const ctx = canvas.getContext("2d");
-  if (!path || !ctx) return;
-  const layout = name === "anchor" ? HERO : TILE;
+  if (!mesh || !ctx) return;
+  const isHero = name === "anchor";
+  const layout = isHero ? HERO : ART;
   const calm = matchMedia("(prefers-reduced-motion: reduce)");
+  const root = canvas.closest<HTMLElement>(".hero, .card, .tile") ?? canvas;
+  const panel = isHero ? root.querySelector<HTMLElement>(".hero-panel") : null;
+
   let cols = 0;
   let rows = 0;
-  let mask: Float32Array = new Float32Array(0);
+  let width = 0;
+  let height = 0;
+  let centerY = 0;
+  let ink = "#fff";
   let raf = 0;
   let last = 0;
   let visible = false;
-  let width = 0;
-  let height = 0;
-
-  // The hero's anchor is a lit 3D object that sways on its own and leans toward a mouse.
-  const mesh = name === "anchor" ? buildAnchorMesh() : null;
   let lit: Float32Array = new Float32Array(0);
   let depth: Float32Array = new Float32Array(0);
+  let phase = seedPhase(name);
+  let clock = 0;
+  let hovering = false;
   const pose = { ...STILL_POSE };
   const pointer = { x: 0, y: 0 };
-  const hero = mesh ? canvas.closest<HTMLElement>(".hero") : null;
-  const panel = hero?.querySelector<HTMLElement>(".hero-panel") ?? null;
-  let centerY = 0;
-  let ink = "#fff";
-  // Holding and dragging spins the anchor directly, much faster than the hover lean, and it coasts on release.
   const drag = { held: false, lastX: 0, lastY: 0, spin: 0, velocity: 0, tilt: 0 };
+
   const release = () => {
     drag.held = false;
-    hero?.classList.remove("is-held");
+    root.classList.remove("is-held");
   };
-  hero?.addEventListener("pointerdown", (event) => {
-    if (calm.matches || (event.target as Element).closest(".hero-panel, .hero-strip, a, button")) return;
+  // The hero is dragged anywhere outside its text. A card or tile only from its drawing, so its text stays selectable.
+  const canGrab = (target: Element) => (isHero ? !target.closest(".hero-panel, .hero-strip, a, button") : target === canvas);
+
+  root.addEventListener("pointerdown", (event) => {
+    if (calm.matches || !canGrab(event.target as Element)) return;
     drag.held = true;
     drag.lastX = event.clientX;
     drag.lastY = event.clientY;
     drag.velocity = 0;
-    hero.setPointerCapture(event.pointerId);
-    hero.classList.add("is-held");
+    root.setPointerCapture(event.pointerId);
+    root.classList.add("is-held");
   });
-  hero?.addEventListener("pointerup", release);
-  hero?.addEventListener("pointercancel", release);
-  hero?.addEventListener("pointermove", (event) => {
+  root.addEventListener("pointerup", release);
+  root.addEventListener("pointercancel", release);
+  root.addEventListener("pointermove", (event) => {
     if (drag.held) {
       const dx = event.clientX - drag.lastX;
       const dy = event.clientY - drag.lastY;
@@ -120,35 +106,60 @@ export function initAsciiArt(canvas: HTMLCanvasElement) {
       return;
     }
     if (event.pointerType === "touch") return;
-    const box = hero.getBoundingClientRect();
+    hovering = true;
+    const box = root.getBoundingClientRect();
     pointer.x = ((event.clientX - box.left) / box.width) * 2 - 1;
     pointer.y = ((event.clientY - box.top) / box.height) * 2 - 1;
   });
-  hero?.addEventListener("pointerleave", () => {
+  root.addEventListener("pointerleave", () => {
     if (drag.held) return;
+    hovering = false;
     pointer.x = 0;
     pointer.y = 0;
   });
 
-  const drawAnchor = (t: number) => {
+  const place = (t: number) => {
     if (calm.matches) {
       Object.assign(pose, STILL_POSE);
     } else {
+      const elapsed = Math.min(0.1, t - clock);
+      clock = t;
+      phase += elapsed * (hovering || drag.held ? HOVER_RATE : isHero ? IDLE_RATE.hero : IDLE_RATE.art);
       if (!drag.held) {
         Object.assign(drag, settleSpin(drag.spin, drag.velocity));
         drag.tilt *= 0.92;
       }
       const follow = drag.held ? 0.4 : 0.12;
-      pose.yaw += (Math.sin(t * 0.5) * 0.75 + pointer.x * 1.25 + drag.spin - pose.yaw) * follow;
-      pose.pitch += (Math.sin(t * 0.37) * 0.12 + pointer.y * 0.6 + drag.tilt - pose.pitch) * follow;
+      const { sway, lean } = isHero ? TURN_LIMITS.hero : TURN_LIMITS.art;
+      pose.yaw += (Math.sin(phase) * sway + pointer.x * lean + drag.spin - pose.yaw) * follow;
+      pose.pitch += (Math.sin(phase * 0.74) * 0.1 + pointer.y * 0.3 + drag.tilt - pose.pitch) * follow;
     }
     const lean = calm.matches ? 0 : 1;
-    renderAnchor(mesh!, pose.yaw, pose.pitch, { width, height, cols, rows, cellW: layout.cellW, cellH: layout.cellH, centerX: layout.centerX(width), centerY, shiftX: pointer.x * 16 * lean, shiftY: pointer.y * 10 * lean }, lit, depth);
+    renderMesh(
+      mesh,
+      pose.yaw,
+      pose.pitch,
+      {
+        width,
+        height,
+        cols,
+        rows,
+        cellW: layout.cellW,
+        cellH: layout.cellH,
+        centerX: layout.centerX(width),
+        centerY,
+        shiftX: pointer.x * layout.shift[0] * lean,
+        shiftY: pointer.y * layout.shift[1] * lean,
+        scale: layout.scale(width, height),
+        ambient: layout.ambient,
+      },
+      lit,
+      depth,
+    );
   };
 
-  // Two passes, because the faint field and the anchor need different inks.
-  const drawHero = (t: number) => {
-    drawAnchor(t);
+  // The hero's faint wave needs its own ink, drawn first and cleared around the anchor.
+  const drawField = (t: number) => {
     const clear = anchorScale(width, height) * 1.35;
     const cx = layout.centerX(width);
     ctx.fillStyle = FIELD_INK;
@@ -156,10 +167,16 @@ export function initAsciiArt(canvas: HTMLCanvasElement) {
       for (let col = 0; col < cols; col++) {
         if (lit[row * cols + col]! > 0) continue;
         const fade = fieldClearance(col * layout.cellW, row * layout.cellH, cx, centerY, clear);
-        const glyph = fade > 0 ? charFor(cellLuminance(0, col, row, t, true) * fade) : " ";
+        const glyph = fade > 0 ? charFor(cellLuminance(0, col, row, t) * fade) : " ";
         if (glyph !== " ") ctx.fillText(glyph, col * layout.cellW, row * layout.cellH);
       }
     }
+  };
+
+  const draw = (t: number) => {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    place(t);
+    if (isHero) drawField(t);
     ctx.fillStyle = ink;
     for (let row = 0; row < rows; row++) {
       for (let col = 0; col < cols; col++) {
@@ -169,20 +186,9 @@ export function initAsciiArt(canvas: HTMLCanvasElement) {
     }
   };
 
-  const draw = (t: number) => {
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    if (mesh) return drawHero(t);
-    for (let row = 0; row < rows; row++) {
-      for (let col = 0; col < cols; col++) {
-        const glyph = charFor(cellLuminance(mask[row * cols + col]!, col, row, t, layout.field));
-        if (glyph !== " ") ctx.fillText(glyph, col * layout.cellW, row * layout.cellH);
-      }
-    }
-  };
-
   const loop = (now: number) => {
     raf = requestAnimationFrame(loop);
-    if (now - last < (hero?.classList.contains("is-held") ? HELD_FRAME_MS : FRAME_MS)) return;
+    if (now - last < (drag.held ? HELD_FRAME_MS : FRAME_MS)) return;
     last = now;
     draw(now / 1000);
   };
@@ -198,7 +204,7 @@ export function initAsciiArt(canvas: HTMLCanvasElement) {
   const resize = () => {
     const box = canvas.getBoundingClientRect();
     ({ width, height } = box);
-    // Level with the headline panel, because the canvas itself stops short of the hero's bottom edge.
+    // The hero's anchor sits level with the headline panel, because its canvas stops short of the hero's bottom edge.
     const panelBox = panel?.getBoundingClientRect();
     centerY = panelBox ? panelBox.top + panelBox.height / 2 - box.top : height / 2;
     cols = Math.ceil(width / layout.cellW);
@@ -214,13 +220,8 @@ export function initAsciiArt(canvas: HTMLCanvasElement) {
     ctx.font = `${layout.font} "IBM Plex Mono", monospace`;
     ctx.textBaseline = "top";
     ink = getComputedStyle(canvas).color;
-    ctx.fillStyle = ink;
-    if (mesh) {
-      lit = new Float32Array(cols * rows);
-      depth = new Float32Array(cols * rows);
-    } else {
-      mask = strokeMask(path, layout, width, height, cols, rows);
-    }
+    lit = new Float32Array(cols * rows);
+    depth = new Float32Array(cols * rows);
     sync();
   };
 

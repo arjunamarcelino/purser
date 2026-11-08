@@ -2,8 +2,9 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { RACE_REFUSED, RACE_RESERVED, RACE_SETTLED, budgetChart, capBar, dissolveFrame, gauge, raceFrame, railFrame, revealFrame, scrambleFrame } from "../src/ascii.ts";
-import { DRAG_GAIN, buildAnchorMesh, fieldClearance, renderAnchor, settleSpin } from "../src/anchor3d.ts";
-import { artNames, cellLuminance, charFor } from "../src/ascii-scene.ts";
+import { ART_TUBES, DRAG_GAIN, artScale, buildAnchorMesh, buildMesh, fieldClearance, renderMesh, settleSpin } from "../src/anchor3d.ts";
+import { ART_PATHS } from "../src/art3d.ts";
+import { TURN_LIMITS, artNames, cellLuminance, charFor } from "../src/ascii-scene.ts";
 
 const root = resolve(import.meta.dirname, "..");
 const read = (path: string) => readFileSync(resolve(root, path), "utf8");
@@ -112,7 +113,7 @@ describe("layout", () => {
 
   it("stops flexible canvases from growing their own tile", () => {
     expect(css).toMatch(/\.art-tall \{[^}]*contain: size/);
-    expect(css).toMatch(/\.art \{[^}]*height: 12rem/);
+    expect(css).toMatch(/\.art \{[^}]*height: 15rem/);
   });
 
   it("points every piece of art at a drawing that exists", () => {
@@ -179,10 +180,10 @@ describe("ascii scene", () => {
 
 describe("3d anchor", () => {
   const mesh = buildAnchorMesh();
-  const view = { width: 900, height: 640, cols: 100, rows: 40, cellW: 9, cellH: 16, centerX: 450, centerY: 320, shiftX: 0, shiftY: 0 };
+  const view = { width: 900, height: 640, cols: 100, rows: 40, cellW: 9, cellH: 16, centerX: 450, centerY: 320, shiftX: 0, shiftY: 0, scale: 153, ambient: 0.32 };
   const render = (yaw: number, pitch: number, v = view) => {
     const out = new Float32Array(v.cols * v.rows);
-    renderAnchor(mesh, yaw, pitch, v, out, new Float32Array(v.cols * v.rows));
+    renderMesh(mesh, yaw, pitch, v, out, new Float32Array(v.cols * v.rows));
     return out;
   };
   const inked = (frame: Float32Array) => frame.filter((v) => v > 0).length;
@@ -214,7 +215,8 @@ describe("3d anchor", () => {
     const hoverAcrossHero = 2 * 1.25;
     expect(DRAG_GAIN * 1400).toBeGreaterThan(hoverAcrossHero * 5);
     const motion = read("src/ascii-scene.ts");
-    expect(motion).toMatch(/calm\.matches \|\| .*closest\("\.hero-panel/);
+    expect(motion).toMatch(/calm\.matches \|\| !canGrab/);
+    expect(motion).toMatch(/closest\("\.hero-panel/);
   });
 
   it("keeps the background field off the anchor", () => {
@@ -261,6 +263,61 @@ describe("3d anchor", () => {
       return sum / n;
     };
     expect(centroid(right)).toBeGreaterThan(centroid(left));
+  });
+});
+
+describe("3d section art", () => {
+  const view = { width: 300, height: 240, cols: 60, rows: 27, cellW: 5, cellH: 9, centerX: 150, centerY: 120, shiftX: 0, shiftY: 0, scale: artScale(300, 240), ambient: 0.42 };
+  const render = (name: string, yaw: number, pitch: number) => {
+    const out = new Float32Array(view.cols * view.rows);
+    renderMesh(buildMesh(ART_PATHS[name]!, ART_TUBES), yaw, pitch, view, out, new Float32Array(view.cols * view.rows));
+    return out;
+  };
+
+  it("covers all eight section drawings", () => {
+    expect(Object.keys(ART_PATHS).sort()).toEqual(["balance", "callback", "chain", "config", "fingerprint", "hourglass", "key", "vault"]);
+  });
+
+  it.each(Object.keys(ART_PATHS))("%s draws clearly and stays inside its frame at every angle", (name) => {
+    for (const yaw of [0, 0.75, -0.75, 1.5]) {
+      for (const pitch of [-0.7, 0, 0.7]) {
+        const frame = render(name, yaw, pitch);
+        expect(frame.filter((v) => v > 0).length, `${name} ${yaw} ${pitch}`).toBeGreaterThan(25);
+        for (let i = 0; i < view.cols; i++) {
+          expect(frame[i], `${name} top edge`).toBe(0);
+          expect(frame[(view.rows - 1) * view.cols + i], `${name} bottom edge`).toBe(0);
+        }
+      }
+    }
+  });
+
+  it.each(Object.keys(ART_PATHS))("%s changes shape as it turns", (name) => {
+    expect([...render(name, 0, 0)]).not.toEqual([...render(name, 0.8, 0)]);
+  });
+
+  it("gives the depth drawings real depth, so they stay wide when turned edge-on", () => {
+    const wide = (frame: Float32Array) => {
+      const cols = new Set<number>();
+      frame.forEach((v, i) => v > 0 && cols.add(i % view.cols));
+      return cols.size;
+    };
+    const flat = wide(render("key", Math.PI / 2, 0));
+    expect(wide(render("vault", Math.PI / 2, 0))).toBeGreaterThan(flat);
+    expect(wide(render("hourglass", Math.PI / 2, 0))).toBeGreaterThan(flat * 2);
+  });
+
+  it("keeps every object well short of edge-on unless it is being dragged", () => {
+    for (const { sway, lean } of Object.values(TURN_LIMITS)) expect(sway + lean).toBeLessThan(1.15);
+  });
+
+  it.each(Object.keys(ART_PATHS))("%s is bold and solid at the angles it actually reaches", (name) => {
+    const { sway, lean } = TURN_LIMITS.art;
+    for (const yaw of [0, sway + lean, -(sway + lean)]) {
+      const frame = render(name, yaw, 0.15);
+      const ink = frame.filter((v) => v > 0).length;
+      expect(ink / frame.length, `${name} at ${yaw}`).toBeGreaterThan(0.08);
+      expect(Math.min(...frame.filter((v) => v > 0)), name).toBeGreaterThanOrEqual(0.41);
+    }
   });
 });
 
