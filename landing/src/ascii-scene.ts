@@ -93,10 +93,12 @@ export function initAsciiArt(canvas: HTMLCanvasElement) {
   let hovering = false;
   const pose = { ...STILL_POSE };
   const pointer = { x: 0, y: 0 };
-  const drag = { held: false, pointerId: -1, lastX: 0, lastY: 0, spin: 0, velocity: 0, tilt: 0 };
+  const drag = { held: false, pointerId: -1, lastX: 0, lastY: 0, lastMove: 0, spin: 0, velocity: 0, tilt: 0 };
 
   const release = (event: PointerEvent) => {
     if (event.pointerId !== drag.pointerId) return;
+    // Holding still before letting go means no fling, however fast the last movement was.
+    if (performance.now() - drag.lastMove > 100) drag.velocity = 0;
     drag.held = false;
     drag.pointerId = -1;
     root.classList.remove("is-held");
@@ -124,6 +126,7 @@ export function initAsciiArt(canvas: HTMLCanvasElement) {
       const dy = event.clientY - drag.lastY;
       drag.lastX = event.clientX;
       drag.lastY = event.clientY;
+      drag.lastMove = performance.now();
       drag.velocity = dx * DRAG_GAIN;
       drag.spin += drag.velocity;
       drag.tilt = Math.min(0.9, Math.max(-0.9, drag.tilt + dy * DRAG_GAIN * 0.5));
