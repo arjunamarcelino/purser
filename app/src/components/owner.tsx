@@ -172,7 +172,7 @@ export function OwnerPanel({ task, request, busy }: { task: string | null; reque
   const createReady = taskValid && capYocto !== null && crewValid;
 
   return (
-    <details className="panel owner-panel">
+    <details className="owner-panel">
       <summary>Owner tools</summary>
       <form
         onSubmit={(e) => {

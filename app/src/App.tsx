@@ -191,10 +191,10 @@ export function App() {
             ))}
           </select>
         </label>
-        <span className="label token">
+        <span className="label">
           token NEAR
         </span>
-        <span className={`net ${chainOk === false ? "tone-alarm" : ""}`}>{chainOk === false ? "NOT TESTNET: refusing to load" : chainOk === null ? "checking network…" : "NEAR testnet"}</span>
+        <span className={`net ${chainOk === false ? "tone-alarm" : "tone-dim"}`}>{chainOk === false ? "NOT TESTNET: refusing to load" : chainOk === null ? "checking network…" : "NEAR testnet"}</span>
         <div className="account">
           {wallet.accountId ? (
             <>
@@ -226,13 +226,14 @@ export function App() {
           {state.error && <p className="tone-warn">RPC: {state.error}. Retrying.</p>}
           {!snap && !state.missing && !state.error && boardNotice()}
         </div>
+        {/* The anchor stays mounted through a task switch: it doesn't depend on which task is showing. */}
+        <div className="lead band band-dark section">
+          {snap && <BudgetPanel task={snap.task} cap={BigInt(snap.budget.cap)} completed={BigInt(snap.budget.completed)} outstanding={BigInt(snap.budget.outstanding)} remaining={BigInt(snap.remaining)} money={money} />}
+          <AnchorArt />
+          {snap && <CrewPanel delegates={snap.delegates} personaOf={personaOf} roleOf={roleOf} isOwner={isOwner} busy={owner.busy} revoking={new Set(revoking.keys())} onRevoke={revoke} />}
+        </div>
         {snap && (
           <>
-            <div className="lead band band-dark section">
-              <BudgetPanel task={snap.task} cap={BigInt(snap.budget.cap)} completed={BigInt(snap.budget.completed)} outstanding={BigInt(snap.budget.outstanding)} remaining={BigInt(snap.remaining)} money={money} />
-              <AnchorArt />
-              <CrewPanel delegates={snap.delegates} personaOf={personaOf} roleOf={roleOf} isOwner={isOwner} busy={owner.busy} revoking={new Set(revoking.keys())} onRevoke={revoke} />
-            </div>
             <Dissolve dense="top" />
             <Manifest commitments={snap.commitments} records={state.records} personaOf={personaOf} delegateIds={delegateIds} now={now} money={money} />
             <Dissolve dense="bottom" />
@@ -252,7 +253,7 @@ export function App() {
         <div ref={setConsoleSlot} className="console-slot band band-dark" />
       </main>
 
-      <div className="statusbar band-dark">
+      <div className="statusbar">
         <InvariantLine
           health={health}
           completed={snap ? BigInt(snap.invariant.completed) : null}

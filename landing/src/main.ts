@@ -1,9 +1,9 @@
 import "@fontsource/ibm-plex-mono/400.css";
 import "@fontsource/ibm-plex-mono/500.css";
 import "@fontsource/ibm-plex-mono/600.css";
-import "./theme.css";
+import "@purser/ascii/theme.css";
 import "./styles.css";
-import { initAsciiArt } from "./ascii-scene.ts";
+import { initAsciiArt } from "@purser/ascii/ascii-scene.ts";
 import { initMotion } from "./motion.ts";
 
 // Waits for the font so the glyphs measure and draw as IBM Plex Mono from the first frame.

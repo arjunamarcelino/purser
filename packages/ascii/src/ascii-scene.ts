@@ -11,6 +11,8 @@ const FIELD_INK = "rgb(255 255 255 / 0.2)";
 const STILL_POSE = { yaw: 0.55, pitch: -0.14 };
 const IDLE_RATE = { hero: 0.5, art: 0.3 };
 const HOVER_RATE = 1.15;
+// The compact anchor goes still this long after the last touch: it sits on a page people leave open for hours.
+const REST_AFTER_MS = 45_000;
 
 // How far an object may turn by itself and on hover. Together they stay well short of edge-on (1.57), where shapes vanish.
 export const TURN_LIMITS = { hero: { sway: 0.5, lean: 0.6 }, art: { sway: 0.4, lean: 0.45 } };
@@ -94,6 +96,8 @@ export function initAsciiArt(canvas: HTMLCanvasElement) {
   let phase = seedPhase(name);
   let clock = 0;
   let hovering = false;
+  let lastTouched = performance.now();
+  let resting = false;
   const pose = { ...STILL_POSE };
   const pointer = { x: 0, y: 0 };
   const drag = { held: false, pointerId: -1, lastX: 0, lastY: 0, lastMove: 0, spin: 0, velocity: 0, tilt: 0 };
@@ -219,6 +223,10 @@ export function initAsciiArt(canvas: HTMLCanvasElement) {
   };
 
   const loop = (now: number) => {
+    if (compact && !drag.held && now - lastTouched > REST_AFTER_MS) {
+      resting = true;
+      return;
+    }
     raf = requestAnimationFrame(loop);
     if (now - last < (drag.held ? HELD_FRAME_MS : FRAME_MS)) return;
     last = now;
@@ -262,12 +270,21 @@ export function initAsciiArt(canvas: HTMLCanvasElement) {
   const resizes = new ResizeObserver(resize);
   resizes.observe(canvas);
   if (panel) resizes.observe(panel);
-  const seen = new IntersectionObserver(([entry]) => {
-    visible = entry?.isIntersecting ?? false;
+  const seen = new IntersectionObserver((entries) => {
+    visible = entries.at(-1)?.isIntersecting ?? false;
     sync();
   });
   seen.observe(canvas);
   calm.addEventListener("change", sync, until);
+  if (compact) {
+    const wake = () => {
+      lastTouched = performance.now();
+      if (!resting) return;
+      resting = false;
+      sync();
+    };
+    for (const type of ["pointermove", "pointerdown", "keydown", "scroll"]) window.addEventListener(type, wake, { ...until, passive: true });
+  }
   return () => {
     cancelAnimationFrame(raf);
     resizes.disconnect();

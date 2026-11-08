@@ -1,0 +1,13 @@
+{
+  "name": "@purser/ascii",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "The black and white theme and the ASCII drawing code shared by the landing page and the operator board.",
+  "exports": {
+    "./*": "./src/*"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json"
+  }
+}

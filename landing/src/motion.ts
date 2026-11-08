@@ -2,7 +2,7 @@
 
 import gsap from "gsap";
 import { ScrollTrigger } from "gsap/ScrollTrigger";
-import { RACE_REFUSED, RACE_RESERVED, RACE_SETTLED, budgetChart, capBar, dissolveFrame, gauge, raceFrame, raceRemaining, railFrame, revealFrame, scrambleFrame } from "./ascii.ts";
+import { RACE_REFUSED, RACE_RESERVED, RACE_SETTLED, budgetChart, canvasFont, capBar, dissolveFrame, fitColumns, gauge, raceFrame, raceRemaining, railFrame, revealFrame, scrambleFrame } from "@purser/ascii/ascii.ts";
 
 gsap.registerPlugin(ScrollTrigger);
 
@@ -23,9 +23,9 @@ function columnsOf(el: HTMLElement): number {
   const known = measuredColumns.get(el);
   if (known !== undefined) return known;
   const css = getComputedStyle(el);
-  probe.font = css.font;
+  probe.font = canvasFont(css);
   const inner = el.clientWidth - parseFloat(css.paddingLeft) - parseFloat(css.paddingRight);
-  const columns = Math.max(20, Math.floor(inner / probe.measureText("0").width));
+  const columns = fitColumns(inner, probe.measureText("0").width, 20);
   measuredColumns.set(el, columns);
   columnWatcher.observe(el);
   return columns;
@@ -83,7 +83,10 @@ function decodeLayer(el: HTMLElement): HTMLElement {
   layer.setAttribute("aria-hidden", "true");
   layer.className = el.classList.contains("bracket") ? "decode-layer bracket" : "decode-layer";
   Object.assign(layer.style, {
-    font: css.font,
+    fontFamily: css.fontFamily,
+    fontSize: css.fontSize,
+    fontWeight: css.fontWeight,
+    lineHeight: css.lineHeight,
     letterSpacing: css.letterSpacing,
     textTransform: css.textTransform,
     textWrap: css.getPropertyValue("text-wrap"),

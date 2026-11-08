@@ -5,7 +5,6 @@ import type { CachedCommitment } from "../data/cache.ts";
 import { type AmountDisplay, formatTime, nearDisplay, safeText, shortHash } from "../lib/format.ts";
 import { type LineHealth, groupOf, refusalBadge, stateBadge } from "../lib/semantics.ts";
 import { useReducedMotion } from "../lib/useReducedMotion.ts";
-import { gauge } from "../../../landing/src/ascii.ts";
 import { Heading, budgetBar, useColumns } from "./ascii.tsx";
 import { Badge } from "./Badge.tsx";
 import { Icon } from "./Icon.tsx";
@@ -53,7 +52,7 @@ export function BudgetPanel({ task, cap, completed, outstanding, remaining, mone
   const meter = useRef<HTMLDivElement>(null);
   const columns = useColumns(meter);
   return (
-    <section className="panel budget" aria-labelledby="budget-h">
+    <section className="budget" aria-labelledby="budget-h">
       <Heading id="budget-h">Budget</Heading>
       <div className="label">Remaining</div>
       <div className="display" aria-label={`${money.fmt(remaining)} of ${money.fmt(cap)} ${money.unit} remaining`}>
@@ -91,7 +90,7 @@ export function CrewPanel({
   onRevoke: (d: Delegate) => void;
 }) {
   return (
-    <section className="panel crew" aria-labelledby="crew-h">
+    <section className="crew" aria-labelledby="crew-h">
       <Heading id="crew-h">
         Crew <span className="dim">(delegates)</span>
       </Heading>
@@ -210,7 +209,7 @@ export function Manifest({ commitments, records, personaOf, delegateIds, now, mo
               <span className="amt">{r.amount}</span>
               <span className="who">
                 {r.who} <span aria-hidden="true">-&gt;</span>
-                <span className="sr-only">to</span> <span>{r.to}</span>
+                <span className="sr-only">to</span> {r.to}
               </span>
               <span className="mbadge">
                 <Badge badge={r.badge} />
@@ -239,7 +238,7 @@ export function Manifest({ commitments, records, personaOf, delegateIds, now, mo
   );
 
   return (
-    <section className="panel manifest band band-light section" aria-labelledby="manifest-h">
+    <section className="band band-light section" aria-labelledby="manifest-h">
       <Heading id="manifest-h">Manifest</Heading>
       {section("holds-h", "Holds (pending)", groups.holds, "No holds: nothing awaiting proof.", "Reserved budget stays held until there is proof of the outcome.")}
       {section("pay-h", "Payments (completed)", groups.payments, "No completed payments yet.")}
@@ -263,10 +262,10 @@ export function InvariantLine({ health, completed, outstanding, cap, money = nea
       </span>
       {read && (
         <span className="gauge" aria-hidden="true">
-          {gauge(pct, 100, 12)}
+          {budgetBar(completed, outstanding, cap, 12)}
         </span>
       )}
-      <span className="health" aria-hidden="true">
+      <span className="badge" aria-hidden="true">
         <Icon name={health.icon} /> {health.label}
       </span>
     </div>
@@ -277,8 +276,10 @@ export function InvariantLine({ health, completed, outstanding, cap, money = nea
 // Computed after commit, so StrictMode's double render can't swallow or repeat it.
 function useFreshKeys(keys: string[]): ReadonlySet<string> {
   const prev = useRef<Set<string> | null>(null);
+  const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const [fresh, setFresh] = useState<ReadonlySet<string>>(new Set());
   const signature = keys.join("|");
+  useEffect(() => () => clearTimeout(timer.current), []);
   useEffect(() => {
     const now = new Set(signature ? signature.split("|") : []);
     const before = prev.current;
@@ -287,8 +288,9 @@ function useFreshKeys(keys: string[]): ReadonlySet<string> {
     const added = new Set([...now].filter((k) => !before.has(k)));
     if (added.size === 0) return;
     setFresh(added);
-    const t = setTimeout(() => setFresh(new Set()), 1500);
-    return () => clearTimeout(t);
+    // Kept in a ref: a later change that only removes rows must not cancel this.
+    clearTimeout(timer.current);
+    timer.current = setTimeout(() => setFresh(new Set()), 1500);
   }, [signature]);
   return fresh;
 }
@@ -313,7 +315,7 @@ export function CachedHistory({
   money?: AmountDisplay;
 }) {
   return (
-    <section className={`panel cached-history band band-dark section ${offline ? "offline" : ""}`} aria-labelledby="cache-h">
+    <section className={`cached-history band band-dark section ${offline ? "offline" : ""}`} aria-labelledby="cache-h">
       <Heading id="cache-h">
         On-chain history <span className="dim">(cached)</span>
       </Heading>
@@ -333,7 +335,7 @@ export function CachedHistory({
                   <span className="amt">{money.fmt(r.actualSpent ?? r.reservedAmount)}</span>
                   <span className="who">
                     {personaOf(r.delegate)} <span aria-hidden="true">-&gt;</span>
-                    <span className="sr-only">to</span> <span>{r.recipient}</span>
+                    <span className="sr-only">to</span> {r.recipient}
                   </span>
                   <span className="mbadge">
                     <span className="dim small">{ahead ? `${r.state} (ahead of board)` : r.state}</span>

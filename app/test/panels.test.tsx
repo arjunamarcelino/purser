@@ -83,6 +83,13 @@ describe("budgetBar", () => {
     expect(budgetBar(60n, 30n, 100n, 10)).toBe("[######===.]");
     expect(budgetBar(0n, 0n, 100n, 10)).toBe("[..........]");
   });
+  it("shows no free cell when nothing is left, however the amounts round", () => {
+    expect(budgetBar(15n, 85n, 100n, 10)).toBe("[#=========]");
+    expect(budgetBar(33n, 67n, 100n, 10)).toBe("[###=======]");
+  });
+  it("keeps a free cell while some budget is left", () => {
+    expect(budgetBar(1n, 995n, 1000n, 10)).toBe("[#========.]");
+  });
   it("never hides a small hold, and never runs past the bar", () => {
     expect(budgetBar(0n, 1n, 1000n, 10)).toBe("[=.........]");
     expect(budgetBar(100n, 100n, 100n, 10)).toBe("[##########]");

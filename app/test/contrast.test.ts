@@ -1,11 +1,11 @@
-// AA contrast for every text/background pair and every control border, on both bands, read
-// straight from the landing page's theme.css (the board shares it) so the test and the stylesheet cannot drift.
+// AA contrast for the pairs only the board paints, on both bands, read straight from the shared theme.css so the
+// test and the stylesheet cannot drift. Text on each band's surfaces is covered by landing/test/page.test.ts.
 
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
-const css = readFileSync(resolve(import.meta.dirname, "../../landing/src/theme.css"), "utf8");
+const css = readFileSync(resolve(import.meta.dirname, "../../packages/ascii/src/theme.css"), "utf8");
 
 function block(selector: string): Record<string, string> {
   const start = css.indexOf(selector);
@@ -23,16 +23,10 @@ const ratio = (a: string, b: string) => {
 };
 
 const bands = { black: block(".band-dark"), white: block(".band-light") };
-const TEXT = ["text", "text-dim", "accent", "ok", "warn", "alarm", "link"];
-const SURFACES = ["bg", "surface"];
 
 describe.each(Object.entries(bands))("%s band", (_name, t) => {
-  it.each(TEXT.flatMap((fg) => SURFACES.map((bg) => [fg, bg] as const)))("%s on %s ≥ 4.5:1 (AA text)", (fg, bg) => {
-    expect(ratio(t[fg]!, t[bg]!)).toBeGreaterThanOrEqual(4.5);
-  });
-
-  it.each(SURFACES)("control border on %s ≥ 3:1 (AA non-text)", (bg) => {
-    expect(ratio(t["border-strong"]!, t[bg]!)).toBeGreaterThanOrEqual(3);
+  it("control border on --bg ≥ 3:1 (AA non-text)", () => {
+    expect(ratio(t["border-strong"]!, t.bg!)).toBeGreaterThanOrEqual(3);
   });
 
   it("text on inverted hover states (--bg on --text, --warn, --link) ≥ 4.5:1", () => {

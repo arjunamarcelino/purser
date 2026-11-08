@@ -28,13 +28,13 @@ function Lane({ name, lane, saw, running }: { name: string; lane: BaselineLane |
       <h2 className="label">{name}</h2>
       <ol>
         <li>
-          Reads the shared balance: <span>{lane ? `sees ${saw} left` : pending}</span>
+          Reads the shared balance: {lane ? `sees ${saw} left` : pending}
         </li>
         <li>
-          Checks {EACH_UNITS} &lt;= what it saw: <span>{lane ? "OK" : pending}</span>
+          Checks {EACH_UNITS} &lt;= what it saw: {lane ? "OK" : pending}
         </li>
         <li>
-          Spends {EACH_UNITS}: <span>{lane ? `sent to ${lane.to}` : pending}</span>
+          Spends {EACH_UNITS}: {lane ? `sent to ${lane.to}` : pending}
         </li>
       </ol>
       {lane && (

@@ -1,7 +1,7 @@
 import "@fontsource/ibm-plex-mono/400.css";
 import "@fontsource/ibm-plex-mono/500.css";
 import "@fontsource/ibm-plex-mono/600.css";
-import "../../landing/src/theme.css";
+import "@purser/ascii/theme.css";
 import "./styles/app.css";
 import { StrictMode, Suspense, lazy } from "react";
 import { createRoot } from "react-dom/client";

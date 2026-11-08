@@ -1,37 +1,48 @@
-// The landing page's ASCII pieces, for a page React owns: live data moves the layout, so nothing here is tied to scroll position.
+// The shared ASCII pieces, for a page React owns: live data moves the layout, so nothing here is tied to scroll position.
 
-import gsap from "gsap";
-import { type ReactNode, type RefObject, useEffect, useRef, useState } from "react";
-import { initAsciiArt } from "../../../landing/src/ascii-scene.ts";
-import { dissolveFrame, scrambleFrame } from "../../../landing/src/ascii.ts";
+import { type ReactNode, type RefObject, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { initAsciiArt } from "@purser/ascii/ascii-scene.ts";
+import { canvasFont, dissolveFrame, fitColumns, scrambleFrame } from "@purser/ascii/ascii.ts";
 import { useReducedMotion } from "../lib/useReducedMotion.ts";
 
-/** A text bar: # completed, = held, . still free. Any nonzero amount shows at least one cell. */
+const DECODE_MS = 700;
+// Per page load, so switching tasks doesn't scramble headings that have already played.
+const decoded = new Set<string>();
+
+/** A text bar: # completed, = held, . still free. Any nonzero amount shows at least one cell, and full means no free cell. */
 export function budgetBar(completed: bigint, outstanding: bigint, cap: bigint, cells: number): string {
   const share = (v: bigint) => (cap > 0n && v > 0n ? Math.max(1, Number((v * BigInt(cells)) / cap)) : 0);
+  const used = completed + outstanding;
+  const usedEnd = used >= cap ? cells : share(used);
   const done = Math.min(cells, share(completed));
-  const held = Math.min(cells - done, share(outstanding));
+  const held = outstanding > 0n ? Math.min(cells - done, Math.max(1, usedEnd - done)) : 0;
   return `[${"#".repeat(done)}${"=".repeat(held)}${".".repeat(cells - done - held)}]`;
 }
 
 /** How many whole characters fit across an element, kept current as it resizes. */
 export function useColumns(ref: RefObject<HTMLElement | null>, fallback = 40): number {
   const [columns, setColumns] = useState(fallback);
-  useEffect(() => {
+  useLayoutEffect(() => {
     const el = ref.current;
-    if (!el || typeof ResizeObserver === "undefined") return;
+    if (!el) return;
+    let live = true;
     const probe = document.createElement("canvas").getContext("2d")!;
     const measure = () => {
+      if (!live) return;
       const css = getComputedStyle(el);
-      probe.font = css.font;
+      probe.font = canvasFont(css);
       const inner = el.clientWidth - parseFloat(css.paddingLeft) - parseFloat(css.paddingRight);
-      setColumns(Math.max(12, Math.floor(inner / probe.measureText("0").width)));
+      setColumns(fitColumns(inner, probe.measureText("0").width, 12));
     };
+    measure();
     const observer = new ResizeObserver(measure);
     observer.observe(el);
     // The font swap changes character width without resizing the element.
     void document.fonts.ready.then(measure);
-    return () => observer.disconnect();
+    return () => {
+      live = false;
+      observer.disconnect();
+    };
   }, [ref]);
   return columns;
 }
@@ -49,29 +60,38 @@ export function Dissolve({ dense }: { dense: "top" | "bottom" }) {
 
 // The noise runs on an aria-hidden copy over the heading, so the heading's real text never changes.
 function decode(el: HTMLElement) {
-  const original = el.textContent ?? "";
   const css = getComputedStyle(el);
   const layer = document.createElement("div");
   layer.setAttribute("aria-hidden", "true");
   layer.className = "decode-layer";
-  Object.assign(layer.style, { font: css.font, letterSpacing: css.letterSpacing, textTransform: css.textTransform, left: `${el.offsetLeft}px`, top: `${el.offsetTop}px`, width: `${el.offsetWidth}px` });
+  layer.append(...[...el.childNodes].map((node) => node.cloneNode(true)));
+  Object.assign(layer.style, { fontFamily: css.fontFamily, fontSize: css.fontSize, fontWeight: css.fontWeight, lineHeight: css.lineHeight, letterSpacing: css.letterSpacing, textTransform: css.textTransform, left: `${el.offsetLeft}px`, top: `${el.offsetTop}px`, width: `${el.offsetWidth}px` });
+  // Each text node scrambles on its own, so a smaller "(cached)" stays smaller.
+  const nodes: Text[] = [];
+  const walker = document.createTreeWalker(layer, NodeFilter.SHOW_TEXT);
+  while (walker.nextNode()) nodes.push(walker.currentNode as Text);
+  const originals = nodes.map((node) => node.data);
+  const paint = (p: number) =>
+    nodes.forEach((node, i) => {
+      node.data = scrambleFrame(originals[i]!, p);
+    });
+  paint(0);
   el.after(layer);
   el.classList.add("decoding");
-  const state = { p: 0 };
+  let raf = 0;
   const finish = () => {
-    tween.kill();
+    cancelAnimationFrame(raf);
     layer.remove();
     el.classList.remove("decoding");
   };
-  const tween = gsap.to(state, {
-    p: 1,
-    duration: 0.7,
-    ease: "none",
-    onUpdate: () => {
-      layer.textContent = scrambleFrame(original, state.p);
-    },
-    onComplete: finish,
-  });
+  const start = performance.now();
+  const step = (now: number) => {
+    const p = Math.min(1, Math.max(0, (now - start) / DECODE_MS));
+    paint(p);
+    if (p < 1) raf = requestAnimationFrame(step);
+    else finish();
+  };
+  raf = requestAnimationFrame(step);
   return finish;
 }
 
@@ -81,11 +101,12 @@ export function Heading({ id, children }: { id: string; children: ReactNode }) {
   const reduced = useReducedMotion();
   useEffect(() => {
     const el = ref.current;
-    if (!el || reduced || typeof IntersectionObserver === "undefined") return;
+    if (!el || reduced || decoded.has(id) || typeof IntersectionObserver === "undefined") return;
     let stop = () => {};
-    const seen = new IntersectionObserver(([entry]) => {
-      if (!entry?.isIntersecting) return;
+    const seen = new IntersectionObserver((entries) => {
+      if (!entries.some((entry) => entry.isIntersecting)) return;
       seen.disconnect();
+      decoded.add(id);
       stop = decode(el);
     });
     seen.observe(el);
@@ -93,7 +114,7 @@ export function Heading({ id, children }: { id: string; children: ReactNode }) {
       seen.disconnect();
       stop();
     };
-  }, [reduced]);
+  }, [id, reduced]);
   return (
     <div className="heading">
       <div className="rule-mark" aria-hidden="true">
@@ -108,12 +129,12 @@ export function Heading({ id, children }: { id: string; children: ReactNode }) {
   );
 }
 
-/** The landing page's 3D anchor: sways by itself, follows the pointer, spins when dragged, and stops off screen. */
+/** The landing page's 3D anchor: sways by itself, follows the pointer, spins when dragged, and rests when left alone. */
 export function AnchorArt() {
   const ref = useRef<HTMLCanvasElement>(null);
   useEffect(() => {
     const canvas = ref.current;
-    if (!canvas || typeof IntersectionObserver === "undefined") return;
+    if (!canvas) return;
     let live = true;
     let stop: (() => void) | undefined;
     // Waits for the font so the glyph atlas is drawn in IBM Plex Mono from the first frame.

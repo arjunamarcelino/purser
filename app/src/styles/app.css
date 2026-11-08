@@ -1,14 +1,4 @@
-*,
-*::before,
-*::after {
-  box-sizing: border-box;
-}
-
 :root {
-  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
-  --gutter: clamp(1.25rem, 4vw, 3rem);
-  --page: min(1240px, 100% - 2 * var(--gutter));
-  --rule: 1px dashed var(--border-strong);
   --size-display: clamp(3.25rem, 7vw, 5.5rem); /* the Remaining numeral: the largest thing on the board */
   --size-lg: 1.25rem;
   --size-md: 0.9375rem;
@@ -61,10 +51,6 @@ a:hover {
   background: var(--link);
   color: var(--bg);
 }
-:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 3px;
-}
 p {
   margin: 0;
 }
@@ -89,28 +75,8 @@ p {
   display: flex;
   flex-direction: column;
 }
-.band {
-  padding-inline: calc((100% - var(--page)) / 2);
-}
 .section {
   padding-block: clamp(2.25rem, 4vw, 3.5rem);
-}
-.panel {
-  min-width: 0;
-  margin: 0;
-}
-.skip {
-  position: absolute;
-  left: 1rem;
-  top: -4rem;
-  z-index: 30;
-  padding: 0.6rem 1rem;
-  background: #fff;
-  color: #000;
-  transition: transform 150ms ease-out;
-}
-.skip:focus {
-  transform: translateY(5rem);
 }
 
 .topbar {
@@ -167,7 +133,6 @@ input[aria-invalid="true"] {
   border-color: var(--warn);
 }
 .net {
-  color: var(--text-dim);
   font-size: var(--size-xs);
   text-transform: uppercase;
 }
@@ -202,12 +167,6 @@ input[aria-invalid="true"] {
   white-space: nowrap;
   cursor: pointer;
   transition: background-color 120ms ease-out, color 120ms ease-out, transform 120ms var(--ease-out);
-}
-.btn::before {
-  content: "[\00a0";
-}
-.btn::after {
-  content: "\00a0]";
 }
 .btn:hover:not(:disabled) {
   background: var(--text);
@@ -291,9 +250,6 @@ main {
   content: "----------------------------------------------------------------------------------------------------";
   white-space: nowrap;
 }
-.rule-mark i:first-child {
-  flex: 0 0 2.5em;
-}
 h2 {
   margin: 0;
   font-size: clamp(1.25rem, 2.2vw, 1.75rem);
@@ -302,23 +258,14 @@ h2 {
   line-height: 1.15;
   text-transform: uppercase;
 }
-h2 .dim {
+h2 .dim,
+.decode-layer .dim {
   font-size: 0.6em;
   font-weight: 400;
   letter-spacing: 0.02em;
 }
-.decoding {
-  color: transparent;
-}
 .decoding .dim {
   color: transparent;
-}
-.decode-layer {
-  position: absolute;
-  margin: 0;
-  color: var(--text);
-  line-height: inherit;
-  pointer-events: none;
 }
 .dissolve {
   display: block;
@@ -344,6 +291,11 @@ h2 .dim {
   cursor: grab;
   touch-action: pan-y;
 }
+/* Pinned to its column, so it stays put while the panels either side are waiting for data. */
+.lead .art {
+  grid-column: 2;
+  grid-row: 1;
+}
 .art.is-held {
   cursor: grabbing;
 }
@@ -360,6 +312,7 @@ h2 .dim {
 }
 .meter {
   margin: 1rem 0 0.5rem;
+  overflow: hidden;
   line-height: 1.25;
   white-space: pre;
 }
@@ -396,6 +349,7 @@ h2 .dim {
 .chip-name {
   grid-area: name;
   font-weight: 600;
+  overflow-wrap: anywhere;
 }
 .chip.revoked .chip-name {
   color: var(--text-dim);
@@ -552,7 +506,6 @@ h2 .dim {
   align-self: center;
   width: min(920px, 100% - 24px);
   margin-block: 0.75rem;
-  background: transparent;
 }
 .invariant {
   position: relative;
@@ -571,13 +524,8 @@ h2 .dim {
   color: var(--text);
   font-size: var(--size-sm);
 }
-.invariant .health {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.4rem;
-  font-size: 0.8125rem;
-  font-weight: 600;
-  letter-spacing: 0.04em;
+.invariant .badge {
+  white-space: normal;
 }
 .status-row {
   display: flex;
@@ -775,7 +723,7 @@ h2 .dim {
   margin-top: 0.2rem;
 }
 
-/* The anchor gives up its column first; the five-column row stops fitting soon after. */
+/* The crew moves to its own row first; the five-column manifest row stops fitting at the same width. */
 @media (max-width: 1040px) {
   .tagline {
     display: none;
@@ -826,7 +774,9 @@ h2 .dim {
   .lead {
     grid-template-columns: minmax(0, 1fr);
   }
-  .art {
+  .lead .art {
+    grid-column: 1;
+    grid-row: auto;
     height: 11rem;
   }
   .mrow {

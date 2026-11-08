@@ -1,0 +1,104 @@
+/* The black and white bands shared by the landing page and the board. Each band sets the tokens for what's inside it. */
+
+:root {
+  --font-mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+}
+
+:root[data-theme="dark"],
+.band-dark {
+  color-scheme: dark;
+  --bg: #000000;
+  --surface: #0b0b0b;
+  --border-strong: #707070;
+  --text: #ffffff;
+  --text-dim: #c0c0c0;
+  --accent: #ffffff;
+  --link: #ffffff;
+  --ok: #3fb68b;
+  --warn: #f08a24;
+  --alarm: #f06b62;
+}
+
+.band-light {
+  color-scheme: light;
+  --bg: #ffffff;
+  --surface: #f2f2f2;
+  --border-strong: #6f6f6f;
+  --text: #000000;
+  --text-dim: #4d4d4d;
+  --accent: #000000;
+  --link: #000000;
+  --ok: #17714f;
+  --warn: #a84c06;
+  --alarm: #b42318;
+}
+
+.band-dark,
+.band-light {
+  background: var(--bg);
+  color: var(--text);
+}
+
+/* Declared per band: a value set only on :root would keep the black band's border color inside the white bands. */
+:root[data-theme="dark"],
+.band-dark,
+.band-light {
+  --rule: 1px dashed var(--border-strong);
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+:root {
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --page: min(1240px, 100% - 2 * var(--gutter));
+  --gutter: clamp(1.25rem, 4vw, 3rem);
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+
+.band {
+  padding-inline: calc((100% - var(--page)) / 2);
+}
+
+.skip {
+  position: absolute;
+  left: 1rem;
+  top: -4rem;
+  z-index: 30;
+  padding: 0.6rem 1rem;
+  background: #fff;
+  color: #000;
+  transition: transform 150ms ease-out;
+}
+.skip:focus {
+  transform: translateY(5rem);
+}
+
+.btn::before {
+  content: "[\00a0";
+}
+.btn::after {
+  content: "\00a0]";
+}
+
+.rule-mark i:first-child {
+  flex: 0 0 2.5em;
+}
+
+.decoding {
+  color: transparent;
+}
+.decode-layer {
+  position: absolute;
+  margin: 0;
+  color: var(--text);
+  line-height: inherit;
+  pointer-events: none;
+}
