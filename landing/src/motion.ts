@@ -320,11 +320,12 @@ export async function initMotion() {
   mm.add(
     {
       pinnable: "(min-width: 900px) and (min-height: 760px) and (prefers-reduced-motion: no-preference)",
+      cards: "(min-height: 560px) and (prefers-reduced-motion: no-preference)",
       motion: "(prefers-reduced-motion: no-preference)",
       reduce: "(prefers-reduced-motion: reduce)",
     },
     (context) => {
-      const { pinnable, motion, reduce } = context.conditions as { pinnable: boolean; motion: boolean; reduce: boolean };
+      const { pinnable, cards, motion, reduce } = context.conditions as { pinnable: boolean; cards: boolean; motion: boolean; reduce: boolean };
       const cleanups: ((() => void) | undefined)[] = [];
       if (motion) {
         cleanups.push(initHero(), ...initHeadings(), ...initDiagrams());
@@ -340,7 +341,7 @@ export async function initMotion() {
       }
       barFollowsPage(pinnable);
       if (stage) cleanups.push(pinnable ? pinnedRace(stage) : freeRace(stage, motion && !reduce));
-      if (motion) cleanups.push(initSaidCards());
+      if (cards) cleanups.push(initSaidCards());
       // Triggers were created out of page order, and each pin moves everything below it.
       ScrollTrigger.sort();
       ScrollTrigger.refresh();
