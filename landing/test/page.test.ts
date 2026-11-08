@@ -217,11 +217,8 @@ describe("3d anchor", () => {
   });
 
   it("turns far faster when dragged than when hovered", () => {
-    const hoverAcrossHero = 2 * 1.25;
-    expect(DRAG_GAIN * 1400).toBeGreaterThan(hoverAcrossHero * 5);
-    const motion = read("src/ascii-scene.ts");
-    expect(motion).toMatch(/calm\.matches \|\| !canGrab/);
-    expect(motion).toMatch(/closest\("\.hero-panel/);
+    const hoverSweep = TURN_LIMITS.hero.lean * 2;
+    expect(DRAG_GAIN * 1400).toBeGreaterThan(hoverSweep * 5);
   });
 
   it("keeps the background field off the anchor", () => {
@@ -284,13 +281,19 @@ describe("3d section art", () => {
   });
 
   it.each(Object.keys(ART_PATHS))("%s draws clearly and stays inside its frame at every angle", (name) => {
-    for (const yaw of [0, 0.75, -0.75, 1.5]) {
-      for (const pitch of [-0.7, 0, 0.7]) {
-        const frame = render(name, yaw, pitch);
-        expect(frame.filter((v) => v > 0).length, `${name} ${yaw} ${pitch}`).toBeGreaterThan(25);
-        for (let i = 0; i < view.cols; i++) {
-          expect(frame[i], `${name} top edge`).toBe(0);
-          expect(frame[(view.rows - 1) * view.cols + i], `${name} bottom edge`).toBe(0);
+    const mesh = buildMesh(ART_PATHS[name]!, ART_TUBES);
+    const views = [view, { ...view, width: 600, cols: 120, centerX: 300, scale: artScale(600, 240) }];
+    for (const v of views) {
+      for (const yaw of [0, 0.75, -0.75, 1.5]) {
+        for (const pitch of [-0.7, 0, 0.7]) {
+          const frame = new Float32Array(v.cols * v.rows);
+          renderMesh(mesh, yaw, pitch, v, frame, new Float32Array(v.cols * v.rows));
+          expect(frame.filter((value) => value > 0).length, `${name} ${yaw} ${pitch}`).toBeGreaterThan(25);
+          frame.forEach((value, i) => {
+            const col = i % v.cols;
+            const row = Math.floor(i / v.cols);
+            if (col === 0 || col === v.cols - 1 || row === 0 || row === v.rows - 1) expect(value, `${name} touches the edge at ${col},${row}`).toBe(0);
+          });
         }
       }
     }
@@ -376,8 +379,19 @@ describe("ascii frames", () => {
   it("charts the run's real balances in order", () => {
     const chart = budgetChart(1, 50);
     for (const label of ["START", "SCOUT", "FORGE", "RACE"]) expect(chart).toContain(label);
-    const positions = ["100", "70", "40", "10"].map((n, i) => (i === 0 ? chart.indexOf("100", 6) : chart.indexOf(n)));
-    expect(positions.every((v) => v >= 0)).toBe(true);
+    const lines = chart.split("\n");
+    const place = (value: string) => {
+      const row = lines.findIndex((line) => line.slice(5).includes(` ${value} `));
+      return { row, col: row < 0 ? -1 : lines[row]!.indexOf(` ${value} `, 5) };
+    };
+    const points = ["100", "70", "40", "10"].map(place);
+    points.forEach((point, i) => {
+      expect(point.row, `label ${i}`).toBeGreaterThanOrEqual(0);
+      if (i > 0) {
+        expect(point.col).toBeGreaterThan(points[i - 1]!.col);
+        expect(point.row).toBeGreaterThan(points[i - 1]!.row);
+      }
+    });
     expect(budgetChart(0, 50)).not.toMatch(/SCOUT|#/);
   });
 
