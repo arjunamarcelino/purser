@@ -161,7 +161,7 @@ describe("ascii scene", () => {
 
 describe("3d anchor", () => {
   const mesh = buildAnchorMesh();
-  const view = { width: 900, height: 640, cols: 100, rows: 40, cellW: 9, cellH: 16, centerX: 450, centerY: 320, shiftX: 0, shiftY: 0, scale: 153, ambient: 0.32 };
+  const view = { cols: 100, rows: 40, cellW: 9, cellH: 16, centerX: 450, centerY: 320, shiftX: 0, shiftY: 0, scale: 153, ambient: 0.32 };
   const render = (yaw: number, pitch: number, v = view) => {
     const out = new Float32Array(v.cols * v.rows);
     renderMesh(mesh, yaw, pitch, v, out, new Float32Array(v.cols * v.rows));
@@ -245,7 +245,7 @@ describe("3d anchor", () => {
 });
 
 describe("3d section art", () => {
-  const view = { width: 300, height: 240, cols: 60, rows: 27, cellW: 5, cellH: 9, centerX: 150, centerY: 120, shiftX: 0, shiftY: 0, scale: artScale(300, 240), ambient: 0.42 };
+  const view = { cols: 60, rows: 27, cellW: 5, cellH: 9, centerX: 150, centerY: 120, shiftX: 0, shiftY: 0, scale: artScale(300, 240), ambient: 0.42 };
   const render = (name: string, yaw: number, pitch: number) => {
     const out = new Float32Array(view.cols * view.rows);
     renderMesh(buildMesh(ART_PATHS[name]!, ART_TUBES), yaw, pitch, view, out, new Float32Array(view.cols * view.rows));
@@ -258,7 +258,7 @@ describe("3d section art", () => {
 
   it.each(Object.keys(ART_PATHS))("%s draws clearly and stays inside its frame at every angle", (name) => {
     const mesh = buildMesh(ART_PATHS[name]!, ART_TUBES);
-    const views = [view, { ...view, width: 600, cols: 120, centerX: 300, scale: artScale(600, 240) }];
+    const views = [view, { ...view, cols: 120, centerX: 300, scale: artScale(600, 240) }];
     for (const v of views) {
       for (const yaw of [0, 0.75, -0.75, 1.5]) {
         for (const pitch of [-0.7, 0, 0.7]) {

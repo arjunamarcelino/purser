@@ -7,8 +7,6 @@ export interface Mesh {
 }
 
 export interface MeshView {
-  width: number;
-  height: number;
   cols: number;
   rows: number;
   cellW: number;

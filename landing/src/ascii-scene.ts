@@ -166,8 +166,6 @@ export function initAsciiArt(canvas: HTMLCanvasElement) {
       pose.yaw,
       pose.pitch,
       {
-        width,
-        height,
         cols,
         rows,
         cellW: layout.cellW,
