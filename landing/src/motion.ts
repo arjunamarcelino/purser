@@ -257,17 +257,26 @@ function pinnedRace(stage: RaceStage) {
       onRefresh: (self) => show(self.progress),
     },
   });
-  gsap.set(steps.slice(1), { autoAlpha: 0 });
-  gsap.set(rows, { autoAlpha: 0 });
+  // Opacity only: unlike autoAlpha, it leaves the steps and rows readable by assistive tech before they fade in.
+  gsap.set(steps.slice(1), { opacity: 0 });
+  gsap.set(rows, { opacity: 0 });
   show(0);
-  tl.to(steps[0]!, { autoAlpha: 0, duration: 0.06 }, 0.3)
-    .to(steps[1]!, { autoAlpha: 1, duration: 0.06 }, 0.34)
-    .to(rows[0]!, { autoAlpha: 1, duration: 0.05 }, RACE_RESERVED)
-    .to(steps[1]!, { autoAlpha: 0, duration: 0.06 }, 0.58)
-    .to(steps[2]!, { autoAlpha: 1, duration: 0.06 }, RACE_REFUSED)
-    .to(rows.slice(1), { autoAlpha: 1, duration: 0.05, stagger: 0.04 }, RACE_REFUSED)
+  tl.to(steps[0]!, { opacity: 0, duration: 0.06 }, 0.3)
+    .to(steps[1]!, { opacity: 1, duration: 0.06 }, 0.34)
+    .to(rows[0]!, { opacity: 1, duration: 0.05 }, RACE_RESERVED)
+    .to(steps[1]!, { opacity: 0, duration: 0.06 }, 0.58)
+    .to(steps[2]!, { opacity: 1, duration: 0.06 }, RACE_REFUSED)
+    .to(rows.slice(1), { opacity: 1, duration: 0.05, stagger: 0.04 }, RACE_REFUSED)
     .to({}, { duration: 0.2 }, 0.8);
+  // A faded row's link can still take focus, so tabbing to one scrolls the race to where every row is visible.
+  const ledger = $<HTMLElement>(".rows");
+  const revealRows = () => {
+    const trigger = tl.scrollTrigger;
+    if (trigger) window.scrollTo({ top: trigger.end });
+  };
+  ledger?.addEventListener("focusin", revealRows);
   return () => {
+    ledger?.removeEventListener("focusin", revealRows);
     document.documentElement.classList.remove("js-pinned");
     text("[data-race-remaining]", 10);
     stage.draw(1);
