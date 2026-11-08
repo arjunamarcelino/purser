@@ -291,6 +291,12 @@ function freeRace(stage: RaceStage, autoplay: boolean) {
   };
 }
 
+// onRefresh matters on reload: ScrollTrigger restores progress silently, without calling onUpdate.
+function scrubbed(trigger: gsap.DOMTarget, start: string, end: string, draw: (p: number) => void) {
+  draw(0);
+  ScrollTrigger.create({ trigger, start, end, onUpdate: (self) => draw(self.progress), onRefresh: (self) => draw(self.progress) });
+}
+
 export async function initMotion() {
   await document.fonts.ready;
   const stageEl = $<HTMLElement>("[data-race-stage]");
@@ -314,14 +320,9 @@ export async function initMotion() {
       if (motion) {
         cleanups.push(initHero(), ...initHeadings(), ...initDiagrams());
         initNaiveCount();
-        ScrollTrigger.create({ trigger: ".how-grid", start: "top 70%", end: "bottom 70%", onUpdate: (self) => drawRail(self.progress) });
-        drawRail(0);
-        ScrollTrigger.create({ trigger: "[data-budget-chart]", start: "top 85%", end: "top 35%", onUpdate: (self) => drawChart(self.progress) });
-        drawChart(0);
-        for (const { el, draw } of dissolves) {
-          ScrollTrigger.create({ trigger: el, start: "top bottom", end: "top 45%", onUpdate: (self) => draw(self.progress) });
-          draw(0);
-        }
+        scrubbed(".how-grid", "top 70%", "bottom 70%", drawRail);
+        scrubbed("[data-budget-chart]", "top 85%", "top 35%", drawChart);
+        for (const { el, draw } of dissolves) scrubbed(el, "top bottom", "top 45%", draw);
       } else {
         naiveBar(120);
         drawRail(1);
