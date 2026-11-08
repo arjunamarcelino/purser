@@ -12,12 +12,23 @@ const text = (selector: string, value: number | string) => {
   if (el) el.textContent = String(value);
 };
 
+// Measured once per element, and only again after it resizes, so scrubbed frames never read layout.
+const probe = document.createElement("canvas").getContext("2d")!;
+const measuredColumns = new WeakMap<Element, number>();
+const columnWatcher = new ResizeObserver((entries) => {
+  for (const entry of entries) measuredColumns.delete(entry.target);
+});
+
 function columnsOf(el: HTMLElement): number {
+  const known = measuredColumns.get(el);
+  if (known !== undefined) return known;
   const css = getComputedStyle(el);
-  const probe = document.createElement("canvas").getContext("2d")!;
   probe.font = css.font;
   const inner = el.clientWidth - parseFloat(css.paddingLeft) - parseFloat(css.paddingRight);
-  return Math.max(20, Math.floor(inner / probe.measureText("0").width));
+  const columns = Math.max(20, Math.floor(inner / probe.measureText("0").width));
+  measuredColumns.set(el, columns);
+  columnWatcher.observe(el);
+  return columns;
 }
 
 function setBar(completed: number, outstanding: number) {
