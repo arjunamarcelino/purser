@@ -24,7 +24,7 @@ export interface MeshView {
 export type Vec = [number, number, number];
 export type MeshPath = Vec[];
 
-interface TubeOptions {
+export interface TubeOptions {
   radius: number;
   step: number;
   sides: number;
@@ -32,26 +32,6 @@ interface TubeOptions {
 }
 
 const CAMERA = 4;
-const ANCHOR_TUBES: TubeOptions = { radius: 0.095, step: 0.012, sides: 20, normalize: false };
-export const ART_TUBES: TubeOptions = { radius: 0.11, step: 0.018, sides: 14, normalize: true };
-
-const line = (a: Vec, b: Vec): MeshPath => [a, b];
-const arc = (cx: number, cy: number, radius: number, from: number, to: number, segments = 48): MeshPath =>
-  Array.from({ length: segments + 1 }, (_, i) => {
-    const angle = from + ((to - from) * i) / segments;
-    return [cx + Math.cos(angle) * radius, cy + Math.sin(angle) * radius, 0];
-  });
-
-const ANCHOR_PATHS: MeshPath[] = [
-  arc(0, 0.82, 0.17, 0, Math.PI * 2),
-  line([0, 0.65, 0], [0, -0.96, 0]),
-  line([-0.42, 0.36, 0], [0.42, 0.36, 0]),
-  arc(0, -0.14, 0.82, (-172 * Math.PI) / 180, (-8 * Math.PI) / 180),
-  line([-0.81, -0.25, 0], [-0.62, -0.06, 0]),
-  line([-0.81, -0.25, 0], [-0.98, -0.02, 0]),
-  line([0.81, -0.25, 0], [0.62, -0.06, 0]),
-  line([0.81, -0.25, 0], [0.98, -0.02, 0]),
-];
 
 const sub = (a: Vec, b: Vec): Vec => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
 const cross = (a: Vec, b: Vec): Vec => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
@@ -94,8 +74,6 @@ export function buildMesh(paths: MeshPath[], { radius, step, sides, normalize }:
   }
   return { positions: Float32Array.from(positions), normals: Float32Array.from(normals), count: positions.length / 3 };
 }
-
-export const buildAnchorMesh = () => buildMesh(ANCHOR_PATHS, ANCHOR_TUBES);
 
 export const DRAG_GAIN = 0.01;
 

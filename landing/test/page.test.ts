@@ -2,8 +2,8 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { RACE_REFUSED, RACE_RESERVED, RACE_SETTLED, budgetChart, capBar, dissolveFrame, gauge, raceFrame, raceRemaining, railFrame, revealFrame, scrambleFrame } from "../src/ascii.ts";
-import { ART_TUBES, DRAG_GAIN, artScale, buildAnchorMesh, buildMesh, fieldClearance, renderMesh, settleSpin } from "../src/anchor3d.ts";
-import { ART_PATHS } from "../src/art3d.ts";
+import { DRAG_GAIN, artScale, buildMesh, fieldClearance, renderMesh, settleSpin } from "../src/mesh3d.ts";
+import { ART_PATHS, ART_TUBES, buildAnchorMesh } from "../src/art3d.ts";
 import { TURN_LIMITS, artNames, cellLuminance, charFor } from "../src/ascii-scene.ts";
 
 const root = resolve(import.meta.dirname, "..");

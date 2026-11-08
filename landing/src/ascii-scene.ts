@@ -1,7 +1,7 @@
 // Every drawing on the page is a lit 3D object rendered as ASCII: it sways by itself, speeds up on hover, spins when dragged.
 
-import { ART_TUBES, DRAG_GAIN, type Mesh, anchorScale, artScale, buildAnchorMesh, buildMesh, fieldClearance, renderMesh, settleSpin } from "./anchor3d.ts";
-import { ART_PATHS } from "./art3d.ts";
+import { DRAG_GAIN, type Mesh, anchorScale, artScale, buildMesh, fieldClearance, renderMesh, settleSpin } from "./mesh3d.ts";
+import { ART_PATHS, ART_TUBES, buildAnchorMesh } from "./art3d.ts";
 
 export const RAMP = " .:-=+*#%@";
 
