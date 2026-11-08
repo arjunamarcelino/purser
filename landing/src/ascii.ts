@@ -94,6 +94,9 @@ export const RACE_RESERVED = 0.38;
 export const RACE_REFUSED = 0.62;
 export const RACE_SETTLED = 0.72;
 
+// The budget beside the race at any point in it: a pure function of progress, so a restored scroll can't misreport it.
+export const raceRemaining = (p: number) => Math.round(40 - 30 * clamp((p - RACE_RESERVED) / 0.1));
+
 export function raceFrame(p: number, cols: number): StageRow[] {
   const width = Math.max(30, Math.min(72, cols));
   const gutter = 2;

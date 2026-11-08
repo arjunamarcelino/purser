@@ -2,7 +2,7 @@
 
 import gsap from "gsap";
 import { ScrollTrigger } from "gsap/ScrollTrigger";
-import { RACE_REFUSED, RACE_RESERVED, RACE_SETTLED, budgetChart, capBar, dissolveFrame, gauge, raceFrame, railFrame, revealFrame, scrambleFrame } from "./ascii.ts";
+import { RACE_REFUSED, RACE_RESERVED, RACE_SETTLED, budgetChart, capBar, dissolveFrame, gauge, raceFrame, raceRemaining, railFrame, revealFrame, scrambleFrame } from "./ascii.ts";
 
 gsap.registerPlugin(ScrollTrigger);
 
@@ -237,7 +237,13 @@ function pinnedRace(stage: RaceStage) {
   document.documentElement.classList.add("js-pinned");
   const steps = gsap.utils.toArray<HTMLElement>(".race-step");
   const rows = gsap.utils.toArray<HTMLElement>("[data-race-row]");
-  const race = { remaining: 40 };
+  const show = (p: number) => {
+    stage.draw(p);
+    text("[data-race-remaining]", raceRemaining(p));
+    if (p < RACE_RESERVED) setBar(60, 0);
+    else if (p < RACE_SETTLED) setBar(60, 30);
+    else setBar(90, 0);
+  };
   const tl = gsap.timeline({
     defaults: { ease: "none" },
     scrollTrigger: {
@@ -247,23 +253,16 @@ function pinnedRace(stage: RaceStage) {
       pin: true,
       scrub: 0.4,
       anticipatePin: 1,
-      onUpdate: (self) => {
-        const p = self.progress;
-        stage.draw(p);
-        if (p < RACE_RESERVED) setBar(60, 0);
-        else if (p < RACE_SETTLED) setBar(60, 30);
-        else setBar(90, 0);
-      },
+      onUpdate: (self) => show(self.progress),
+      onRefresh: (self) => show(self.progress),
     },
   });
   gsap.set(steps.slice(1), { autoAlpha: 0 });
   gsap.set(rows, { autoAlpha: 0 });
-  text("[data-race-remaining]", 40);
-  stage.draw(0);
+  show(0);
   tl.to(steps[0]!, { autoAlpha: 0, duration: 0.06 }, 0.3)
     .to(steps[1]!, { autoAlpha: 1, duration: 0.06 }, 0.34)
     .to(rows[0]!, { autoAlpha: 1, duration: 0.05 }, RACE_RESERVED)
-    .to(race, { remaining: 10, duration: 0.1, onUpdate: () => text("[data-race-remaining]", Math.round(race.remaining)) }, RACE_RESERVED)
     .to(steps[1]!, { autoAlpha: 0, duration: 0.06 }, 0.58)
     .to(steps[2]!, { autoAlpha: 1, duration: 0.06 }, RACE_REFUSED)
     .to(rows.slice(1), { autoAlpha: 1, duration: 0.05, stagger: 0.04 }, RACE_REFUSED)

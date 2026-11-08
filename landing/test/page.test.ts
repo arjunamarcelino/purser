@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
-import { RACE_REFUSED, RACE_RESERVED, RACE_SETTLED, budgetChart, capBar, dissolveFrame, gauge, raceFrame, railFrame, revealFrame, scrambleFrame } from "../src/ascii.ts";
+import { RACE_REFUSED, RACE_RESERVED, RACE_SETTLED, budgetChart, capBar, dissolveFrame, gauge, raceFrame, raceRemaining, railFrame, revealFrame, scrambleFrame } from "../src/ascii.ts";
 import { ART_TUBES, DRAG_GAIN, artScale, buildAnchorMesh, buildMesh, fieldClearance, renderMesh, settleSpin } from "../src/anchor3d.ts";
 import { ART_PATHS } from "../src/art3d.ts";
 import { TURN_LIMITS, artNames, cellLuminance, charFor } from "../src/ascii-scene.ts";
@@ -333,6 +333,14 @@ describe("ascii frames", () => {
     const frame = texts(0).join("\n");
     expect(frame).toMatch(/\] 40$/m);
     expect(frame).not.toMatch(/REFUSED|PAID/);
+  });
+
+  it("reports the budget from progress alone", () => {
+    expect(raceRemaining(0)).toBe(40);
+    expect(raceRemaining(RACE_RESERVED)).toBe(40);
+    expect(raceRemaining(RACE_RESERVED + 0.1)).toBe(10);
+    expect(raceRemaining(1)).toBe(10);
+    expect(read("src/motion.ts")).toMatch(/onRefresh: \(self\) => show\(self\.progress\)/);
   });
 
   it("reserves before anyone is refused, then settles", () => {
