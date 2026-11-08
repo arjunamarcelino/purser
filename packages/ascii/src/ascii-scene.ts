@@ -1,7 +1,7 @@
 // Every drawing on the page is a lit 3D object rendered as ASCII: it sways by itself, speeds up on hover, spins when dragged.
 
 import { DRAG_GAIN, type Mesh, anchorScale, artScale, buildMesh, fieldClearance, renderMesh, settleSpin } from "./mesh3d.ts";
-import { ART_PATHS, ART_TUBES, buildAnchorMesh } from "./art3d.ts";
+import { ART_PATHS, ART_TUBES, buildAnchorMesh, buildCompactAnchorMesh } from "./art3d.ts";
 
 export const RAMP = " .:-=+*#%@";
 
@@ -11,6 +11,8 @@ const FIELD_INK = "rgb(255 255 255 / 0.2)";
 const STILL_POSE = { yaw: 0.55, pitch: -0.14 };
 const IDLE_RATE = { hero: 0.5, art: 0.3 };
 const HOVER_RATE = 1.15;
+// The compact anchor goes still this long after the last touch: it sits on a page people leave open for hours.
+const REST_AFTER_MS = 45_000;
 
 // How far an object may turn by itself and on hover. Together they stay well short of edge-on (1.57), where shapes vanish.
 export const TURN_LIMITS = { hero: { sway: 0.5, lean: 0.6 }, art: { sway: 0.4, lean: 0.45 } };
@@ -54,8 +56,9 @@ function glyphAtlas(ink: string, layout: Layout, dpr: number): HTMLCanvasElement
   return atlas;
 }
 
-function meshFor(name: string): Mesh {
-  return name === "anchor" ? buildAnchorMesh() : buildMesh(ART_PATHS[name]!, ART_TUBES);
+function meshFor(name: string, compact: boolean): Mesh {
+  if (name === "anchor") return compact ? buildCompactAnchorMesh() : buildAnchorMesh();
+  return buildMesh(ART_PATHS[name]!, ART_TUBES);
 }
 
 // Starts each object at its own point in the sway, so a row of them never moves in unison.
@@ -65,7 +68,11 @@ export function initAsciiArt(canvas: HTMLCanvasElement) {
   const name = canvas.dataset.asciiArt ?? "";
   const ctx = canvas.getContext("2d");
   if (!artNames().includes(name) || !ctx) return;
-  const isHero = name === "anchor";
+  // Compact: the anchor as ordinary art, without the hero's full-bleed field.
+  const compact = canvas.hasAttribute("data-ascii-compact");
+  const isHero = name === "anchor" && !compact;
+  const listening = new AbortController();
+  const until = { signal: listening.signal };
   let layout = isHero ? HERO : ART;
   const calm = matchMedia("(prefers-reduced-motion: reduce)");
   const root = canvas.closest<HTMLElement>(".hero, .card, .tile") ?? canvas;
@@ -89,6 +96,8 @@ export function initAsciiArt(canvas: HTMLCanvasElement) {
   let phase = seedPhase(name);
   let clock = 0;
   let hovering = false;
+  let lastTouched = performance.now();
+  let resting = false;
   const pose = { ...STILL_POSE };
   const pointer = { x: 0, y: 0 };
   const drag = { held: false, pointerId: -1, lastX: 0, lastY: 0, lastMove: 0, spin: 0, velocity: 0, tilt: 0 };
@@ -113,10 +122,10 @@ export function initAsciiArt(canvas: HTMLCanvasElement) {
     drag.velocity = 0;
     root.setPointerCapture(event.pointerId);
     root.classList.add("is-held");
-  });
-  root.addEventListener("pointerup", release);
-  root.addEventListener("pointercancel", release);
-  root.addEventListener("lostpointercapture", release);
+  }, until);
+  root.addEventListener("pointerup", release, until);
+  root.addEventListener("pointercancel", release, until);
+  root.addEventListener("lostpointercapture", release, until);
   root.addEventListener("pointermove", (event) => {
     if (drag.held) {
       if (event.pointerId !== drag.pointerId) return;
@@ -135,13 +144,13 @@ export function initAsciiArt(canvas: HTMLCanvasElement) {
     const box = root.getBoundingClientRect();
     pointer.x = ((event.clientX - box.left) / box.width) * 2 - 1;
     pointer.y = ((event.clientY - box.top) / box.height) * 2 - 1;
-  });
+  }, until);
   root.addEventListener("pointerleave", () => {
     if (drag.held) return;
     hovering = false;
     pointer.x = 0;
     pointer.y = 0;
-  });
+  }, until);
 
   const place = (t: number) => {
     if (calm.matches) {
@@ -160,7 +169,7 @@ export function initAsciiArt(canvas: HTMLCanvasElement) {
       pose.pitch += (Math.sin(phase * 0.74) * 0.1 + pointer.y * 0.3 + drag.tilt - pose.pitch) * follow;
     }
     const parallax = calm.matches ? 0 : 1;
-    mesh ??= meshFor(name);
+    mesh ??= meshFor(name, compact);
     renderMesh(
       mesh,
       pose.yaw,
@@ -214,6 +223,10 @@ export function initAsciiArt(canvas: HTMLCanvasElement) {
   };
 
   const loop = (now: number) => {
+    if (compact && !drag.held && now - lastTouched > REST_AFTER_MS) {
+      resting = true;
+      return;
+    }
     raf = requestAnimationFrame(loop);
     if (now - last < (drag.held ? HELD_FRAME_MS : FRAME_MS)) return;
     last = now;
@@ -257,9 +270,25 @@ export function initAsciiArt(canvas: HTMLCanvasElement) {
   const resizes = new ResizeObserver(resize);
   resizes.observe(canvas);
   if (panel) resizes.observe(panel);
-  new IntersectionObserver(([entry]) => {
-    visible = entry?.isIntersecting ?? false;
+  const seen = new IntersectionObserver((entries) => {
+    visible = entries.at(-1)?.isIntersecting ?? false;
     sync();
-  }).observe(canvas);
-  calm.addEventListener("change", sync);
+  });
+  seen.observe(canvas);
+  calm.addEventListener("change", sync, until);
+  if (compact) {
+    const wake = () => {
+      lastTouched = performance.now();
+      if (!resting) return;
+      resting = false;
+      sync();
+    };
+    for (const type of ["pointermove", "pointerdown", "keydown", "scroll"]) window.addEventListener(type, wake, { ...until, passive: true });
+  }
+  return () => {
+    cancelAnimationFrame(raf);
+    resizes.disconnect();
+    seen.disconnect();
+    listening.abort();
+  };
 }

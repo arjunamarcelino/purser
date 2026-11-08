@@ -96,7 +96,7 @@ export function ConfirmDialog({ phase, onConfirm, onCancel }: { phase: Phase; on
       <div ref={dialogRef} tabIndex={-1} className="dialog" role="dialog" aria-modal="true" aria-labelledby="confirm-title">
         <h2 id="confirm-title">{req.title}</h2>
         {req.warnings && <div className="warnings">{req.warnings}</div>}
-        <dl className="tx-details mono">
+        <dl className="tx-details">
           <dt>network</dt>
           <dd>{config.network}</dd>
           <dt>contract</dt>
@@ -172,7 +172,7 @@ export function OwnerPanel({ task, request, busy }: { task: string | null; reque
   const createReady = taskValid && capYocto !== null && crewValid;
 
   return (
-    <details className="panel owner-panel">
+    <details className="owner-panel">
       <summary>Owner tools</summary>
       <form
         onSubmit={(e) => {

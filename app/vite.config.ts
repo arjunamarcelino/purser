@@ -62,7 +62,7 @@ export default defineConfig({
     },
     fs: {
       strict: true,
-      allow: [import.meta.dirname, resolve(repoRoot, "packages/types/src"), resolve(repoRoot, "node_modules/.pnpm")],
+      allow: [import.meta.dirname, resolve(repoRoot, "packages/types/src"), resolve(repoRoot, "packages/ascii/src"), resolve(repoRoot, "node_modules/.pnpm")],
       deny: [".env", ".env.*", "**/.near-keys/**", "**/*.key", "**/*.pem", "**/*.crt", "**/out/**", "**/.git/**"],
     },
   },

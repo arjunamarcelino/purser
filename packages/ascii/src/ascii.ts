@@ -3,6 +3,15 @@
 const NOISE = "#%*+=-:.";
 const clamp = (v: number) => Math.min(1, Math.max(0, v));
 
+// Built from longhands: with tabular-nums set, the computed `font` shorthand is empty and a canvas would ignore it.
+export const canvasFont = (css: Pick<CSSStyleDeclaration, "fontStyle" | "fontWeight" | "fontSize" | "fontFamily">) => `${css.fontStyle} ${css.fontWeight} ${css.fontSize} ${css.fontFamily}`;
+
+/** How many whole characters fit, never fewer than `min`, even for an element with no measurable size. */
+export function fitColumns(innerWidth: number, charWidth: number, min: number): number {
+  const fit = Math.floor(innerWidth / charWidth);
+  return Number.isFinite(fit) ? Math.max(min, fit) : min;
+}
+
 export function scrambleFrame(text: string, p: number): string {
   const tick = Math.floor(p * 40);
   return [...text].map((ch, i) => (ch === " " || i / text.length < p ? ch : NOISE[(i * 7 + tick) % NOISE.length]!)).join("");

@@ -1,10 +1,10 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
-import { RACE_REFUSED, RACE_RESERVED, RACE_SETTLED, budgetChart, capBar, dissolveFrame, gauge, raceFrame, raceRemaining, railFrame, revealFrame, scrambleFrame } from "../src/ascii.ts";
-import { artScale, buildMesh, fieldClearance, renderMesh, settleSpin } from "../src/mesh3d.ts";
-import { ART_PATHS, ART_TUBES, buildAnchorMesh } from "../src/art3d.ts";
-import { TURN_LIMITS, artNames, cellLuminance, charFor } from "../src/ascii-scene.ts";
+import { RACE_REFUSED, RACE_RESERVED, RACE_SETTLED, budgetChart, canvasFont, capBar, dissolveFrame, fitColumns, gauge, raceFrame, raceRemaining, railFrame, revealFrame, scrambleFrame } from "@purser/ascii/ascii.ts";
+import { artScale, buildMesh, fieldClearance, renderMesh, settleSpin } from "@purser/ascii/mesh3d.ts";
+import { ART_PATHS, ART_TUBES, buildAnchorMesh } from "@purser/ascii/art3d.ts";
+import { TURN_LIMITS, artNames, cellLuminance, charFor } from "@purser/ascii/ascii-scene.ts";
 
 const root = resolve(import.meta.dirname, "..");
 const read = (path: string) => readFileSync(resolve(root, path), "utf8");
@@ -14,7 +14,7 @@ const prose = html.replace(/<script[\s\S]*?<\/script>/g, "").replace(/<[^>]+>/g,
 
 describe("page content", () => {
   it("uses no em dashes in the page or its source", () => {
-    for (const file of [html, css, read("src/main.ts"), read("src/motion.ts"), read("src/ascii.ts")]) expect(file).not.toContain("—");
+    for (const file of [html, css, read("src/main.ts"), read("src/motion.ts"), read("../packages/ascii/src/ascii.ts")]) expect(file).not.toContain("—");
   });
 
   it("is plain ASCII from top to bottom", () => {
@@ -87,7 +87,7 @@ describe("layout", () => {
 });
 
 describe("palette", () => {
-  const theme = read("src/theme.css");
+  const theme = read("../packages/ascii/src/theme.css");
   const tokens = (selector: string) => {
     const start = theme.indexOf(selector);
     const body = theme.slice(theme.indexOf("{", start) + 1, theme.indexOf("}", start));
@@ -338,6 +338,18 @@ describe("ascii frames", () => {
     const up = dissolveFrame(200, 6, 1, false).split("\n");
     expect(ink(up[5]!)).toBeGreaterThan(ink(up[0]!));
     expect(ink(dissolveFrame(200, 6, 0, true))).toBe(0);
+  });
+
+  it("gives a canvas a complete font without the computed shorthand", () => {
+    expect(canvasFont({ fontStyle: "normal", fontWeight: "400", fontSize: "15px", fontFamily: '"IBM Plex Mono", monospace' })).toBe('normal 400 15px "IBM Plex Mono", monospace');
+  });
+
+  it("counts whole characters and survives an unmeasurable element", () => {
+    expect(fitColumns(360, 9, 12)).toBe(40);
+    expect(fitColumns(365, 9, 12)).toBe(40);
+    expect(fitColumns(50, 9, 12)).toBe(12);
+    expect(fitColumns(Number.NaN, 9, 12)).toBe(12);
+    expect(fitColumns(360, 0, 12)).toBe(12);
   });
 
   it("draws gauges and rails to size", () => {

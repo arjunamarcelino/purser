@@ -1,11 +1,11 @@
-// AA contrast for every text/background pair and every control border, in both themes, read
-// straight from tokens.css so the test and the stylesheet cannot drift.
+// AA contrast for the pairs only the board paints, on both bands, read straight from the shared theme.css so the
+// test and the stylesheet cannot drift. Text on each band's surfaces is covered by landing/test/page.test.ts.
 
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
-const css = readFileSync(resolve(import.meta.dirname, "../src/styles/tokens.css"), "utf8");
+const css = readFileSync(resolve(import.meta.dirname, "../../packages/ascii/src/theme.css"), "utf8");
 
 function block(selector: string): Record<string, string> {
   const start = css.indexOf(selector);
@@ -22,30 +22,18 @@ const ratio = (a: string, b: string) => {
   return (hi! + 0.05) / (lo! + 0.05);
 };
 
-const themes = { dark: block(':root[data-theme="dark"]'), light: block(':root[data-theme="light"]') };
-const TEXT = ["text", "text-dim", "brass", "ok", "warn", "alarm", "link"];
-const SURFACES = ["bg", "surface", "surface-2"];
+const bands = { black: block(".band-dark"), white: block(".band-light") };
 
-describe.each(Object.entries(themes))("%s theme", (_name, t) => {
-  it.each(TEXT.flatMap((fg) => SURFACES.map((bg) => [fg, bg] as const)))("%s on %s ≥ 4.5:1 (AA text)", (fg, bg) => {
-    expect(ratio(t[fg]!, t[bg]!)).toBeGreaterThanOrEqual(4.5);
+describe.each(Object.entries(bands))("%s band", (_name, t) => {
+  it("control border on --bg ≥ 3:1 (AA non-text)", () => {
+    expect(ratio(t["border-strong"]!, t.bg!)).toBeGreaterThanOrEqual(3);
   });
 
-  it.each(SURFACES)("control border on %s ≥ 3:1 (AA non-text)", (bg) => {
-    expect(ratio(t["border-strong"]!, t[bg]!)).toBeGreaterThanOrEqual(3);
+  it("text on inverted hover states (--bg on --text, --warn, --link) ≥ 4.5:1", () => {
+    for (const fill of ["text", "warn", "link"]) expect(ratio(t.bg!, t[fill]!)).toBeGreaterThanOrEqual(4.5);
   });
 
   it("baseline banner text (--bg on --alarm) ≥ 4.5:1", () => {
     expect(ratio(t.bg!, t.alarm!)).toBeGreaterThanOrEqual(4.5);
   });
-
-  it("text on brass buttons ≥ 4.5:1", () => {
-    expect(ratio(t["on-brass"]!, t.brass!)).toBeGreaterThanOrEqual(4.5);
-  });
-});
-
-it("the OS-light fallback matches the explicit light theme", () => {
-  const start = css.indexOf("@media (prefers-color-scheme: light)");
-  const fallback = Object.fromEntries([...css.slice(start, css.indexOf("}\n}", start)).matchAll(/--([a-z0-9-]+):\s*(#[0-9a-f]{6})/gi)].map((m) => [m[1]!, m[2]!.toLowerCase()]));
-  expect(fallback).toEqual(themes.light);
 });

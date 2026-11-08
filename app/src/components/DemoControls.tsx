@@ -169,10 +169,10 @@ export function DemoControls({ task, onJobFinished, consoleSlot }: { task: strin
               {job.kind === "attack" ? `attack demo on ${task}` : "make prove (property tests + attack suite)"}
             </span>
             <span className={job.done ? (job.code === 0 ? "tone-ok" : "tone-warn") : "tone-neutral"}>
-              <Icon name={job.done ? (job.code === 0 ? "check" : "slash") : "clock"} size={14} /> {job.done ? (job.code === 0 ? "passed" : `exit ${job.code ?? "?"}`) : "running…"}
+              <Icon name={job.done ? (job.code === 0 ? "check" : "slash") : "clock"} /> {job.done ? (job.code === 0 ? "passed" : `exit ${job.code ?? "?"}`) : "running…"}
             </span>
           </div>
-          <pre className="mono">{job.lines.map((l) => l.line).join("\n")}</pre>
+          <pre>{job.lines.map((l) => l.line).join("\n")}</pre>
         </div>,
           consoleSlot,
         )}

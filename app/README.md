@@ -15,7 +15,7 @@ browser, and the app refuses to load unless the RPC itself reports `chain_id: te
 | Region | Source | Meaning |
 |---|---|---|
 | Budget | `get_task`, `remaining_budget` | Remaining / cap, completed · outstanding |
-| Crew | `list_delegates` | brass dot = active, hollow = revoked; **Revoke** (owner only) |
+| Crew | `list_delegates` | `*` = active, `o` = revoked; **Revoke** (owner only) |
 | Manifest: Holds | `list_commitments` | Reserved / Signed (neutral), Unknown (amber: reservation retained) |
 | Manifest: Payments | `list_commitments` + proposer records | Confirmed (green) with an explorer tx link |
 | Manifest: Refused | proposer records | REFUSED / BLOCKED / REJECTED (amber, never red), labelled *reported by proposer* |
@@ -104,7 +104,7 @@ indexer". A production build has no proxy, so the panel shows "history offline" 
 ## Development
 
 ```bash
-pnpm --filter @purser/app test        # contrast (AA, both themes), semantics, panels, companion security (real dev server)
+pnpm --filter @purser/app test        # contrast (AA, both bands), semantics, panels, companion security (real dev server)
 pnpm --filter @purser/app typecheck
 pnpm --filter @purser/app build
 ```

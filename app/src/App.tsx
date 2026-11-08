@@ -8,10 +8,9 @@ import { useBoard, useNow } from "./data/useBoard.ts";
 import { useCache } from "./data/useCache.ts";
 import { ago, amountDisplay } from "./lib/format.ts";
 import { lineHealth } from "./lib/semantics.ts";
-import { useTheme } from "./theme.ts";
 import { useWalletAccount } from "./wallet/wallet.ts";
+import { AnchorArt, Dissolve } from "./components/ascii.tsx";
 import { DemoControls } from "./components/DemoControls.tsx";
-import { Icon } from "./components/Icon.tsx";
 import { ConfirmDialog, OwnerPanel, useOwnerActions } from "./components/owner.tsx";
 import { BudgetPanel, CachedHistory, CrewPanel, InvariantLine, Manifest } from "./components/panels.tsx";
 import { Toasts } from "./components/toasts.tsx";
@@ -48,7 +47,6 @@ function useTaskParam(): [string | null, (t: string) => void] {
 }
 
 export function App() {
-  const [theme, setTheme] = useTheme();
   const [task, setTask] = useTaskParam();
   const [tasks, setTasks] = useState<string[]>([]);
   const [tasksStatus, setTasksStatus] = useState<"loading" | "ready" | "failed">("loading");
@@ -153,32 +151,34 @@ export function App() {
     });
   };
 
+  const showHistory = config.indexerEnabled && !cache.wrongIndexer;
+
   // What the board says while it has nothing to show: each cause names itself and what to do next.
   const boardNotice = () => {
-    if (chainOk === false) return <p className="panel tone-warn">This board only reads NEAR testnet, and the configured RPC reports another network. Set NEAR_RPC_URL to a testnet RPC and reload.</p>;
-    if (chainOk === null) return <p className="panel dim">Checking that the RPC is on NEAR testnet…</p>;
+    if (chainOk === false) return <p className="tone-warn">This board only reads NEAR testnet, and the configured RPC reports another network. Set NEAR_RPC_URL to a testnet RPC and reload.</p>;
+    if (chainOk === null) return <p className="dim">Checking that the RPC is on NEAR testnet…</p>;
     if (!task && tasksStatus === "failed")
       return (
-        <p className="panel tone-warn">
+        <p className="tone-warn">
           Could not list the tasks on {config.contractId}.{" "}
           <button type="button" className="btn btn-small" onClick={refresh}>
             Retry
           </button>
         </p>
       );
-    if (!task && tasksStatus === "ready" && tasks.length === 0) return <p className="panel dim">No tasks on {config.contractId} yet. Run ./scripts/demo.sh setup to create one.</p>;
-    return <p className="panel dim">Loading live state from {config.contractId}…</p>;
+    if (!task && tasksStatus === "ready" && tasks.length === 0) return <p className="dim">No tasks on {config.contractId} yet. Run ./scripts/demo.sh setup to create one.</p>;
+    return <p className="dim">Loading live state from {config.contractId}…</p>;
   };
 
   return (
     <div className="app">
-      <header className="topbar">
+      <a className="skip" href="#main">
+        Skip to the board
+      </a>
+      <header className="topbar band band-dark">
         <div className="brand">
-          <span className="mark" aria-hidden="true">
-            <Icon name="anchor" size={22} />
-          </span>
           <h1 className="wordmark">PURSER</h1>
-          <span className="tagline dim">One budget. Many agents. Nothing overspent.</span>
+          <span className="tagline">One budget. Many agents. Nothing overspent.</span>
         </div>
         <label className="task-pick">
           <span className="label">task</span>
@@ -191,10 +191,10 @@ export function App() {
             ))}
           </select>
         </label>
-        <span className="label token">
-          token <span className="mono">NEAR</span>
+        <span className="label">
+          token NEAR
         </span>
-        <span className={`net ${chainOk === false ? "tone-alarm" : ""}`}>{chainOk === false ? "NOT TESTNET: refusing to load" : chainOk === null ? "checking network…" : "NEAR testnet"}</span>
+        <span className={`net ${chainOk === false ? "tone-alarm" : "tone-dim"}`}>{chainOk === false ? "NOT TESTNET: refusing to load" : chainOk === null ? "checking network…" : "NEAR testnet"}</span>
         <div className="account">
           {wallet.accountId ? (
             <>
@@ -202,7 +202,7 @@ export function App() {
                 <span className={`dot ${isOwner ? "active" : "hollow"}`} aria-hidden="true" />
                 {isOwner ? "owner" : "viewer"}
               </span>
-              <span className="mono small">{wallet.accountId}</span>
+              <span className="small">{wallet.accountId}</span>
               <button type="button" className="btn btn-small" onClick={() => void wallet.disconnect()}>
                 Disconnect
               </button>
@@ -218,29 +218,39 @@ export function App() {
             </span>
           )}
         </div>
-        <button type="button" className="icon-btn theme-toggle" aria-label={`Theme: ${theme}. Switch theme`} onClick={() => setTheme(theme === "dark" ? "light" : theme === "light" ? "system" : "dark")}>
-          <Icon name={theme === "light" ? "sun" : "moon"} /> <span className="small">{theme}</span>
-        </button>
       </header>
 
-      <main>
-        {state.missing && <p className="panel">Task “{task}” does not exist on {config.contractId}.</p>}
-        {state.error && <p className="panel tone-warn">RPC: {state.error}. Retrying.</p>}
+      <main id="main">
+        <div className="notices band band-dark section">
+          {state.missing && <p>Task "{task}" does not exist on {config.contractId}.</p>}
+          {state.error && <p className="tone-warn">RPC: {state.error}. Retrying.</p>}
+          {!snap && !state.missing && !state.error && boardNotice()}
+        </div>
+        {/* The anchor stays mounted through a task switch: it doesn't depend on which task is showing. */}
+        <div className="lead band band-dark section">
+          {snap && <BudgetPanel task={snap.task} cap={BigInt(snap.budget.cap)} completed={BigInt(snap.budget.completed)} outstanding={BigInt(snap.budget.outstanding)} remaining={BigInt(snap.remaining)} money={money} />}
+          <AnchorArt />
+          {snap && <CrewPanel delegates={snap.delegates} personaOf={personaOf} roleOf={roleOf} isOwner={isOwner} busy={owner.busy} revoking={new Set(revoking.keys())} onRevoke={revoke} />}
+        </div>
         {snap && (
           <>
-            <div className="grid">
-              <BudgetPanel task={snap.task} cap={BigInt(snap.budget.cap)} completed={BigInt(snap.budget.completed)} outstanding={BigInt(snap.budget.outstanding)} remaining={BigInt(snap.remaining)} money={money} />
-              <CrewPanel delegates={snap.delegates} personaOf={personaOf} roleOf={roleOf} isOwner={isOwner} busy={owner.busy} revoking={new Set(revoking.keys())} onRevoke={revoke} />
-            </div>
+            <Dissolve dense="top" />
             <Manifest commitments={snap.commitments} records={state.records} personaOf={personaOf} delegateIds={delegateIds} now={now} money={money} />
-            {config.indexerEnabled && !cache.wrongIndexer && (
-              <CachedHistory rows={cache.rows} dropped={cache.dropped} boardBlock={snap.blockHeight} personaOf={personaOf} recordTx={recordTx} offline={cache.offline} money={money} />
+            <Dissolve dense="bottom" />
+            {showHistory && <CachedHistory rows={cache.rows} dropped={cache.dropped} boardBlock={snap.blockHeight} personaOf={personaOf} recordTx={recordTx} offline={cache.offline} money={money} />}
+            {isOwner && (
+              // Owner tools take the color the section above them doesn't have, so the bands keep alternating.
+              <>
+                {showHistory && <Dissolve dense="top" />}
+                <div className={`band section ${showHistory ? "band-light" : "band-dark"}`}>
+                  <OwnerPanel task={task} request={(r) => owner.request({ ...r, onSuccess: refresh })} busy={owner.busy} />
+                </div>
+                {showHistory && <Dissolve dense="bottom" />}
+              </>
             )}
-            {isOwner && <OwnerPanel task={task} request={(r) => owner.request({ ...r, onSuccess: refresh })} busy={owner.busy} />}
           </>
         )}
-        {!snap && !state.missing && !state.error && boardNotice()}
-        <div ref={setConsoleSlot} className="console-slot" />
+        <div ref={setConsoleSlot} className="console-slot band band-dark" />
       </main>
 
       <div className="statusbar">
@@ -252,25 +262,25 @@ export function App() {
           money={money}
         />
       </div>
-      <footer className="status-row">
+      <footer className="status-row band band-dark">
         <DemoControls task={task} onJobFinished={refresh} consoleSlot={consoleSlot} />
-        <span className="meta small dim">
-          synced {ago(state.syncedAt, now)} · block {snap?.blockHeight ?? "not read yet"} ·{" "}
-          <a href={explorer.account(config.contractId)} target="_blank" rel="noopener noreferrer" className="mono">
-            {config.contractId} ↗
+        <span className="meta dim">
+          synced {ago(state.syncedAt, now)} | block {snap?.blockHeight ?? "not read yet"} |{" "}
+          <a href={explorer.account(config.contractId)} target="_blank" rel="noopener noreferrer">
+            {config.contractId} -&gt;
           </a>
           {config.indexerEnabled && (
             <>
-              {" · "}
+              {" | "}
               {cache.wrongIndexer ? (
                 <span className="tone-warn">history: wrong indexer</span>
               ) : cache.status === null ? (
                 <span className={cache.offline ? "tone-warn" : ""}>{cache.offline ? "history offline" : "history cache …"}</span>
               ) : (
                 <span className={cache.offline || (cacheAge ?? Infinity) > 60_000 ? "tone-warn" : ""}>
-                  history cache {cacheAge === null ? "never" : `${Math.round(cacheAge / 1000)}s`} · cache block {cache.status.asOfHeight ?? "not read yet"}
-                  {cache.offline && " · history offline"}
-                  {cacheLag !== null && cacheLag > 100 && ` · Δ ${cacheLag} blocks`}
+                  history cache {cacheAge === null ? "never" : `${Math.round(cacheAge / 1000)}s`} | cache block {cache.status.asOfHeight ?? "not read yet"}
+                  {cache.offline && " | history offline"}
+                  {cacheLag !== null && cacheLag > 100 && ` | ${cacheLag} blocks behind`}
                 </span>
               )}
             </>

@@ -13,8 +13,8 @@
   },
   "dependencies": {
     "@fontsource/ibm-plex-mono": "5.3.0",
-    "@fontsource/ibm-plex-sans": "5.3.0",
     "@hot-labs/near-connect": "0.12.0",
+    "@purser/ascii": "workspace:*",
     "@purser/types": "workspace:*",
     "near-api-js": "7.4.0",
     "react": "19.3.1",
