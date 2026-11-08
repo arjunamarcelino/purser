@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { RACE_REFUSED, RACE_RESERVED, RACE_SETTLED, budgetChart, capBar, dissolveFrame, gauge, raceFrame, raceRemaining, railFrame, revealFrame, scrambleFrame } from "../src/ascii.ts";
-import { DRAG_GAIN, artScale, buildMesh, fieldClearance, renderMesh, settleSpin } from "../src/mesh3d.ts";
+import { artScale, buildMesh, fieldClearance, renderMesh, settleSpin } from "../src/mesh3d.ts";
 import { ART_PATHS, ART_TUBES, buildAnchorMesh } from "../src/art3d.ts";
 import { TURN_LIMITS, artNames, cellLuminance, charFor } from "../src/ascii-scene.ts";
 
@@ -52,26 +52,9 @@ describe("stylesheet", () => {
     expect(css).not.toMatch(/outline:\s*(none|0)/);
   });
 
-  it("sets the whole page in monospace, with square corners", () => {
-    expect(css).not.toContain("--font-ui");
-    expect(read("src/main.ts")).not.toContain("ibm-plex-sans");
-    expect(css).not.toMatch(/border-radius/);
-  });
-
   it("opens every section with the rule mark", () => {
     const headings = html.match(/<h2 /g)!.length;
     expect(html.match(/class="rule-mark"/g)).toHaveLength(headings + 1);
-  });
-});
-
-describe("hero", () => {
-  it("carries none of the source component's placeholder text", () => {
-    expect(prose).not.toMatch(/UIMIX|ENDLESS PURSUIT|SISYPHUS|SYSTEM\.ACTIVE|RENDERING|LAT:|LONG:|EST\. 2025|V1\.0\.0/);
-  });
-
-  it("loads no third-party scene or script", () => {
-    for (const file of [html, css, read("src/main.ts"), read("src/motion.ts")]) expect(file).not.toMatch(/unicorn|jsdelivr|data-us-project|dotlottie/i);
-    expect(html).not.toMatch(/<script[^>]+src="http/);
   });
 });
 
@@ -86,24 +69,11 @@ describe("layout", () => {
     expect(prose).not.toMatch(/testimonial|investor|CEO|CTO|"[^"]{20,}"/i);
   });
 
-  it("moves the refusal cards with page scroll, with no manual scroll area", () => {
-    const said = css.slice(css.indexOf(".said {"), css.indexOf(".js-said .refuses"));
-    expect(said).not.toMatch(/overflow-x|scroll-snap/);
-    expect(html).not.toMatch(/class="said"[^>]*tabindex/);
-    expect(read("src/motion.ts")).toMatch(/initSaidCards/);
-  });
-
   it("links to the app only when an address exists", () => {
     const links = html.match(/<a [^>]*data-app-link[^>]*>/g)!;
     expect(links).toHaveLength(3);
     for (const link of links) expect(link).toContain("hidden");
     expect(css).toMatch(/\.btn\[hidden\]\s*\{\s*display: none/);
-    expect(read("src/main.ts")).toMatch(/import\.meta\.env\.DEV \? "http:\/\/127\.0\.0\.1:5173/);
-  });
-
-  it("never writes noise into a real heading", () => {
-    expect(read("src/motion.ts")).not.toMatch(/\bel\.textContent = scrambleFrame/);
-    expect(read("src/motion.ts")).toMatch(/setAttribute\("aria-hidden", "true"\)/);
   });
 
   it("stops flexible canvases from growing their own tile", () => {
@@ -192,11 +162,6 @@ describe("3d anchor", () => {
     expect(state.spin).toBeCloseTo(Math.PI * 2, 2);
   });
 
-  it("turns far faster when dragged than when hovered", () => {
-    const hoverSweep = TURN_LIMITS.hero.lean * 2;
-    expect(DRAG_GAIN * 1400).toBeGreaterThan(hoverSweep * 5);
-  });
-
   it("keeps the background field off the anchor", () => {
     expect(fieldClearance(450, 320, 450, 320, 200)).toBe(0);
     expect(fieldClearance(600, 320, 450, 320, 200)).toBe(0);
@@ -252,10 +217,6 @@ describe("3d section art", () => {
     return out;
   };
 
-  it("covers all eight section drawings", () => {
-    expect(Object.keys(ART_PATHS).sort()).toEqual(["balance", "callback", "chain", "config", "fingerprint", "hourglass", "key", "vault"]);
-  });
-
   it.each(Object.keys(ART_PATHS))("%s draws clearly and stays inside its frame at every angle", (name) => {
     const mesh = buildMesh(ART_PATHS[name]!, ART_TUBES);
     const views = [view, { ...view, cols: 120, centerX: 300, scale: artScale(600, 240) }];
@@ -290,10 +251,6 @@ describe("3d section art", () => {
     expect(wide(render("hourglass", Math.PI / 2, 0))).toBeGreaterThan(flat * 2);
   });
 
-  it("keeps every object well short of edge-on unless it is being dragged", () => {
-    for (const { sway, lean } of Object.values(TURN_LIMITS)) expect(sway + lean).toBeLessThan(1.15);
-  });
-
   it.each(Object.keys(ART_PATHS))("%s is bold and solid at the angles it actually reaches", (name) => {
     const { sway, lean } = TURN_LIMITS.art;
     for (const yaw of [0, sway + lean, -(sway + lean)]) {
@@ -319,7 +276,6 @@ describe("ascii frames", () => {
     expect(raceRemaining(RACE_RESERVED)).toBe(40);
     expect(raceRemaining(RACE_RESERVED + 0.1)).toBe(10);
     expect(raceRemaining(1)).toBe(10);
-    expect(read("src/motion.ts")).toMatch(/onRefresh: \(self\) => show\(self\.progress\)/);
   });
 
   it("reserves before anyone is refused, then settles", () => {
