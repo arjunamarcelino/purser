@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { Commitment, Delegate, ProposalRecord } from "@purser/types";
 import { explorer } from "../config.ts";
 import type { CachedCommitment } from "../data/cache.ts";
-import { formatNear, formatTime, safeText, shortHash } from "../lib/format.ts";
+import { type AmountDisplay, formatTime, nearDisplay, safeText, shortHash } from "../lib/format.ts";
 import { type LineHealth, groupOf, refusalBadge, stateBadge } from "../lib/semantics.ts";
 import { useReducedMotion } from "../theme.ts";
 import { Badge } from "./Badge.tsx";
@@ -48,7 +48,7 @@ export function useCountTo(target: bigint | null, snapKey: string): bigint | nul
   return shown;
 }
 
-export function BudgetPanel({ task, cap, completed, outstanding, remaining }: { task: string; cap: bigint; completed: bigint; outstanding: bigint; remaining: bigint }) {
+export function BudgetPanel({ task, cap, completed, outstanding, remaining, money = nearDisplay }: { task: string; cap: bigint; completed: bigint; outstanding: bigint; remaining: bigint; money?: AmountDisplay }) {
   const shown = useCountTo(remaining, task);
   const pct = cap > 0n ? Number(((completed + outstanding) * 1000n) / cap) / 10 : 0;
   return (
@@ -57,18 +57,19 @@ export function BudgetPanel({ task, cap, completed, outstanding, remaining }: { 
         <Icon name="coins" /> Budget
       </h2>
       <div className="label">Remaining</div>
-      <div className="display mono" aria-label={`${formatNear(remaining)} of ${formatNear(cap)} NEAR remaining`}>
+      <div className="display mono" aria-label={`${money.fmt(remaining)} of ${money.fmt(cap)} ${money.unit} remaining`}>
         <span aria-hidden="true">
-          {formatNear(shown ?? remaining)}
-          <span className="of"> / {formatNear(cap)}</span>
+          {shown === null || shown === remaining ? money.fmt(remaining) : money.frame(shown)}
+          <span className="of"> / {money.fmt(cap)}</span>
         </span>
       </div>
       <div className="meter" role="progressbar" aria-label="Budget used" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(pct)}>
         <div className="meter-fill" style={{ width: `${Math.min(100, pct)}%` }} />
       </div>
       <div className="breakdown mono">
-        completed {formatNear(completed)} · outstanding {formatNear(outstanding)} <span className="dim">NEAR</span>
+        completed {money.fmt(completed)} · outstanding {money.fmt(outstanding)} <span className="dim">{money.unit}</span>
       </div>
+      {money.note && <div className="unit-note mono dim small">{money.note}</div>}
     </section>
   );
 }
@@ -76,6 +77,7 @@ export function BudgetPanel({ task, cap, completed, outstanding, remaining }: { 
 export function CrewPanel({
   delegates,
   personaOf,
+  roleOf,
   isOwner,
   busy,
   revoking,
@@ -83,6 +85,7 @@ export function CrewPanel({
 }: {
   delegates: Delegate[];
   personaOf: (accountId: string) => string;
+  roleOf: (accountId: string) => string | null;
   isOwner: boolean;
   busy: boolean;
   revoking: ReadonlySet<string>;
@@ -101,7 +104,10 @@ export function CrewPanel({
           return (
             <li key={d.account_id} className={`chip ${d.active ? "" : "revoked"}`}>
               <span className={`dot ${d.active ? "active" : "hollow"}`} aria-hidden="true" />
-              <span className="chip-name">{personaOf(d.account_id)}</span>
+              <span className="chip-name">
+                {personaOf(d.account_id)}
+                {roleOf(d.account_id) && <span className="chip-role dim small"> {roleOf(d.account_id)}</span>}
+              </span>
               <span className="mono dim chip-id">{d.account_id}</span>
               <span className={`chip-status ${d.active ? "tone-brass" : "tone-dim"}`}>{status}</span>
               {isOwner && d.active && (
@@ -132,7 +138,7 @@ interface Row {
 }
 
 /** Holds, Payments, Refused (+ Released when present). Chain rows are authoritative; record rows are labelled. */
-export function Manifest({ commitments, records, personaOf, delegateIds, now }: { commitments: Commitment[]; records: ProposalRecord[]; personaOf: (a: string) => string; delegateIds: ReadonlySet<string>; now: number }) {
+export function Manifest({ commitments, records, personaOf, delegateIds, now, money = nearDisplay }: { commitments: Commitment[]; records: ProposalRecord[]; personaOf: (a: string) => string; delegateIds: ReadonlySet<string>; now: number; money?: AmountDisplay }) {
   // Records are untrusted: keep only those from accounts that are on-chain delegates of this task.
   const trusted = records.filter((r) => delegateIds.has(r.account_id));
   // A tx link attaches to a chain row only from a record that matches that commitment exactly
@@ -147,7 +153,7 @@ export function Manifest({ commitments, records, personaOf, delegateIds, now }: 
         r.amount_yocto === c.reserved_amount &&
         r.recipient === c.intent.recipient,
     )?.tx_hash ?? null;
-  const fresh = useFreshKeys([...commitments.map((c) => `c${c.id}:${c.state}`), ...trusted.map((r) => `r${r.request_id ?? r.decision_id}`)]);
+  const fresh = useFreshKeys([...commitments.map((c) => `c${c.id}:${c.state}`), ...trusted.map((r) => `r${r.decision_id}`)]);
   const isFresh = (key: string) => fresh.has(key);
 
   const chainRow = (c: Commitment): Row => {
@@ -156,7 +162,7 @@ export function Manifest({ commitments, records, personaOf, delegateIds, now }: 
     const key = `c${c.id}:${c.state}`;
     return {
       key,
-      amount: formatNear(c.reserved_amount),
+      amount: money.fmt(c.reserved_amount),
       who: personaOf(c.delegate),
       to: safeText(c.intent.recipient, 64),
       badge: stateBadge[c.state],
@@ -175,10 +181,10 @@ export function Manifest({ commitments, records, personaOf, delegateIds, now }: 
     .sort((a, b) => b.at.localeCompare(a.at))
     .slice(0, 30)
     .map((r) => {
-      const key = `r${r.request_id ?? r.decision_id}`;
+      const key = `r${r.decision_id}`; // one row per decision: a re-run reusing a request_id is a new row
       return {
         key,
-        amount: r.amount_yocto ? formatNear(r.amount_yocto) : "—",
+        amount: r.amount_yocto ? money.fmt(r.amount_yocto) : "—",
         who: personaOf(r.account_id),
         to: safeText(r.recipient, 64),
         badge: refusalBadge(r.refusal_code),
@@ -247,14 +253,14 @@ export function Manifest({ commitments, records, personaOf, delegateIds, now }: 
   );
 }
 
-export function InvariantLine({ health, completed, outstanding, cap }: { health: LineHealth; completed: bigint; outstanding: bigint; cap: bigint }) {
+export function InvariantLine({ health, completed, outstanding, cap, money = nearDisplay }: { health: LineHealth; completed: bigint; outstanding: bigint; cap: bigint; money?: AmountDisplay }) {
   const used = completed + outstanding;
   const pct = cap > 0n ? Number((used * 100n) / cap) : 0;
-  const spoken = health.tone === "dim" ? "invariant state unavailable" : `${health.label.toLowerCase()}: ${formatNear(used)} of ${formatNear(cap)} NEAR used (${pct} percent)`;
+  const spoken = health.tone === "dim" ? "invariant state unavailable" : `${health.label.toLowerCase()}: ${money.fmt(used)} of ${money.fmt(cap)} ${money.unit} used (${pct} percent)`;
   return (
     <div className={`invariant tone-${health.tone}`} role="status" aria-live="polite" aria-label={spoken}>
       <span className="mono eq" aria-hidden="true">
-        completed {formatNear(completed)} + outstanding {formatNear(outstanding)} = {formatNear(used)} ≤ cap {formatNear(cap)}
+        completed {money.fmt(completed)} + outstanding {money.fmt(outstanding)} = {money.fmt(used)} ≤ cap {money.fmt(cap)}
       </span>
       <span className="health" aria-hidden="true">
         <Icon name={health.icon} /> {health.label}
@@ -299,6 +305,7 @@ export function CachedHistory({
   recordTx,
   contractId,
   offline = false,
+  money = nearDisplay,
 }: {
   rows: CachedCommitment[];
   dropped: number;
@@ -307,6 +314,7 @@ export function CachedHistory({
   recordTx: (r: CachedCommitment) => string | null;
   contractId: string;
   offline?: boolean;
+  money?: AmountDisplay;
 }) {
   return (
     <section className="panel cached-history" aria-labelledby="cache-h">
@@ -326,7 +334,7 @@ export function CachedHistory({
               const hash = r.txStatus === "resolved" ? r.nearTx : fallbackTx;
               return (
                 <li key={`${r.commitmentId}:${r.state}`} className="mrow">
-                  <span className="mono amt">{formatNear(r.actualSpent ?? r.reservedAmount)}</span>
+                  <span className="mono amt">{money.fmt(r.actualSpent ?? r.reservedAmount)}</span>
                   <span className="who">
                     {personaOf(r.delegate)} <span aria-hidden="true">→</span>
                     <span className="sr-only">to</span> <span className="mono">{r.recipient}</span>

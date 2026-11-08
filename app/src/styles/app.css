@@ -230,6 +230,9 @@ main {
 .breakdown {
   font-size: var(--size-sm);
 }
+.unit-note {
+  margin-top: 0.25rem;
+}
 
 .chips {
   list-style: none;
@@ -253,6 +256,9 @@ main {
 }
 .chip-name {
   font-weight: 600;
+}
+.chip-role {
+  font-weight: 400;
 }
 .chip-id {
   font-size: var(--size-xs);

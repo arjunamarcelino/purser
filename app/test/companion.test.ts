@@ -8,7 +8,7 @@ import { dirname, join, resolve } from "node:path";
 import { createServer, type ViteDevServer } from "vite";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { SAFE_TASK_ID as TYPES_TASK_ID } from "@purser/types";
-import { SAFE_TASK_ID, cleanLine, guard, readRecordLines } from "../companion/plugin.ts";
+import { SAFE_TASK_ID, argvFor, cleanLine, guard, readRecordLines, spendsTestnet } from "../companion/plugin.ts";
 
 const appDir = resolve(import.meta.dirname, "..");
 const repoRoot = resolve(appDir, "..");
@@ -95,6 +95,26 @@ describe("companion guards", () => {
     expect((await companion("/__purser/jobs", { kind: "rm -rf /" })).status).toBe(400);
   });
 
+  it("runs the baseline as one fixed command with no caller-supplied argument", () => {
+    expect(argvFor("baseline", "--network=mainnet")).toEqual({ cmd: "pnpm", args: ["--filter", "@purser/proposer", "run", "naive-baseline"] });
+  });
+
+  it("keeps the argv of the existing jobs", () => {
+    expect(argvFor("tests", null)).toEqual({ cmd: "make", args: ["prove"] });
+    expect(argvFor("attack", "t-1").args).toContain("--task=t-1");
+  });
+
+  it("puts every job that spends testnet NEAR under the cooldown", () => {
+    expect(spendsTestnet("baseline")).toBe(true);
+    expect(spendsTestnet("attack")).toBe(true);
+    expect(spendsTestnet("tests")).toBe(false);
+  });
+
+  it("guards a baseline start like every other route (nothing runs without the token)", async () => {
+    const res = await companion("/__purser/jobs", { kind: "baseline" }, { "x-purser-token": "" });
+    expect(res.status).toBe(403);
+  });
+
   it("uses the same task-id rule as the proposer", () => expect(SAFE_TASK_ID.source).toBe(TYPES_TASK_ID.source));
 });
 
@@ -115,6 +135,13 @@ describe("records and output hygiene", () => {
     const key = `ed25519:${"3".repeat(88)}`;
     const apiKey = ["sk", "abcdefghijklmnopqrstuv"].join("-");
     expect(cleanLine(`key=${key} \u001b[31mred\u001b[0m ${apiKey}`)).toBe("key=[redacted] red [redacted]");
+  });
+
+  it("passes a full-size baseline result line through uncut", () => {
+    const hash = "5".repeat(44);
+    const lane = { hash, to: `${"m".repeat(40)}.arjuna-purser.testnet`, read: 999_999_999, included: 999_999_999 };
+    const line = `BASELINE ${JSON.stringify({ sawUnits: 100, capUnits: 100, spentUnits: 120, overUnits: 20, a: lane, b: lane })}`;
+    expect(cleanLine(line)).toBe(line);
   });
 });
 

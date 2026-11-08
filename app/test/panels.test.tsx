@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { CachedCommitment } from "../src/data/cache.ts";
 import type { Commitment, ProposalRecord } from "@purser/types";
 import { CachedHistory, InvariantLine, Manifest } from "../src/components/panels.tsx";
+import { amountDisplay } from "../src/lib/format.ts";
 import { lineHealth } from "../src/lib/semantics.ts";
 
 const N = 10n ** 24n;
@@ -48,6 +49,18 @@ describe("Manifest", () => {
     const refused = screen.getByRole("list", { name: /refused/i });
     expect(within(refused).getByText("REFUSED — exceeds task budget").closest(".badge")?.className).toContain("tone-warn");
     expect(within(refused).getByText(/reported by proposer/)).toBeTruthy();
+  });
+
+  it("gives each decision its own row, even when a re-run reuses a request_id", () => {
+    const a = record({ refusal_code: "request_id_reused", decision_id: "11111111-1d2b-4c3d-9e4f-5a6b7c8d9e0f" });
+    const b = record({ refusal_code: "request_id_reused", decision_id: "22222222-1d2b-4c3d-9e4f-5a6b7c8d9e0f" });
+    render(<Manifest commitments={[]} records={[a, b]} personaOf={persona} delegateIds={new Set(["buyer.op.testnet"])} now={NOW} />);
+    expect(within(screen.getByRole("list", { name: /refused/i })).getAllByText("REJECTED — request_id reused with a different request")).toHaveLength(2);
+  });
+
+  it("shows amounts in units when given a unit display", () => {
+    render(<Manifest commitments={[commitment(1, "Confirmed")]} records={[]} personaOf={persona} delegateIds={new Set()} now={NOW} money={amountDisplay(100n * N, true)} />);
+    expect(within(screen.getByRole("list", { name: /payments/i })).getByText("30")).toBeTruthy();
   });
 
   it("never attaches a record's tx link to a commitment it does not exactly match", () => {

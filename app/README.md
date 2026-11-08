@@ -67,13 +67,21 @@ dev-server plugin (`companion/plugin.ts`) that
 
 - answers only `127.0.0.1` / `localhost` on this port, same-Origin, `Sec-Fetch-Site: same-origin`, JSON
   POST, with a per-process token from the page;
-- runs two fixed commands (no shell) with one validated argument, a minimal environment, a 10-minute
-  limit, one job at a time, and a cooldown after attack runs (they spend testnet NEAR);
+- runs three fixed commands (no shell) with at most one validated argument, a minimal environment, a
+  10-minute limit, one job at a time, and a cooldown after any run that spends testnet NEAR;
 - redacts key-like strings and terminal escapes from output;
 - keeps jobs independent of the browser: reloading re-attaches to the running job, and nothing is
   started twice.
 
 A production build (`pnpm --filter @purser/app build`) contains no runner and works read-only.
+
+## Demo recording views (dev server only)
+
+- `?units=1` shows amounts in units of cap/100, with the scale always labelled. Display only: reads and the
+  invariant verdict are unchanged. Without it, or when the cap does not divide by 100, the board shows NEAR.
+- `?baseline=1` opens the comparison page: a deliberately unsafe budget for the demo's comparison shot, labelled
+  as such on every state. It sends real testnet transfers from a throwaway account and is not part of Purser.
+  It is compiled out of production builds (a test builds fresh and checks).
 
 ## History cache (indexer)
 

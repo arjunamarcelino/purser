@@ -1,4 +1,4 @@
-// The localhost companion: a Vite DEV-SERVER plugin (apply: "serve") that lets the board stream two
+// The localhost companion: a Vite DEV-SERVER plugin (apply: "serve") that lets the board stream three
 // fixed commands and read the proposer's records. It is a local command runner, so every request
 // must prove it comes from this dev page:
 //   Host ∈ {127.0.0.1:port, localhost:port} (DNS rebinding), Origin present + same, Sec-Fetch-Site
@@ -16,14 +16,17 @@ import type { Plugin } from "vite";
 
 export const SAFE_TASK_ID = /^[a-z0-9][a-z0-9._-]{0,63}$/;
 const JOB_TIMEOUT_MS = 10 * 60_000;
-const ATTACK_COOLDOWN_MS = 30_000;
+const SPEND_COOLDOWN_MS = 30_000;
 const MAX_LINES = 5000;
 const MAX_LINE = 500;
 const MAX_BODY = 4096;
 const RECORDS_MAX_BYTES = 4 * 1024 * 1024;
 const RECORDS_MAX_LINES = 2000;
 
-type JobKind = "attack" | "tests";
+export type JobKind = "attack" | "tests" | "baseline";
+const JOB_KINDS: readonly unknown[] = ["attack", "tests", "baseline"] satisfies JobKind[];
+/** Jobs that send real testnet transactions, and so share the cooldown. */
+export const spendsTestnet = (kind: JobKind): boolean => kind !== "tests";
 interface Line {
   seq: number;
   line: string;
@@ -62,11 +65,15 @@ function childEnv(): NodeJS.ProcessEnv {
   return Object.fromEntries(keep.flatMap((k) => (process.env[k] ? [[k, process.env[k]]] : [])));
 }
 
-function argvFor(kind: JobKind, task: string | null): { cmd: string; args: string[] } {
-  if (kind === "attack") {
-    return { cmd: "pnpm", args: ["--filter", "@purser/proposer", "run", "crew", "--network", "testnet", "--scenario", "attack", `--task=${task}`] };
+export function argvFor(kind: JobKind, task: string | null): { cmd: string; args: string[] } {
+  switch (kind) {
+    case "attack":
+      return { cmd: "pnpm", args: ["--filter", "@purser/proposer", "run", "crew", "--network", "testnet", "--scenario", "attack", `--task=${task}`] };
+    case "tests":
+      return { cmd: "make", args: ["prove"] };
+    case "baseline":
+      return { cmd: "pnpm", args: ["--filter", "@purser/proposer", "run", "naive-baseline"] };
   }
-  return { cmd: "make", args: ["prove"] };
 }
 
 export interface GuardRequest {
@@ -144,7 +151,7 @@ export function purserCompanion(opts: CompanionOptions): Plugin {
   const token = randomBytes(32).toString("hex");
   const recordsPath = opts.recordsPath ?? resolve(opts.repoRoot, "proposer/out/records.jsonl");
   let current: Job | null = null;
-  let lastAttackEnd = 0;
+  let lastSpendEnd = 0;
 
   const push = (job: Job, raw: string) => {
     for (const piece of raw.split(/\r?\n/)) {
@@ -168,7 +175,7 @@ export function purserCompanion(opts: CompanionOptions): Plugin {
       clearTimeout(killer);
       job.done = true;
       job.code = code;
-      if (kind === "attack") lastAttackEnd = Date.now();
+      if (spendsTestnet(kind)) lastSpendEnd = Date.now();
       push(job, `[exit ${code ?? "signal"}]`);
     };
     child.on("error", (e) => {
@@ -255,12 +262,12 @@ export function purserCompanion(opts: CompanionOptions): Plugin {
         }
 
         if (path === "/__purser/jobs") {
-          const kind = body.kind;
-          if (kind !== "attack" && kind !== "tests") return send(res, 400, { error: "unknown job" });
+          if (!JOB_KINDS.includes(body.kind)) return send(res, 400, { error: "unknown job" });
+          const kind = body.kind as JobKind;
           const task = kind === "attack" ? body.task : null;
           if (kind === "attack" && (typeof task !== "string" || !SAFE_TASK_ID.test(task))) return send(res, 400, { error: "invalid task" });
           if (current && !current.done) return send(res, 409, { error: "a job is already running", jobId: current.id, kind: current.kind });
-          if (kind === "attack" && Date.now() - lastAttackEnd < ATTACK_COOLDOWN_MS) return send(res, 429, { error: "cooling down: attack runs spend testnet NEAR" });
+          if (spendsTestnet(kind) && Date.now() - lastSpendEnd < SPEND_COOLDOWN_MS) return send(res, 429, { error: "cooling down: this run spends testnet NEAR" });
           current = start(kind, task as string | null);
           return send(res, 202, { jobId: current.id, kind });
         }

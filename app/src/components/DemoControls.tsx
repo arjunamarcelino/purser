@@ -5,6 +5,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Icon } from "./Icon.tsx";
+import { companionAvailable, companionCall as call } from "../data/companion.ts";
 import { pushToast } from "./toasts.tsx";
 
 type JobKind = "attack" | "tests";
@@ -17,20 +18,15 @@ interface JobView {
 }
 
 const MAX_SHOWN = 400;
-const token = () => document.querySelector<HTMLMetaElement>('meta[name="purser-token"]')?.content ?? null;
-
-async function call(path: string, body: unknown, signal?: AbortSignal): Promise<Response> {
-  const t = token();
-  if (!t) throw new Error("companion not available");
-  return fetch(path, { method: "POST", headers: { "content-type": "application/json", "x-purser-token": t }, body: JSON.stringify(body), ...(signal ? { signal } : {}) });
-}
+/** Only this panel's own kinds: another page's job must never stream under this panel's labels. */
+const isPanelJob = (k: unknown): k is JobKind => k === "attack" || k === "tests";
 
 /**
  * The buttons live in the sticky footer next to the invariant line; the output console renders into
  * `consoleSlot` (in the page flow), so a long run never covers the board.
  */
 export function DemoControls({ task, onJobFinished, consoleSlot }: { task: string | null; onJobFinished: () => void; consoleSlot: HTMLElement | null }) {
-  const available = token() !== null;
+  const available = companionAvailable();
   const [job, setJob] = useState<JobView | null>(null);
   const [starting, setStarting] = useState(false);
   const streamRef = useRef<AbortController | null>(null);
@@ -85,7 +81,7 @@ export function DemoControls({ task, onJobFinished, consoleSlot }: { task: strin
     call("/__purser/jobs/current", {})
       .then((r) => r.json())
       .then((cur: { jobId: string | null; kind?: JobKind; done?: boolean }) => {
-        if (live && cur.jobId && cur.kind && !cur.done) void attach(cur.jobId, cur.kind);
+        if (live && cur.jobId && isPanelJob(cur.kind) && !cur.done) void attach(cur.jobId, cur.kind);
       })
       .catch(() => {});
     return () => {
@@ -100,7 +96,7 @@ export function DemoControls({ task, onJobFinished, consoleSlot }: { task: strin
     try {
       const res = await call("/__purser/jobs", { kind, task });
       const body = (await res.json()) as { jobId?: string; error?: string; kind?: JobKind };
-      if (res.status === 409 && body.jobId && body.kind) {
+      if (res.status === 409 && body.jobId && isPanelJob(body.kind)) {
         pushToast({ tone: "neutral", icon: "clock", title: "A job is already running — showing it" });
         void attach(body.jobId, body.kind);
       } else if (!res.ok || !body.jobId) {

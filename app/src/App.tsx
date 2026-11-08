@@ -6,7 +6,7 @@ import { ChainBoardSource, CompanionHistorySource } from "./data/sources.ts";
 import { IndexerClient, cacheAgeMs } from "./data/cache.ts";
 import { useBoard, useNow } from "./data/useBoard.ts";
 import { useCache } from "./data/useCache.ts";
-import { ago } from "./lib/format.ts";
+import { ago, amountDisplay } from "./lib/format.ts";
 import { lineHealth } from "./lib/semantics.ts";
 import { useTheme } from "./theme.ts";
 import { useWalletAccount } from "./wallet/wallet.ts";
@@ -26,6 +26,9 @@ const personaOf = (accountId: string) => {
   const first = accountId.split(".")[0] ?? accountId;
   return PERSONAS.has(first) ? first[0]!.toUpperCase() + first.slice(1) : accountId;
 };
+
+const ROLES: Record<string, string> = { scout: "research/data", forge: "compute", buyer: "procurement" };
+const roleOf = (accountId: string) => ROLES[accountId.split(".")[0] ?? ""] ?? null;
 
 function useTaskParam(): [string | null, (t: string) => void] {
   const read = () => new URLSearchParams(location.search).get("task");
@@ -102,6 +105,8 @@ export function App() {
     if (next.size !== revoking.size) setRevoking(next);
   }, [snap, now, revoking]);
 
+  // Display-only (?units=1): the demo's round numbers on a small testnet cap.
+  const money = amountDisplay(BigInt(snap?.budget.cap ?? "0"), new URLSearchParams(location.search).get("units") === "1");
   const delegateIds = useMemo(() => new Set(snap?.delegates.map((d) => d.account_id) ?? []), [snap]);
   const health = lineHealth(
     snap ? { cap: BigInt(snap.invariant.cap), completed: BigInt(snap.invariant.completed), outstanding: BigInt(snap.invariant.outstanding), holds: snap.invariant.holds, frozen: snap.invariant.frozen } : null,
@@ -198,12 +203,12 @@ export function App() {
         {snap && (
           <>
             <div className="grid">
-              <BudgetPanel task={snap.task} cap={BigInt(snap.budget.cap)} completed={BigInt(snap.budget.completed)} outstanding={BigInt(snap.budget.outstanding)} remaining={BigInt(snap.remaining)} />
-              <CrewPanel delegates={snap.delegates} personaOf={personaOf} isOwner={isOwner} busy={owner.busy} revoking={new Set(revoking.keys())} onRevoke={revoke} />
+              <BudgetPanel task={snap.task} cap={BigInt(snap.budget.cap)} completed={BigInt(snap.budget.completed)} outstanding={BigInt(snap.budget.outstanding)} remaining={BigInt(snap.remaining)} money={money} />
+              <CrewPanel delegates={snap.delegates} personaOf={personaOf} roleOf={roleOf} isOwner={isOwner} busy={owner.busy} revoking={new Set(revoking.keys())} onRevoke={revoke} />
             </div>
-            <Manifest commitments={snap.commitments} records={state.records} personaOf={personaOf} delegateIds={delegateIds} now={now} />
+            <Manifest commitments={snap.commitments} records={state.records} personaOf={personaOf} delegateIds={delegateIds} now={now} money={money} />
             {config.indexerEnabled && !cache.wrongIndexer && (
-              <CachedHistory rows={cache.rows} dropped={cache.dropped} boardBlock={snap.blockHeight} personaOf={personaOf} recordTx={recordTx} contractId={config.contractId} offline={cache.offline} />
+              <CachedHistory rows={cache.rows} dropped={cache.dropped} boardBlock={snap.blockHeight} personaOf={personaOf} recordTx={recordTx} contractId={config.contractId} offline={cache.offline} money={money} />
             )}
             {isOwner && <OwnerPanel task={task} request={(r) => owner.request({ ...r, onSuccess: refresh })} busy={owner.busy} />}
           </>
@@ -218,6 +223,7 @@ export function App() {
           completed={BigInt(snap?.invariant.completed ?? "0")}
           outstanding={BigInt(snap?.invariant.outstanding ?? "0")}
           cap={BigInt(snap?.invariant.cap ?? "0")}
+          money={money}
         />
         <div className="status-row">
           <DemoControls task={task} onJobFinished={refresh} consoleSlot={consoleSlot} />

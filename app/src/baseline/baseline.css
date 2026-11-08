@@ -1,0 +1,84 @@
+/* The comparison page only: imported from its lazy chunk, so none of this reaches a production build. */
+
+.naive-banner {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  padding: 0.9rem 1rem;
+  background: var(--alarm);
+  color: var(--bg);
+  font-size: var(--size-lg);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-align: center;
+}
+.naive-main {
+  max-width: 60rem;
+  margin: 0 auto;
+  padding: 1.5rem 1rem 3rem;
+}
+.naive-main h1 {
+  margin: 0;
+  font-size: 1.75rem;
+  line-height: 1.2;
+}
+.naive-sub {
+  margin: 0.5rem 0 0.25rem;
+  font-weight: 600;
+}
+.naive-meter {
+  margin: 1.25rem 0;
+  padding: 1rem 1.25rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.naive-numeral {
+  font-size: var(--size-display);
+  font-weight: 500;
+  line-height: 1.05;
+  letter-spacing: -0.02em;
+}
+.naive-numeral .of {
+  font-size: 0.35em;
+  color: var(--text-dim);
+}
+.naive-meter.over {
+  border-color: var(--alarm);
+}
+.naive-meter.over .naive-numeral,
+.naive-over {
+  color: var(--alarm);
+}
+.naive-meter.over .naive-numeral {
+  animation: naive-land 300ms ease-out;
+}
+@keyframes naive-land {
+  from {
+    transform: scale(1.04);
+  }
+}
+.naive-lanes {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(18rem, 1fr));
+  gap: var(--gap);
+  margin-bottom: 1rem;
+}
+.naive-lane {
+  padding: 0.9rem 1rem;
+  background: var(--surface);
+  border-radius: var(--radius);
+}
+.naive-lane ol {
+  margin: 0 0 0.5rem;
+  padding-left: 1.25rem;
+}
+.naive-caption {
+  font-size: var(--size-lg);
+  font-weight: 600;
+  color: var(--alarm);
+}
+.naive-tail {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
