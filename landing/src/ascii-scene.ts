@@ -23,7 +23,8 @@ export function cellLuminance(mask: number, col: number, row: number, t: number)
   return Math.min(1, Math.max(crest, mask * (0.62 + 0.38 * wave)));
 }
 
-export const charFor = (luminance: number) => RAMP[Math.round(Math.min(1, Math.max(0, luminance)) * (RAMP.length - 1))]!;
+const glyphIndex = (luminance: number) => Math.round(Math.min(1, Math.max(0, luminance)) * (RAMP.length - 1));
+export const charFor = (luminance: number) => RAMP[glyphIndex(luminance)]!;
 
 interface Layout {
   cellW: number;
@@ -36,7 +37,23 @@ interface Layout {
 }
 
 const HERO: Layout = { cellW: 7, cellH: 12, font: "10.5px", ambient: 0.32, shift: [16, 10], centerX: (w) => w * (w < 1024 ? 0.5 : 0.29), scale: anchorScale };
+// Bigger cells past 1600px keep the hero's glyph count from growing with the screen.
+const HERO_WIDE: Layout = { ...HERO, cellW: 9, cellH: 16, font: "13px" };
 const ART: Layout = { cellW: 5, cellH: 9, font: "7.5px", ambient: 0.42, shift: [6, 4], centerX: (w) => w * 0.5, scale: artScale };
+
+// Each glyph is drawn once here, because copying pixels per cell is far cheaper than fillText per cell.
+function glyphAtlas(ink: string, layout: Layout, dpr: number): HTMLCanvasElement {
+  const atlas = document.createElement("canvas");
+  atlas.width = Math.ceil(RAMP.length * layout.cellW * dpr);
+  atlas.height = Math.ceil(layout.cellH * dpr);
+  const ctx = atlas.getContext("2d")!;
+  ctx.scale(dpr, dpr);
+  ctx.font = `${layout.font} "IBM Plex Mono", monospace`;
+  ctx.textBaseline = "top";
+  ctx.fillStyle = ink;
+  [...RAMP].forEach((glyph, i) => ctx.fillText(glyph, i * layout.cellW, 0));
+  return atlas;
+}
 
 function meshFor(name: string): Mesh | null {
   if (name === "anchor") return buildAnchorMesh();
@@ -53,7 +70,7 @@ export function initAsciiArt(canvas: HTMLCanvasElement) {
   const ctx = canvas.getContext("2d");
   if (!mesh || !ctx) return;
   const isHero = name === "anchor";
-  const layout = isHero ? HERO : ART;
+  let layout = isHero ? HERO : ART;
   const calm = matchMedia("(prefers-reduced-motion: reduce)");
   const root = canvas.closest<HTMLElement>(".hero, .card, .tile") ?? canvas;
   const panel = isHero ? root.querySelector<HTMLElement>(".hero-panel") : null;
@@ -63,7 +80,9 @@ export function initAsciiArt(canvas: HTMLCanvasElement) {
   let width = 0;
   let height = 0;
   let centerY = 0;
-  let ink = "#fff";
+  let dpr = 1;
+  let inkAtlas: HTMLCanvasElement | null = null;
+  let fieldAtlas: HTMLCanvasElement | null = null;
   let raf = 0;
   let last = 0;
   let visible = false;
@@ -163,17 +182,21 @@ export function initAsciiArt(canvas: HTMLCanvasElement) {
     );
   };
 
+  const stamp = (atlas: HTMLCanvasElement, glyph: number, col: number, row: number) => {
+    const { cellW, cellH } = layout;
+    ctx.drawImage(atlas, glyph * cellW * dpr, 0, cellW * dpr, cellH * dpr, col * cellW, row * cellH, cellW, cellH);
+  };
+
   // The hero's faint wave needs its own ink, drawn first and cleared around the anchor.
   const drawField = (t: number) => {
     const clear = anchorScale(width, height) * 1.35;
     const cx = layout.centerX(width);
-    ctx.fillStyle = FIELD_INK;
     for (let row = 0; row < rows; row++) {
       for (let col = 0; col < cols; col++) {
         if (lit[row * cols + col]! > 0) continue;
         const fade = fieldClearance(col * layout.cellW, row * layout.cellH, cx, centerY, clear);
-        const glyph = fade > 0 ? charFor(cellLuminance(0, col, row, t) * fade) : " ";
-        if (glyph !== " ") ctx.fillText(glyph, col * layout.cellW, row * layout.cellH);
+        const glyph = fade > 0 ? glyphIndex(cellLuminance(0, col, row, t) * fade) : 0;
+        if (glyph > 0) stamp(fieldAtlas!, glyph, col, row);
       }
     }
   };
@@ -182,11 +205,10 @@ export function initAsciiArt(canvas: HTMLCanvasElement) {
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     place(t);
     if (isHero) drawField(t);
-    ctx.fillStyle = ink;
     for (let row = 0; row < rows; row++) {
       for (let col = 0; col < cols; col++) {
-        const glyph = charFor(lit[row * cols + col]!);
-        if (glyph !== " ") ctx.fillText(glyph, col * layout.cellW, row * layout.cellH);
+        const glyph = glyphIndex(lit[row * cols + col]!);
+        if (glyph > 0) stamp(inkAtlas!, glyph, col, row);
       }
     }
   };
@@ -212,19 +234,19 @@ export function initAsciiArt(canvas: HTMLCanvasElement) {
     // The hero's anchor sits level with the headline panel, because its canvas stops short of the hero's bottom edge.
     const panelBox = panel?.getBoundingClientRect();
     centerY = panelBox ? panelBox.top + panelBox.height / 2 - box.top : height / 2;
+    if (isHero) layout = width > 1600 ? HERO_WIDE : HERO;
     cols = Math.ceil(width / layout.cellW);
     rows = Math.ceil(height / layout.cellH);
     if (cols === 0 || rows === 0) {
       cols = 0;
       return;
     }
-    const dpr = Math.min(devicePixelRatio, 2);
+    dpr = Math.min(devicePixelRatio, 2);
     canvas.width = Math.round(width * dpr);
     canvas.height = Math.round(height * dpr);
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.font = `${layout.font} "IBM Plex Mono", monospace`;
-    ctx.textBaseline = "top";
-    ink = getComputedStyle(canvas).color;
+    inkAtlas = glyphAtlas(getComputedStyle(canvas).color, layout, dpr);
+    if (isHero) fieldAtlas = glyphAtlas(FIELD_INK, layout, dpr);
     lit = new Float32Array(cols * rows);
     depth = new Float32Array(cols * rows);
     sync();
