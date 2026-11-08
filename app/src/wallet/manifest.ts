@@ -1,11 +1,5 @@
-// VENDORED near-connect wallet manifest — reviewed 2026-11-05 from hot-dao/near-selector
-// repository/manifest.json (manifest version 1.1.0). Only two wallets, each executor pinned to an
-// immutable commit (the upstream manifest points at mutable branches):
-//   - near-cli: near/near-cli-connect@2b8c4fd — shows the near-cli command; the owner runs it in a
-//     terminal (key stays in the OS keychain) and pastes the tx hash back. No key enters the browser.
-//   - meteor-wallet: Meteor-Wallet/meteor_wallet_sdk@ef1be35.
-// Intear is omitted: its executor is served from its own domain and cannot be pinned.
-// Re-vendor deliberately (and record it in BUILD-START-VERIFICATION); never point at a branch.
+// Vendored near-connect manifest (hot-dao/near-selector v1.1.0, reviewed 2026-11-05): near-cli and Meteor, each pinned to a commit.
+// Intear is omitted because its executor can't be pinned. Re-vendor deliberately, record it in BUILD-START-VERIFICATION.
 
 export const WALLET_MANIFEST = {
   "version": "1.1.0",

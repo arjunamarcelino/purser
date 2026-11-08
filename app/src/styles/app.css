@@ -45,9 +45,8 @@ a {
   color: var(--link);
 }
 :focus-visible {
-  outline: none;
-  box-shadow: var(--focus);
-  border-radius: 4px;
+  outline: 2px solid var(--brass);
+  outline-offset: 2px;
 }
 
 .tone-ok {
@@ -59,9 +58,6 @@ a {
 .tone-alarm {
   color: var(--alarm);
 }
-.tone-brass {
-  color: var(--brass);
-}
 .tone-dim,
 .tone-neutral {
   color: var(--text-dim);
@@ -69,6 +65,7 @@ a {
 
 .app {
   min-height: 100vh;
+  min-height: 100dvh;
   display: flex;
   flex-direction: column;
   max-width: 1180px;
@@ -76,7 +73,6 @@ a {
   padding: 0 16px;
 }
 
-/* top bar */
 .topbar {
   display: flex;
   flex-wrap: wrap;
@@ -96,6 +92,8 @@ a {
   align-self: center;
 }
 .wordmark {
+  margin: 0;
+  font-size: inherit;
   font-weight: 600;
   letter-spacing: 0.18em;
 }
@@ -106,8 +104,16 @@ a {
   display: flex;
   align-items: center;
   gap: 0.5rem;
+  min-width: 0;
 }
 .task-pick .label {
+  margin: 0;
+}
+.task-pick select {
+  min-width: 0;
+  max-width: 16rem;
+}
+.topbar > .label {
   margin: 0;
 }
 select,
@@ -131,16 +137,18 @@ select {
   align-items: center;
   gap: 0.4rem;
 }
-.connect .label {
-  margin: 0;
-}
 .account {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 0.5rem;
+  min-width: 0;
+}
+.account .mono {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
-/* buttons */
 .btn {
   font: 500 var(--size-sm) var(--font-ui);
   color: var(--text);
@@ -150,7 +158,8 @@ select {
   padding: 0.45rem 0.9rem;
   cursor: pointer;
 }
-.btn:hover:not(:disabled) {
+.btn:hover:not(:disabled),
+.btn:active:not(:disabled) {
   border-color: var(--brass);
 }
 .btn:disabled {
@@ -180,8 +189,12 @@ select {
   padding: 0.25rem 0.4rem;
   border-radius: 6px;
 }
+.icon-btn:hover,
+.icon-btn:active {
+  color: var(--text);
+  border-color: var(--border-strong);
+}
 
-/* panels */
 main {
   flex: 1;
   padding: 1.25rem 0;
@@ -209,6 +222,7 @@ main {
   line-height: 1.05;
   color: var(--brass);
   letter-spacing: -0.02em;
+  overflow-wrap: anywhere;
 }
 .budget .of {
   font-size: 0.35em;
@@ -216,16 +230,32 @@ main {
   letter-spacing: 0;
 }
 .meter {
-  height: 4px;
-  background: var(--surface-2);
-  border-radius: 2px;
+  display: flex;
+  gap: 2px;
+  height: 6px;
   margin: 0.9rem 0 0.6rem;
-  overflow: hidden;
 }
-.meter-fill {
-  height: 100%;
+.meter-seg {
+  flex: 0 1 auto;
+  min-width: 2px;
+  border-radius: 1px;
+  transition: flex-basis 300ms ease-out;
+}
+.seg-remaining {
   background: var(--brass);
-  transition: width 300ms ease-out;
+}
+.seg-outstanding {
+  background: var(--text);
+}
+.seg-completed {
+  background: var(--border-strong);
+}
+.swatch {
+  display: inline-block;
+  width: 0.6em;
+  height: 0.6em;
+  margin-right: 0.35em;
+  border-radius: 1px;
 }
 .breakdown {
   font-size: var(--size-sm);
@@ -251,8 +281,8 @@ main {
   background: var(--surface-2);
   border-radius: 8px;
 }
-.chip.revoked {
-  opacity: 0.7;
+.chip.revoked .chip-name {
+  color: var(--text-dim);
 }
 .chip-name {
   font-weight: 600;
@@ -284,14 +314,21 @@ main {
   border: 1.5px solid var(--text-dim);
 }
 
-/* manifest */
 .mgroup + .mgroup {
   margin-top: 1rem;
 }
-.mgroup ul {
+.mgroup ul,
+.cached-history ul {
   list-style: none;
   margin: 0;
   padding: 0;
+}
+.mgroup-note,
+.manifest-note {
+  margin: 0 0 0.5rem;
+}
+.manifest-note {
+  margin: 1rem 0 0;
 }
 .count {
   font-family: var(--font-mono);
@@ -300,7 +337,7 @@ main {
 }
 .mrow {
   display: grid;
-  grid-template-columns: 6.5rem minmax(0, 1.6fr) minmax(0, 1.4fr) minmax(0, 0.9fr) auto;
+  grid-template-columns: 6.5rem minmax(0, 1.3fr) minmax(0, 1.5fr) minmax(0, 1fr) 8.5rem;
   align-items: center;
   gap: 0.75rem;
   padding: 0.45rem 0.5rem;
@@ -309,6 +346,13 @@ main {
 }
 .mrow .amt {
   text-align: right;
+}
+.mbadge {
+  min-width: 0;
+}
+.mrow .badge {
+  white-space: normal;
+  align-items: flex-start;
 }
 .who {
   min-width: 0;
@@ -327,7 +371,11 @@ main {
   text-align: right;
 }
 .reported {
+  display: block;
   font-family: var(--font-ui);
+}
+.cached-history.offline .mrow {
+  color: var(--text-dim);
 }
 .mrow.fresh {
   animation: land 600ms ease-out;
@@ -352,7 +400,7 @@ main {
   align-items: center;
   gap: 0.3rem;
   padding: 0.12rem 0.55rem;
-  border-radius: 999px;
+  border-radius: 8px;
   border: 1px solid currentColor;
   font-size: var(--size-xs);
   font-weight: 600;
@@ -360,19 +408,20 @@ main {
   white-space: nowrap;
 }
 
-/* status bar */
+/* Only the invariant stays pinned: the brief keeps it always visible, and phones can't spare more height. */
 .statusbar {
   position: sticky;
   bottom: 0;
+  z-index: 5;
   background: var(--bg);
   border-top: 1px solid var(--border);
-  padding: 0.75rem 0 1rem;
+  padding: 0.6rem 0 max(0.6rem, env(safe-area-inset-bottom));
 }
 .invariant {
   display: flex;
   flex-wrap: wrap;
   justify-content: space-between;
-  gap: 0.5rem 1rem;
+  gap: 0.25rem 1rem;
   padding: 0.6rem 0.9rem;
   border: 1px solid currentColor;
   border-radius: 8px;
@@ -394,7 +443,7 @@ main {
   justify-content: space-between;
   align-items: flex-start;
   gap: 0.75rem;
-  margin-top: 0.75rem;
+  padding: 0.25rem 0 1rem;
 }
 .demo {
   flex: 1;
@@ -431,7 +480,6 @@ main {
   word-break: break-word;
 }
 
-/* owner tools + dialog */
 .owner-panel summary {
   cursor: pointer;
   font-weight: 600;
@@ -439,7 +487,7 @@ main {
 .owner-panel form {
   display: flex;
   flex-wrap: wrap;
-  align-items: flex-end;
+  align-items: flex-start;
   gap: 0.6rem;
   margin-top: 0.9rem;
 }
@@ -451,10 +499,26 @@ main {
 }
 .owner-panel label {
   display: flex;
+  flex: 1 1 12rem;
   flex-direction: column;
   gap: 0.2rem;
+  min-width: 0;
   font-size: var(--size-xs);
   color: var(--text-dim);
+}
+.owner-panel input {
+  width: 100%;
+  font-size: var(--size-md);
+}
+.owner-panel .btn {
+  margin-top: 1.25rem;
+}
+.field-error {
+  color: var(--warn);
+}
+.form-note {
+  width: 100%;
+  margin: 0;
 }
 input[aria-invalid="true"] {
   border-color: var(--warn);
@@ -471,6 +535,7 @@ input[aria-invalid="true"] {
 .dialog {
   width: min(560px, 100%);
   max-height: 90vh;
+  max-height: 90dvh;
   overflow: auto;
   background: var(--surface);
   border: 1px solid var(--border-strong);
@@ -513,10 +578,11 @@ input[aria-invalid="true"] {
   gap: 0.6rem;
 }
 
+/* Top right, so a toast never covers the invariant line pinned at the bottom. */
 .toasts {
   position: fixed;
+  top: max(16px, env(safe-area-inset-top));
   right: 16px;
-  bottom: 16px;
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
@@ -546,12 +612,80 @@ input[aria-invalid="true"] {
   color: var(--text-dim);
 }
 
-@media (max-width: 760px) {
-  .grid {
-    grid-template-columns: 1fr;
-  }
+/* The five-column row and side-by-side chip fields stop fitting here, well before a phone width. */
+@media (max-width: 1000px) {
   .tagline {
     display: none;
+  }
+  .mrow {
+    grid-template-columns: 5.5rem minmax(0, 1fr) minmax(0, 1fr);
+  }
+  .mrow .mtx {
+    grid-column: 2;
+  }
+  .mrow .mtime {
+    grid-column: 3;
+  }
+  .chip {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    grid-template-areas:
+      "dot name status"
+      ". id action";
+  }
+  .chip .dot {
+    grid-area: dot;
+  }
+  .chip-name {
+    grid-area: name;
+  }
+  .chip-status {
+    grid-area: status;
+  }
+  .chip-id {
+    grid-area: id;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+  .chip .btn {
+    grid-area: action;
+  }
+}
+
+@media (max-width: 760px) {
+  .topbar {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 0.5rem 0.75rem;
+  }
+  .brand {
+    margin: 0;
+  }
+  .theme-toggle {
+    grid-column: 2;
+    grid-row: 1;
+  }
+  .task-pick,
+  .account {
+    grid-column: 1 / -1;
+  }
+  .task-pick select {
+    flex: 1;
+    max-width: none;
+  }
+  .net {
+    text-align: right;
+  }
+  .connect {
+    display: flex;
+  }
+  .connect .btn {
+    flex: 1;
+  }
+  .grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .panel {
+    padding: 0.9rem 1rem;
   }
   .mrow {
     grid-template-columns: 5rem minmax(0, 1fr);
@@ -562,11 +696,52 @@ input[aria-invalid="true"] {
     grid-column: 2;
     text-align: left;
   }
-  .chip {
-    grid-template-columns: auto auto 1fr;
+  .who {
+    white-space: normal;
+    overflow-wrap: anywhere;
   }
-  .chip-id {
-    grid-column: 1 / -1;
+  .chip {
+    grid-template-areas:
+      "dot name status"
+      "id id id"
+      "action action action";
+  }
+  .invariant .eq {
+    font-size: var(--size-sm);
+  }
+  .invariant {
+    padding: 0.45rem 0.7rem;
+  }
+  .toasts {
+    left: 16px;
+    max-width: none;
+  }
+}
+
+/* A thumb needs 44px wherever the screen is narrow or the pointer is coarse. */
+@media (max-width: 760px), (pointer: coarse) {
+  .btn,
+  .icon-btn,
+  select,
+  input {
+    min-height: 44px;
+  }
+  .toast .icon-btn {
+    min-width: 44px;
+    justify-content: center;
+  }
+  .demo-buttons,
+  .row-actions,
+  .connect {
+    gap: 0.75rem;
+  }
+  .owner-panel summary,
+  .status-row .meta a {
+    display: inline-block;
+    padding-block: 0.7rem;
+  }
+  .mtx a {
+    min-height: 44px;
   }
 }
 

@@ -51,6 +51,7 @@ export function App() {
   const [theme, setTheme] = useTheme();
   const [task, setTask] = useTaskParam();
   const [tasks, setTasks] = useState<string[]>([]);
+  const [tasksStatus, setTasksStatus] = useState<"loading" | "ready" | "failed">("loading");
   const [chainOk, setChainOk] = useState<boolean | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
   const [revoking, setRevoking] = useState<ReadonlyMap<string, number>>(new Map());
@@ -81,7 +82,15 @@ export function App() {
 
   useEffect(() => {
     const c = new AbortController();
-    board.taskIds(c.signal).then(setTasks, () => {});
+    board.taskIds(c.signal).then(
+      (ids) => {
+        setTasks(ids);
+        setTasksStatus("ready");
+      },
+      () => {
+        if (!c.signal.aborted) setTasksStatus("failed");
+      },
+    );
     return () => c.abort();
   }, [refreshKey]);
   useEffect(() => {
@@ -144,6 +153,23 @@ export function App() {
     });
   };
 
+  // What the board says while it has nothing to show: each cause names itself and what to do next.
+  const boardNotice = () => {
+    if (chainOk === false) return <p className="panel tone-warn">This board only reads NEAR testnet, and the configured RPC reports another network. Set NEAR_RPC_URL to a testnet RPC and reload.</p>;
+    if (chainOk === null) return <p className="panel dim">Checking that the RPC is on NEAR testnet…</p>;
+    if (!task && tasksStatus === "failed")
+      return (
+        <p className="panel tone-warn">
+          Could not list the tasks on {config.contractId}.{" "}
+          <button type="button" className="btn btn-small" onClick={refresh}>
+            Retry
+          </button>
+        </p>
+      );
+    if (!task && tasksStatus === "ready" && tasks.length === 0) return <p className="panel dim">No tasks on {config.contractId} yet. Run ./scripts/demo.sh setup to create one.</p>;
+    return <p className="panel dim">Loading live state from {config.contractId}…</p>;
+  };
+
   return (
     <div className="app">
       <header className="topbar">
@@ -151,7 +177,7 @@ export function App() {
           <span className="mark" aria-hidden="true">
             <Icon name="anchor" size={22} />
           </span>
-          <span className="wordmark">PURSER</span>
+          <h1 className="wordmark">PURSER</h1>
           <span className="tagline dim">One budget. Many agents. Nothing overspent.</span>
         </div>
         <label className="task-pick">
@@ -165,14 +191,14 @@ export function App() {
             ))}
           </select>
         </label>
-        <span className="label">
+        <span className="label token">
           token <span className="mono">NEAR</span>
         </span>
-        <span className={`net ${chainOk === false ? "tone-alarm" : ""}`}>{chainOk === false ? "NOT TESTNET — refusing to load" : chainOk === null ? "checking network…" : "NEAR testnet"}</span>
+        <span className={`net ${chainOk === false ? "tone-alarm" : ""}`}>{chainOk === false ? "NOT TESTNET: refusing to load" : chainOk === null ? "checking network…" : "NEAR testnet"}</span>
         <div className="account">
           {wallet.accountId ? (
             <>
-              <span className={`badge ${isOwner ? "tone-brass" : "tone-neutral"}`}>
+              <span className="badge tone-neutral">
                 <span className={`dot ${isOwner ? "active" : "hollow"}`} aria-hidden="true" />
                 {isOwner ? "owner" : "viewer"}
               </span>
@@ -183,23 +209,23 @@ export function App() {
             </>
           ) : (
             <span className="connect" role="group" aria-label="Connect the owner's wallet">
-              <button type="button" className="btn btn-small" title="Choose a wallet (Meteor, NEAR CLI)" onClick={() => void wallet.connect().catch(() => {})}>
+              <button type="button" className="btn btn-small" onClick={() => void wallet.connect().catch(() => {})}>
                 Connect wallet
               </button>
-              <button type="button" className="btn btn-small" title="Sign in your terminal with near-cli — the key stays in your OS keychain" onClick={() => void wallet.connect("near-cli").catch(() => {})}>
+              <button type="button" className="btn btn-small" onClick={() => void wallet.connect("near-cli").catch(() => {})}>
                 NEAR CLI
               </button>
             </span>
           )}
         </div>
-        <button type="button" className="icon-btn" aria-label={`Theme: ${theme}. Switch theme`} onClick={() => setTheme(theme === "dark" ? "light" : theme === "light" ? "system" : "dark")}>
+        <button type="button" className="icon-btn theme-toggle" aria-label={`Theme: ${theme}. Switch theme`} onClick={() => setTheme(theme === "dark" ? "light" : theme === "light" ? "system" : "dark")}>
           <Icon name={theme === "light" ? "sun" : "moon"} /> <span className="small">{theme}</span>
         </button>
       </header>
 
       <main>
         {state.missing && <p className="panel">Task “{task}” does not exist on {config.contractId}.</p>}
-        {state.error && <p className="panel tone-warn">RPC: {state.error} — retrying.</p>}
+        {state.error && <p className="panel tone-warn">RPC: {state.error}. Retrying.</p>}
         {snap && (
           <>
             <div className="grid">
@@ -208,48 +234,48 @@ export function App() {
             </div>
             <Manifest commitments={snap.commitments} records={state.records} personaOf={personaOf} delegateIds={delegateIds} now={now} money={money} />
             {config.indexerEnabled && !cache.wrongIndexer && (
-              <CachedHistory rows={cache.rows} dropped={cache.dropped} boardBlock={snap.blockHeight} personaOf={personaOf} recordTx={recordTx} contractId={config.contractId} offline={cache.offline} money={money} />
+              <CachedHistory rows={cache.rows} dropped={cache.dropped} boardBlock={snap.blockHeight} personaOf={personaOf} recordTx={recordTx} offline={cache.offline} money={money} />
             )}
             {isOwner && <OwnerPanel task={task} request={(r) => owner.request({ ...r, onSuccess: refresh })} busy={owner.busy} />}
           </>
         )}
-        {!snap && !state.missing && !state.error && <p className="panel dim">Loading live state from {config.contractId}…</p>}
+        {!snap && !state.missing && !state.error && boardNotice()}
         <div ref={setConsoleSlot} className="console-slot" />
       </main>
 
-      <footer className="statusbar">
+      <div className="statusbar">
         <InvariantLine
           health={health}
-          completed={BigInt(snap?.invariant.completed ?? "0")}
-          outstanding={BigInt(snap?.invariant.outstanding ?? "0")}
-          cap={BigInt(snap?.invariant.cap ?? "0")}
+          completed={snap ? BigInt(snap.invariant.completed) : null}
+          outstanding={snap ? BigInt(snap.invariant.outstanding) : null}
+          cap={snap ? BigInt(snap.invariant.cap) : null}
           money={money}
         />
-        <div className="status-row">
-          <DemoControls task={task} onJobFinished={refresh} consoleSlot={consoleSlot} />
-          <span className="meta small dim">
-            synced {ago(state.syncedAt, now)} · block {snap?.blockHeight ?? "—"} ·{" "}
-            <a href={explorer.account(config.contractId)} target="_blank" rel="noopener noreferrer" className="mono">
-              {config.contractId} ↗
-            </a>
-            {config.indexerEnabled && (
-              <>
-                {" · "}
-                {cache.wrongIndexer ? (
-                  <span className="tone-warn">history: wrong indexer</span>
-                ) : cache.status === null ? (
-                  <span className={cache.offline ? "tone-warn" : ""}>{cache.offline ? "history offline" : "history cache …"}</span>
-                ) : (
-                  <span className={cache.offline || (cacheAge ?? Infinity) > 60_000 ? "tone-warn" : ""}>
-                    history cache {cacheAge === null ? "never" : `${Math.round(cacheAge / 1000)}s`} · cache block {cache.status.asOfHeight ?? "—"}
-                    {cache.offline && " · history offline"}
-                    {cacheLag !== null && cacheLag > 100 && ` · Δ ${cacheLag} blocks`}
-                  </span>
-                )}
-              </>
-            )}
-          </span>
-        </div>
+      </div>
+      <footer className="status-row">
+        <DemoControls task={task} onJobFinished={refresh} consoleSlot={consoleSlot} />
+        <span className="meta small dim">
+          synced {ago(state.syncedAt, now)} · block {snap?.blockHeight ?? "not read yet"} ·{" "}
+          <a href={explorer.account(config.contractId)} target="_blank" rel="noopener noreferrer" className="mono">
+            {config.contractId} ↗
+          </a>
+          {config.indexerEnabled && (
+            <>
+              {" · "}
+              {cache.wrongIndexer ? (
+                <span className="tone-warn">history: wrong indexer</span>
+              ) : cache.status === null ? (
+                <span className={cache.offline ? "tone-warn" : ""}>{cache.offline ? "history offline" : "history cache …"}</span>
+              ) : (
+                <span className={cache.offline || (cacheAge ?? Infinity) > 60_000 ? "tone-warn" : ""}>
+                  history cache {cacheAge === null ? "never" : `${Math.round(cacheAge / 1000)}s`} · cache block {cache.status.asOfHeight ?? "not read yet"}
+                  {cache.offline && " · history offline"}
+                  {cacheLag !== null && cacheLag > 100 && ` · Δ ${cacheLag} blocks`}
+                </span>
+              )}
+            </>
+          )}
+        </span>
       </footer>
       <ConfirmDialog phase={owner.phase} onConfirm={() => void owner.confirm()} onCancel={owner.cancel} />
       <Toasts />

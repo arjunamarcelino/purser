@@ -1,8 +1,5 @@
-// The off-chain history cache (indexer) as the board sees it. Everything here is untrusted input:
-// it feeds a display-only list and never any owner action, release or kill-switch path.
-//
-// Deliberately NOT a HistorySource and NOT a ProposalRecord: the cache is a lagging, read-only mirror
-// of chain events, while ProposalRecord is the proposer's self-asserted shape (refusals live only there).
+// The indexer's history cache: untrusted input that feeds a display-only list, never an owner action or kill-switch.
+// Deliberately not a ProposalRecord: it is a lagging mirror of chain events, while refusals live only in records.
 
 import { NEAR_ACCOUNT_ID, NEAR_TX_HASH, SAFE_TASK_ID } from "@purser/types";
 import { safeText } from "../lib/format.ts";

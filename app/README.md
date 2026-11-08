@@ -1,4 +1,4 @@
-# app — the operator board
+# app: the operator board
 
 One screen that makes Purser's invariant visible and gives the owner the kill-switch.
 
@@ -16,7 +16,7 @@ browser, and the app refuses to load unless the RPC itself reports `chain_id: te
 |---|---|---|
 | Budget | `get_task`, `remaining_budget` | Remaining / cap, completed · outstanding |
 | Crew | `list_delegates` | brass dot = active, hollow = revoked; **Revoke** (owner only) |
-| Manifest: Holds | `list_commitments` | Reserved / Signed (brass), Unknown (amber: reservation retained) |
+| Manifest: Holds | `list_commitments` | Reserved / Signed (neutral), Unknown (amber: reservation retained) |
 | Manifest: Payments | `list_commitments` + proposer records | Confirmed (green) with an explorer tx link |
 | Manifest: Refused | proposer records | REFUSED / BLOCKED / REJECTED (amber, never red), labelled *reported by proposer* |
 | Status line | **`invariant(task_id)`**, the contract's own verdict | green = healthy · amber = holds pending proof · **red only if the contract reports a violation** · dim = stale/unavailable (never green on old data) |

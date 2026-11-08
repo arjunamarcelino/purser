@@ -15,7 +15,7 @@ export interface AppConfig {
 
 function load(): AppConfig {
   const raw = __PURSER_CONFIG__;
-  if (raw.network !== "testnet") throw new Error(`NEAR_NETWORK must be "testnet" (got "${raw.network}") — this board never targets mainnet`);
+  if (raw.network !== "testnet") throw new Error(`NEAR_NETWORK must be "testnet" (got "${raw.network}"): this board never targets mainnet`);
   if (!NEAR_ACCOUNT_ID.test(raw.contractId) || !raw.contractId.endsWith(".testnet")) {
     throw new Error("PURSER_CONTRACT_ID must be a .testnet account (set it in .env.testnet via scripts/deploy-testnet.sh)");
   }
@@ -26,7 +26,7 @@ function load(): AppConfig {
 
 export const config: AppConfig = load();
 
-/** Explorer links, built with URL + encoding — never by string concatenation of untrusted values. */
+/** Explorer links, built with URL + encoding, never by string concatenation of untrusted values. */
 export const explorer = {
   tx: (hash: string) => new URL(`/txns/${encodeURIComponent(hash)}`, config.explorer).toString(),
   account: (id: string) => new URL(`/address/${encodeURIComponent(id)}`, config.explorer).toString(),

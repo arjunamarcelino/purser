@@ -6,9 +6,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import BaselinePage from "../src/baseline/BaselinePage.tsx";
 import { parseResult, readStream } from "../src/baseline/parse.ts";
 
-const BANNER = "NAÏVE BASELINE — NO RESERVATION (for comparison only)";
-const TITLE = "NAÏVE BASELINE (NO RESERVATION) — for comparison only";
-const CAPTION = "Naïve implementation — concurrent checks double-spend.";
+const BANNER = "NAÏVE BASELINE: NO RESERVATION (for comparison only)";
+const TITLE = "NAÏVE BASELINE (NO RESERVATION): for comparison only";
+const CAPTION = "Naïve implementation: concurrent checks double-spend.";
 const H1 = "5dRpkX87653fAYGwh3cnAy8F4YSNCqhviDKBc2vcjhyw";
 const H2 = "7LCgg1qhqojfUcqV3mTbagLBs2kLx8oGM2AcFdoidwXD";
 const lane = (hash: string, to: string) => ({ hash, to, read: 100, included: 104 });
@@ -44,7 +44,7 @@ describe("baseline page", () => {
     mockCompanion({ start: started });
     render(<BaselinePage />);
     expect(screen.getByText(BANNER)).toBeTruthy();
-    expect(screen.getByRole("heading", { level: 1 }).textContent).toBe(TITLE);
+    expect(screen.getByRole("heading", { level: 1 }).textContent).toBe("Two agents share one balance, with no reservation");
     await waitFor(() => expect(document.title).toBe(TITLE));
     expect(screen.getByLabelText("Baseline budget").textContent).toMatch(/0 \/ cap 100/);
     expect(screen.queryByText(/OVER CAP/)).toBeNull();

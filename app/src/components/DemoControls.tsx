@@ -1,6 +1,5 @@
 // "Run attack demo" and "Run tests", streamed from the localhost companion.
-// A job starts ONLY from a click (never an effect), outlives this component and any connection,
-// and is re-attached after a reload by replaying its output from the last seen sequence number.
+// A job starts ONLY from a click, outlives this component, and re-attaches after a reload by replaying from the last seq.
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
@@ -21,14 +20,15 @@ const MAX_SHOWN = 400;
 /** Only this panel's own kinds: another page's job must never stream under this panel's labels. */
 const isPanelJob = (k: unknown): k is JobKind => k === "attack" || k === "tests";
 
-/**
- * The buttons live in the sticky footer next to the invariant line; the output console renders into
- * `consoleSlot` (in the page flow), so a long run never covers the board.
- */
+/** The output console renders into `consoleSlot` (in the page flow), so a long run never covers the board. */
 export function DemoControls({ task, onJobFinished, consoleSlot }: { task: string | null; onJobFinished: () => void; consoleSlot: HTMLElement | null }) {
   const available = companionAvailable();
   const [job, setJob] = useState<JobView | null>(null);
   const [starting, setStarting] = useState(false);
+  const [confirming, setConfirming] = useState(false);
+  const runRef = useRef<HTMLButtonElement>(null);
+  const confirmRef = useRef<HTMLButtonElement>(null);
+  const wasConfirming = useRef(false);
   const streamRef = useRef<AbortController | null>(null);
   const onFinishedRef = useRef(onJobFinished);
   onFinishedRef.current = onJobFinished;
@@ -74,6 +74,12 @@ export function DemoControls({ task, onJobFinished, consoleSlot }: { task: strin
     }
   }, []);
 
+  useEffect(() => {
+    if (confirming) confirmRef.current?.focus();
+    else if (wasConfirming.current) runRef.current?.focus();
+    wasConfirming.current = confirming;
+  }, [confirming]);
+
   // After a reload, re-attach to a job that is still running (read-only: never starts one).
   useEffect(() => {
     if (!available) return;
@@ -97,7 +103,7 @@ export function DemoControls({ task, onJobFinished, consoleSlot }: { task: strin
       const res = await call("/__purser/jobs", { kind, task });
       const body = (await res.json()) as { jobId?: string; error?: string; kind?: JobKind };
       if (res.status === 409 && body.jobId && isPanelJob(body.kind)) {
-        pushToast({ tone: "neutral", icon: "clock", title: "A job is already running — showing it" });
+        pushToast({ tone: "neutral", icon: "clock", title: "A job is already running, showing it" });
         void attach(body.jobId, body.kind);
       } else if (!res.ok || !body.jobId) {
         pushToast({ tone: "warn", icon: "slash", title: body.error ?? `could not start (HTTP ${res.status})` });
@@ -118,18 +124,40 @@ export function DemoControls({ task, onJobFinished, consoleSlot }: { task: strin
   return (
     <div className="demo">
       <div className="demo-buttons">
-        <button type="button" className="btn btn-primary" disabled={!available || running || starting || !task} onClick={() => void start("attack")}>
-          Run attack demo
-        </button>
-        <button type="button" className="btn" disabled={!available || running || starting} onClick={() => void start("tests")}>
-          Run tests
-        </button>
+        {confirming ? (
+          <div className="demo-buttons" role="group" aria-label="Confirm attack demo" onKeyDown={(e) => e.key === "Escape" && setConfirming(false)}>
+            <span className="small">Run on {task}? This sends real testnet transactions and spends from this task's budget.</span>
+            <button
+              ref={confirmRef}
+              type="button"
+              className="btn btn-primary"
+              onClick={() => {
+                setConfirming(false);
+                void start("attack");
+              }}
+            >
+              Run attack demo
+            </button>
+            <button type="button" className="btn" onClick={() => setConfirming(false)}>
+              Cancel
+            </button>
+          </div>
+        ) : (
+          <>
+            <button ref={runRef} type="button" className="btn" disabled={!available || running || starting || !task} onClick={() => setConfirming(true)}>
+              Run attack demo…
+            </button>
+            <button type="button" className="btn" disabled={!available || running || starting} onClick={() => void start("tests")}>
+              Run tests
+            </button>
+          </>
+        )}
         {running && (
           <button type="button" className="btn" onClick={cancel}>
             Stop
           </button>
         )}
-        {!available && <span className="dim small">Demo controls need the local dev server (pnpm --filter @purser/app dev).</span>}
+        {!available && <span className="dim small">Demo controls need the local dev server (make board).</span>}
       </div>
       {job && !consoleSlot && <span className="dim small">{job.done ? "finished" : "running…"}</span>}
       {job &&
@@ -140,7 +168,7 @@ export function DemoControls({ task, onJobFinished, consoleSlot }: { task: strin
             <span>
               {job.kind === "attack" ? `attack demo on ${task}` : "make prove (property tests + attack suite)"}
             </span>
-            <span className={job.done ? (job.code === 0 ? "tone-ok" : "tone-warn") : "tone-brass"}>
+            <span className={job.done ? (job.code === 0 ? "tone-ok" : "tone-warn") : "tone-neutral"}>
               <Icon name={job.done ? (job.code === 0 ? "check" : "slash") : "clock"} size={14} /> {job.done ? (job.code === 0 ? "passed" : `exit ${job.code ?? "?"}`) : "running…"}
             </span>
           </div>

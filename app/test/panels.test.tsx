@@ -47,15 +47,15 @@ describe("Manifest", () => {
     expect(within(payments).getByRole("link").getAttribute("href")).toBe("https://testnet.nearblocks.io/txns/7LCgg1qhqojfUcqV3mTbagLBs2kLx8oGM2AcFdoidwXD");
     expect(within(screen.getByRole("list", { name: /holds/i })).getByText(/RESERVED/)).toBeTruthy();
     const refused = screen.getByRole("list", { name: /refused/i });
-    expect(within(refused).getByText("REFUSED — exceeds task budget").closest(".badge")?.className).toContain("tone-warn");
-    expect(within(refused).getByText(/reported by proposer/)).toBeTruthy();
+    expect(within(refused).getByText("REFUSED: exceeds task budget").closest(".badge")?.className).toContain("tone-warn");
+    expect(within(refused).getByText("reported by proposer")).toBeTruthy();
   });
 
   it("gives each decision its own row, even when a re-run reuses a request_id", () => {
     const a = record({ refusal_code: "request_id_reused", decision_id: "11111111-1d2b-4c3d-9e4f-5a6b7c8d9e0f" });
     const b = record({ refusal_code: "request_id_reused", decision_id: "22222222-1d2b-4c3d-9e4f-5a6b7c8d9e0f" });
     render(<Manifest commitments={[]} records={[a, b]} personaOf={persona} delegateIds={new Set(["buyer.op.testnet"])} now={NOW} />);
-    expect(within(screen.getByRole("list", { name: /refused/i })).getAllByText("REJECTED — request_id reused with a different request")).toHaveLength(2);
+    expect(within(screen.getByRole("list", { name: /refused/i })).getAllByText("REJECTED: request_id reused with a different request")).toHaveLength(2);
   });
 
   it("shows amounts in units when given a unit display", () => {
@@ -82,11 +82,18 @@ describe("InvariantLine", () => {
     const healthy = lineHealth({ cap: 100n * N, completed: 90n * N, outstanding: 0n, holds: true, frozen: false }, { hasUnknown: false, syncedAt: NOW, now: NOW });
     const { rerender } = render(<InvariantLine health={healthy} completed={90n * N} outstanding={0n} cap={100n * N} />);
     const line = screen.getByRole("status");
-    expect(line.getAttribute("aria-label")).toBe("invariant healthy: 90 of 100 NEAR used (90 percent)");
+    expect(within(line).getByText("invariant healthy: 90 of 100 NEAR used (90 percent)")).toBeTruthy();
     expect(line.className).toContain("tone-ok");
     const stale = lineHealth({ cap: 100n * N, completed: 90n * N, outstanding: 0n, holds: true, frozen: false }, { hasUnknown: false, syncedAt: NOW - 60_000, now: NOW });
     rerender(<InvariantLine health={stale} completed={90n * N} outstanding={0n} cap={100n * N} />);
     expect(screen.getByRole("status").className).toContain("tone-dim");
+  });
+
+  it("shows no numbers before the contract's first reading", () => {
+    const unread = lineHealth(null, { hasUnknown: false, syncedAt: null, now: NOW });
+    render(<InvariantLine health={unread} completed={null} outstanding={null} cap={null} />);
+    expect(screen.getByRole("status").textContent).not.toMatch(/cap 0/);
+    expect(screen.getByText("waiting for the contract's first reading")).toBeTruthy();
   });
 });
 
@@ -97,7 +104,7 @@ describe("CachedHistory", () => {
   });
   const HASH = "5dRpkX87653fAYGwh3cnAy8F4YSNCqhviDKBc2vcjhyw";
   const show = (r: CachedCommitment, offline = false, tx: string | null = null) =>
-    render(<CachedHistory rows={[r]} dropped={0} boardBlock={100} personaOf={persona} recordTx={() => tx} contractId="purser.op.testnet" offline={offline} />);
+    render(<CachedHistory rows={[r]} dropped={0} boardBlock={100} personaOf={persona} recordTx={() => tx} offline={offline} />);
 
   it("labels a proposer-asserted hash visibly as unverified", () => {
     show(row(), false, HASH);
@@ -109,7 +116,7 @@ describe("CachedHistory", () => {
   });
   it("marks stale rows when offline", () => {
     show(row(), true);
-    expect(screen.getByText(/offline — showing last known/)).toBeTruthy();
+    expect(screen.getByText(/offline: showing last known/)).toBeTruthy();
   });
   it("shows no offline marker while online", () => {
     show(row());

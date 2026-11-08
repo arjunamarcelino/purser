@@ -1,8 +1,5 @@
-// The board's data layer: two small sources behind interfaces, so Prompt 9 can swap the history
-// source for the indexer without touching the board.
-//
-//   BoardSource   — authoritative chain state, every view read at ONE final block (no tearing).
-//   HistorySource — the proposer's records (refusals, tx links): self-asserted, untrusted, validated.
+// BoardSource: authoritative chain state, every view read at ONE final block (no tearing).
+// HistorySource: the proposer's records (refusals, tx links), self-asserted, untrusted and validated.
 
 import { JsonRpcProvider } from "near-api-js";
 import {
@@ -59,7 +56,7 @@ export class ChainBoardSource implements BoardSource {
   readonly #contractId: string;
 
   constructor(rpcUrl: string, contractId: string) {
-    // One attempt per call (near-api-js's `retries` is the ATTEMPT count — 0 would never send). Its own
+    // One attempt per call (near-api-js's `retries` is the ATTEMPT count: 0 would never send). Its own
     // retry loop backs off for minutes with no timeout, freezing the board; useBoard backs off instead.
     this.#provider = new JsonRpcProvider({ url: rpcUrl }, { retries: 1 });
     this.#contractId = contractId;
@@ -86,7 +83,7 @@ export class ChainBoardSource implements BoardSource {
     const h = block.header.height;
     const budget = await this.#view("get_task", { task_id: task }, h, signal);
     if (budget === null) return null;
-    // Five calls per poll (block + four views). "Remaining" is cap − used from the invariant view —
+    // Five calls per poll (block + four views). "Remaining" is cap − used from the invariant view:
     // the same math as remaining_budget, without another request against a rate-limited RPC.
     const [invariant, delegates, commitments] = await Promise.all([
       this.#view("invariant", { task_id: task }, h, signal),

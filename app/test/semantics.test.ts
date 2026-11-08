@@ -11,7 +11,7 @@ const now = 1_000_000;
 
 describe("refusal wording", () => {
   it("names a reused request_id as a rejection, in amber", () => {
-    expect(refusalBadge("request_id_reused")).toMatchObject({ label: "REJECTED — request_id reused with a different request", tone: "warn" });
+    expect(refusalBadge("request_id_reused")).toMatchObject({ label: "REJECTED: request_id reused with a different request", tone: "warn" });
   });
 });
 
@@ -36,14 +36,14 @@ describe("invariant line", () => {
 });
 
 describe("badges", () => {
-  it("never use red for a refusal, block or rejection — and always carry text", () => {
+  it("never use red for a refusal, block or rejection, and always carry text", () => {
     for (const code of [...(Object.keys(REFUSALS) as RefusalCode[]), null]) {
       const b = refusalBadge(code);
       expect(b.tone).toBe("warn");
       expect(b.label.length).toBeGreaterThan(0);
       expect(b.description.length).toBeGreaterThan(0);
     }
-    expect(refusalBadge("delegate_not_authorized").label).toBe("BLOCKED — delegate revoked");
+    expect(refusalBadge("delegate_not_authorized").label).toBe("BLOCKED: delegate revoked");
   });
   it("map every reservation state to a labelled badge, none red", () => {
     for (const [state, b] of Object.entries(stateBadge)) {

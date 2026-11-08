@@ -1,10 +1,5 @@
-// Polling that cannot tear, reorder or leak:
-//   - a setTimeout chain: the next poll is scheduled only after the previous one settles;
-//   - one AbortController + generation per task: switching tasks (or unmounting, or hiding the tab)
-//     aborts the in-flight poll, and a late response for a stale generation is dropped;
-//   - snapshots only move forward: one from an older block than the one on screen is discarded
-//     (load-balanced RPC nodes can step backwards);
-//   - syncedAt is the CLIENT's receipt time, never a block timestamp.
+// Polling on a setTimeout chain, one abortable generation per task; snapshots only move forward (RPC nodes can step back).
+// syncedAt is the CLIENT's receipt time, never a block timestamp.
 
 import { useEffect, useRef, useState } from "react";
 import type { ProposalRecord } from "@purser/types";
@@ -63,7 +58,7 @@ export function useBoard(task: string | null, board: BoardSource, history: Histo
         if (cancelled || signal.aborted) return;
         failures++;
         const message = err instanceof Error ? err.message : String(err);
-        setState((s) => ({ ...s, error: /429|rate limit/i.test(message) ? "RPC rate limit — backing off" : message }));
+        setState((s) => ({ ...s, error: /429|rate limit/i.test(message) ? "RPC rate limit, backing off" : message }));
       } finally {
         // Back off on consecutive failures (rate limits, timeouts): 3 s → 6 → 12 → 24 → 30 s.
         if (!cancelled && !signal.aborted) timer = setTimeout(tick, Math.min(POLL_MS * 2 ** failures, MAX_BACKOFF_MS));

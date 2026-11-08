@@ -7,7 +7,7 @@ import { purserCompanion } from "./companion/plugin.ts";
 const repoRoot = resolve(import.meta.dirname, "..");
 
 // Exactly these keys may reach the browser. The repo's env files also hold function-call keys and the
-// NEAR AI API key, so they are parsed here by hand — never passed through loadEnv/define wholesale.
+// NEAR AI API key, so they are parsed here by hand, never passed through loadEnv/define wholesale.
 const EXPOSED = ["PURSER_CONTRACT_ID", "NEAR_NETWORK", "NEAR_RPC_URL", "INDEXER_ENABLED"] as const;
 function readExposedEnv(): Record<(typeof EXPOSED)[number], string> {
   const out: Record<string, string> = {};
