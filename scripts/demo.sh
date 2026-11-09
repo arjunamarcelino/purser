@@ -43,7 +43,7 @@ export NEAR_NETWORK=testnet
 
 # Preflight.
 case "$(node -v 2>/dev/null || true)" in v26.*) ;; *) die "Node 26.x required (found '$(node -v 2>/dev/null || echo none)')" ;; esac
-command -v pnpm >/dev/null || die "pnpm not found (corepack enable)"
+command -v pnpm >/dev/null || die "pnpm not found (npm install -g pnpm@10)"
 command -v near >/dev/null || die "near-cli-rs not found: npm i -g near-cli-rs@0.30.1"
 [ -d "$ROOT/node_modules" ] || die "dependencies missing: run 'make ts-install'"
 [ -f "$ENVFILE" ] || die "$ENVFILE missing: run ./scripts/deploy-testnet.sh first"

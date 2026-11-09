@@ -45,8 +45,8 @@ step() { echo "==> $*"; }
 [[ "$CAP_NEAR" =~ ^[1-9][0-9]{0,3}$ ]] || die "CAP_NEAR must be a whole number of NEAR (1-9999)"
 [[ "$FC_ALLOWANCE_NEAR" =~ ^[0-9]+(\.[0-9]+)?$ ]] || die "FC_ALLOWANCE_NEAR must be a decimal number"
 # Toolchain: report what is missing with the fix; install nothing that needs a login.
-hint_node="Node 26 (https://nodejs.org), then: corepack enable"
-hint_pnpm="corepack enable   (pnpm 10 ships with Node's corepack)"
+hint_node="Node 26 (https://nodejs.org), then: npm install -g pnpm@10"
+hint_pnpm="npm install -g pnpm@10   (Node 26 no longer ships corepack)"
 hint_near="npm i -g near-cli-rs@0.30.1   (or: cargo install near-cli-rs --version 0.30.1 --locked)"
 hint_cargo_near="curl --proto '=https' --tlsv1.2 -LsSf https://github.com/near/cargo-near/releases/latest/download/cargo-near-installer.sh | sh"
 missing=0
@@ -71,7 +71,7 @@ TX=(network-config testnet sign-with-keychain send)
 # `near account create-account sponsor-by-faucet-service <you>.testnet autogenerate-new-keypair
 # save-to-keychain network-config testnet create` (faucet limits are not published: see README).
 "${OPS[@]}" account-exists "$RPC" "$OP" | grep -qx yes \
-  || die "$OP does not exist on testnet — create and fund it first (README, 'Fresh account')"
+  || die "$OP does not exist on testnet — create and fund it first (docs/GETTING-STARTED.md, 'Fresh account')"
 if [ "$("${OPS[@]}" account-exists "$RPC" "$CONTRACT")" != "yes" ]; then
   need=$((CAP_NEAR * 3 + 6))   # contract float + 7 sub-accounts + gas headroom
   have="$("${OPS[@]}" balance "$RPC" "$OP")"
