@@ -54,5 +54,3 @@ Types come from `packages/types` (generated from the ABI); do not hand-mirror th
   stamps the pinned height). The row badge in the app ("cached @ block M") is that per-row height, not the pass height.
 - `node:sqlite` on Node 26.9 exports `DatabaseSync` (not `Database`); `readBigInts` makes `changes` a BigInt.
 - Public testnet RPC rate-limits with 429s; a pass can be partial. `last_pass_at` advances only when every task succeeded.
-- Lessons: `docs/solutions/integration-issues/poller-cursor-skips-failed-task-commitment-ids.md`,
-  `.../vite-proxy-host-header-vs-loopback-host-allowlist.md`, `.../hand-written-fixtures-hid-api-number-vs-string-contract.md`.

@@ -103,7 +103,7 @@ async fn fixed_crew(
 }
 
 /// `gas_burnt` of the ONE Purser receipt carrying `event`. Selected by what it did, never by
-/// position, and required to be unique (docs/solutions/performance-issues/sandbox-gas-measurement-pitfalls.md).
+/// position, and required to be unique.
 fn receipt_gas(res: &ExecutionFinalResult, purser: &AccountId, event: &str) -> u64 {
     let hits: Vec<_> = res
         .receipt_outcomes()

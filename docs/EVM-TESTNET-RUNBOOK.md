@@ -56,8 +56,7 @@ Not run live: a late original landing after a cancel (the contract's `Cancelled 
    commitments 1 and 2 `Cancelled`, `outstanding` 0, lane nonce 3.
 
 Notes for the next run: `gh` flips to the `-orb` account between commands, so `gh auth switch -u arjunamarcelino` and the `gh`/`git push`
-must be in the same command; the CI `secrets` job pins fake canary findings in `.gitleaksignore`
-(see `docs/solutions/build-errors/gitleaks-and-precommit-flag-fake-canary-keys-in-scrubber-tests.md`).
+must be in the same command; the CI `secrets` job pins fake canary findings in `.gitleaksignore`.
 
 ## Environment
 
