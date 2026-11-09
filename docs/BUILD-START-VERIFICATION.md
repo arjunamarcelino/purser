@@ -10,7 +10,7 @@ re-check before relying on them. (This file is intentionally untracked — not p
 | near-sdk | `5.30.0` (latest stable, 2026-10-27; nearcore 2.14 / protocol 88) | https://crates.io/crates/near-sdk · https://github.com/near/near-sdk-rs/blob/master/CHANGELOG.md |
 | cargo-near | `0.22.0` (latest stable; 0.23 is rc-only) | https://crates.io/crates/cargo-near |
 | near-cli-rs | `0.30.1` | https://crates.io/crates/near-cli-rs |
-| near-workspaces (rs) | `0.24.0` (aligned with near-sdk 5.30); integration suite needs `features = ["unstable"]` for `compile_project` — see `docs/solutions/build-errors/near-workspaces-compile-project-unstable-feature.md` | https://crates.io/crates/near-workspaces |
+| near-workspaces (rs) | `0.24.0` (aligned with near-sdk 5.30); integration suite needs `features = ["unstable"]` for `compile_project` | https://crates.io/crates/near-workspaces |
 | proptest | `1.12.0` | https://crates.io/crates/proptest |
 | Rust | stable `1.95.0` (MSRV 1.95), edition 2021, target `wasm32-unknown-unknown` | https://docs.near.org/smart-contracts/quickstart |
 
@@ -32,7 +32,7 @@ raw-u128 `add_access_key` (use `add_access_key_allowance` + `Allowance`).
 Verified against docs.rs 5.30.0 / near-workspaces 0.24.0 and a passing sandbox test:
 
 - **Native transfer + self-callback:** `Promise::new(AccountId).transfer(NearToken).then(Self::ext(env::current_account_id()).with_static_gas(Gas::from_tgas(N)).on_near_settled(..))`. `#[near]` on the impl auto-generates `Self::ext(..)` — no `#[ext_contract]` needed for a self-callback.
-- **Read the callback result with `#[callback_result] res: Result<(), near_sdk::PromiseError>`** — NOT `env::promise_result`, which is **`#[deprecated]` in 5.30** and so a hard error under `-D warnings`. `PromiseResult` is binary now (`Successful(Vec<u8>) | Failed`; **`NotReady` removed**). See `docs/solutions/build-errors/near-sdk-5-30-callback-result-vs-deprecated-promise-result.md`.
+- **Read the callback result with `#[callback_result] res: Result<(), near_sdk::PromiseError>`** — NOT `env::promise_result`, which is **`#[deprecated]` in 5.30** and so a hard error under `-D warnings`. `PromiseResult` is binary now (`Successful(Vec<u8>) | Failed`; **`NotReady` removed**).
 - **Sometimes-async return:** `PromiseOrValue<T>` — `::Promise(p.then(cb))` fresh, `::Value(v)` for an exactly-once replay; the callback returns `T` so both arms unify.
 - **No on-chain tx/receipt hash:** `near_sdk::env` exposes none in 5.30 — record `near_tx` off-chain (test: `ExecutionOutcome::transaction_hash`; indexer: polled receipt). `Commitment.near_tx` stays `None` on-chain.
 - **`NearToken` is opaque:** no `.0` / `+` / `-`; only `from_yoctonear`/`as_yoctonear` + `checked_*`. Route the admission check through the tested `budget::try_reserve`, never a hand-rolled `require!`.
