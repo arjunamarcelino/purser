@@ -1,0 +1,25 @@
+# Allowlist: the repo root also holds .env.testnet, .near-keys/ and the indexer database.
+*
+
+!package.json
+!pnpm-lock.yaml
+!pnpm-workspace.yaml
+!tsconfig.base.json
+!deploy/nginx.conf
+!packages
+!app
+!landing
+
+# pnpm's frozen lockfile needs every workspace member's manifest, not its source.
+!proposer/package.json
+!relayer/package.json
+!indexer/package.json
+
+**/node_modules
+**/dist
+**/out
+**/.env*
+**/.near-keys
+**/*.key
+**/*.pem
+**/*.db
