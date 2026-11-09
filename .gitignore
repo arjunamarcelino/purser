@@ -21,6 +21,11 @@ coverage/
 *.pem
 *.key
 
+# Local indexer cache
+*.db
+*.db-shm
+*.db-wal
+
 # NEAR credentials & dev state
 .near-credentials/
 neardev/
